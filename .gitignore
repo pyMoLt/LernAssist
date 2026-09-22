@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Xcode – build output & user state
+build/
+DerivedData/
+*.xcuserstate
+**/xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Kompilierte App-Bundles (jederzeit neu baubar)
+*.app
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Sonstiges
+*.log
+*.sb
+*.profraw

@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- KaTeX für Mathe-Formeln (lokal) -->
+<link rel="stylesheet" href="katex.min.css">
+<!-- Highlight.js Theme für Code-Blöcke (lokal) -->
+<link rel="stylesheet" href="github-dark.css">
+
+<style>
+:root {
+  --text: #1a1a1a;
+  --code-bg: #1e1e2e;
+  --code-text: #cdd6f4;
+  --blockquote-bg: rgba(0,0,0,0.04);
+  --blockquote-border: #4a9eff;
+  --table-border: rgba(0,0,0,0.15);
+  --table-header: rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e0e0e0;
+    --blockquote-bg: rgba(255,255,255,0.05);
+    --table-border: rgba(255,255,255,0.15);
+    --table-header: rgba(255,255,255,0.08);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: transparent;
+  font-family: -apple-system, 'SF Pro Text', sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+  overflow-x: hidden;
+  word-wrap: break-word;
+}
+#content { padding: 2px 0 2px 0; }
+
+/* Überschriften */
+h1,h2,h3,h4,h5,h6 { margin: 0.9em 0 0.35em; line-height: 1.3; font-weight: 600; }
+h1 { font-size: 1.45em; }
+h2 { font-size: 1.25em; }
+h3 { font-size: 1.08em; }
+h4,h5,h6 { font-size: 1em; }
+
+/* Absätze */
+p { margin: 0.45em 0; }
+
+/* Links */
+a { color: #4a9eff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Inline-Code */
+code {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  font-size: 0.875em;
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+
+/* Code-Blöcke */
+pre {
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.6em 0;
+}
+pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+  color: var(--code-text);
+  white-space: pre;
+}
+
+/* Zitate */
+blockquote {
+  margin: 0.55em 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--blockquote-border);
+  background: var(--blockquote-bg);
+  border-radius: 0 6px 6px 0;
+}
+blockquote p { margin: 0; }
+
+/* Listen */
+ul, ol { padding-left: 1.4em; margin: 0.35em 0; }
+li { margin: 0.18em 0; }
+li > p { margin: 0; }
+
+/* Tabellen */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6em 0;
+  font-size: 0.92em;
+}
+th, td { border: 1px solid var(--table-border); padding: 5px 10px; text-align: left; }
+th { background: var(--table-header); font-weight: 600; }
+
+/* Bilder */
+img { cursor: pointer; max-width: 100%; height: auto; border-radius: 6px; }
+
+/* Trennlinie */
+hr { border: none; border-top: 1px solid var(--table-border); margin: 0.9em 0; }
+
+/* KaTeX Display-Formeln */
+.katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.katex { font-size: 1.05em; }
+
+/* Fett / Kursiv */
+strong { font-weight: 600; }
+em { font-style: italic; }
+</style>
+</head>
+<body>
+<div id="content"></div>
+
+<!-- Bibliotheken (lokal aus Resources-Ordner, kein Netzwerk) -->
+<script src="markdown-it.min.js"></script>
+<script src="highlight.bundle.js"></script>
+<script src="katex.min.js"></script>
+<script src="auto-render.min.js"></script>
+
+<script>
+// ── markdown-it Setup ──────────────────────────────────────────────────
+var md = window.markdownit({
+  html:       false,
+  linkify:    true,
+  typographer: true,
+  highlight: function(code, lang) {
+    if (lang && typeof hljs !== 'undefined') {
+      var language = hljs.getLanguage(lang) ? lang : null;
+      try {
+        var result = language
+          ? hljs.highlight(code, { language: language, ignoreIllegals: true })
+          : hljs.highlightAuto(code);
+        return result.value;
+      } catch(e) {}
+    }
+    // Fallback: HTML-escaping
+    return code
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;');
+  }
+});
+
+// ── Haupt-Render-Funktion (wird von Swift via evaluateJavaScript aufgerufen) ──
+// fontScale: Multiplikator (0.8...1.5) aus den Einstellungen (Erscheinungsbild-Tab).
+// Skaliert die Basis-Schriftgröße; alle anderen Größen (h1, code, ...) sind in em/relativen
+// Einheiten definiert und skalieren automatisch mit.
+function updateContent(content, fontScale) {
+  var el = document.getElementById('content');
+
+  if (typeof fontScale === 'number' && fontScale > 0) {
+    document.documentElement.style.fontSize = (14 * fontScale) + 'px';
+  }
+
+  // 1. Markdown → HTML
+  el.innerHTML = md.render(content);
+
+  // 2. KaTeX: Mathe-Formeln rendern ($...$, $$...$$, \(...\) und \[...\]).
+  // Viele lokale Modelle escapen Markdown-Unterstriche auch innerhalb von LaTeX
+  // (z.B. `$I\_0$`). Die Vorverarbeitung normalisiert diese Schreibweise für KaTeX.
+  if (typeof renderMathInElement !== 'undefined') {
+    try {
+      renderMathInElement(el, {
+        delimiters: [
+          { left: '$$',  right: '$$',  display: true  },
+          { left: '\\(', right: '\\)', display: false },
+          { left: '\\[', right: '\\]', display: true  },
+          { left: '$',   right: '$',   display: false }
+        ],
+        preProcess: function(math) {
+          return math.replace(/\\_/g, '_');
+        },
+        throwOnError: false,
+        output: 'html'
+      });
+    } catch(e) {}
+  }
+
+  // 2b. ResizeObserver (Audit U10): Nachladende Remote-Bilder vergrößern scrollHeight ERST
+  // nach dem ersten Layout – die einmalige rAF-Meldung unten verpasst das, das Bild wurde
+  // abgeschnitten. Der Observer meldet jede echte Inhaltsgrößen-Änderung erneut an Swift.
+  if (window._heightObserver) { window._heightObserver.disconnect(); }
+  if (typeof ResizeObserver !== 'undefined') {
+    window._heightObserver = new ResizeObserver(function() {
+      var h = document.body.scrollHeight;
+      try {
+        window.webkit.messageHandlers.heightChanged.postMessage(h);
+      } catch(e) {}
+    });
+    window._heightObserver.observe(document.documentElement);
+  }
+
+  // 3. Höhe ans Swift melden (nach nächstem Paint für korrektes scrollHeight)
+  //    Hinweis: Der Single-`$`-KaTeX-Delimiter ist bewusst entfernt (Audit U11) –
+  //    Texte wie "5$ ... 10$" wurden sonst als Mathe-Formel interpretiert.
+  requestAnimationFrame(function() {
+    var h = document.body.scrollHeight;
+    try {
+      window.webkit.messageHandlers.heightChanged.postMessage(h);
+    } catch(e) {}
+  });
+}
+
+// ── Links und Bilder abfangen (im System-Browser öffnen, nicht in der WebView) ──
+document.addEventListener('click', function(e) {
+  if (e.target.tagName === 'IMG' && e.target.src) {
+    try { window.webkit.messageHandlers.linkClicked.postMessage(e.target.src); } catch(e) {}
+    return;
+  }
+  var a = e.target.closest('a');
+  if (!a || !a.href) return;
+  e.preventDefault();
+  try { window.webkit.messageHandlers.linkClicked.postMessage(a.href); } catch(e) {}
+});
+</script>
+
+<script>
+  // --- Text Selection & Floating Button ---
+  const explainBtn = document.createElement('div');
+  explainBtn.id = 'explain-btn';
+  explainBtn.innerHTML = '?';
+  explainBtn.title = 'Markierten Text erklären';
+  
+  // Basic styling for the floating button
+  Object.assign(explainBtn.style, {
+    position: 'absolute',
+    display: 'none',
+    width: '28px',
+    height: '28px',
+    backgroundColor: '#007AFF',
+    color: '#fff',
+    borderRadius: '14px',
+    textAlign: 'center',
+    lineHeight: '28px',
+    fontSize: '16px',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+    zIndex: '1000',
+    userSelect: 'none'
+  });
+  document.body.appendChild(explainBtn);
+
+  let selectedText = '';
+
+  document.addEventListener('selectionchange', () => {
+    const selection = window.getSelection();
+    selectedText = selection.toString().trim();
+    if (selectedText.length === 0) {
+      explainBtn.style.display = 'none';
+      return;
+    }
+  });
+
+  document.addEventListener('mouseup', (e) => {
+    // If we click on the button itself, don't hide it immediately
+    if (e.target === explainBtn) return;
+    
+    setTimeout(() => {
+      if (selectedText.length > 0) {
+        const selection = window.getSelection();
+        if (selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          
+          // Position relative to document
+          const top = rect.top + window.scrollY - 35;
+          const left = rect.left + window.scrollX + (rect.width / 2) - 14;
+          
+          explainBtn.style.top = `${Math.max(0, top)}px`;
+          explainBtn.style.left = `${Math.max(0, left)}px`;
+          explainBtn.style.display = 'block';
+        }
+      } else {
+        explainBtn.style.display = 'none';
+      }
+    }, 10);
+  });
+
+  explainBtn.addEventListener('mousedown', (e) => {
+    // Prevent selection from clearing when clicking the button
+    e.preventDefault(); 
+  });
+
+  explainBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (selectedText.length > 0 && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.explainSelection) {
+      window.webkit.messageHandlers.explainSelection.postMessage({ text: selectedText });
+      // Opt: Hide button after click
+      explainBtn.style.display = 'none';
+      window.getSelection().removeAllRanges();
+    }
+  });
+</script>
+
+</body>
+</html>
