@@ -45,7 +45,7 @@ struct ResizableContainer<Content: View>: View {
                 
                 Image(systemName: width != nil ? "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left" : "line.3.horizontal")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .padding(.trailing, 4)
             }
             .contentShape(Rectangle())

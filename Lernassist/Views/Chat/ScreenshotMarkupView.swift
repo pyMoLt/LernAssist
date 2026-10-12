@@ -9,14 +9,16 @@ import AppKit
 
 struct ScreenshotMarkupView: View {
     let originalImage: NSImage
-    let onDone: (NSImage) -> Void
+    /// Fertiges Bild und ob nur ein Ausschnitt gewählt wurde.
+    let onDone: (NSImage, Bool) -> Void
     let onCancel: () -> Void
 
     private enum MarkupTool: String, CaseIterable {
-        case pen, rectangle, arrow, ellipse
+        case crop, pen, rectangle, arrow, ellipse
 
         var icon: String {
             switch self {
+            case .crop: return "crop"
             case .pen: return "pencil"
             case .rectangle: return "rectangle"
             case .arrow: return "arrow.up.right"
@@ -25,6 +27,7 @@ struct ScreenshotMarkupView: View {
         }
         var label: String {
             switch self {
+            case .crop: return "Ausschnitt wählen (nur dieser Bereich wird gesendet)"
             case .pen: return "Stift"
             case .rectangle: return "Rechteck"
             case .arrow: return "Pfeil"
@@ -42,12 +45,16 @@ struct ScreenshotMarkupView: View {
 
     @State private var strokes: [Stroke] = []
     @State private var currentStroke: Stroke?
-    @State private var selectedTool: MarkupTool = .pen
+    @State private var selectedTool: MarkupTool = .crop
+    /// Gewählter Ausschnitt in Canvas-Koordinaten (nil = ganzes Bild).
+    @State private var cropRect: CGRect?
+    @State private var cropStart: CGPoint?
     @State private var selectedColor: Color = .red
 
     private let palette: [Color] = [.red, .yellow, .green, .blue, .white]
     private let lineWidth: CGFloat = 4
-    private let canvasSize = CGSize(width: 760, height: 500)
+    /// Wird per GeometryReader an die tatsächliche Fenstergröße angepasst (Start: 760×500).
+    @State private var canvasSize = CGSize(width: 760, height: 500)
 
     /// Fit-Rect des Originalbildes innerhalb des Canvas (Letterboxing bei abweichendem
     /// Seitenverhältnis berücksichtigt) – Zeichenkoordinaten werden darauf begrenzt.
@@ -75,14 +82,40 @@ struct ScreenshotMarkupView: View {
                 Canvas { context, _ in
                     for stroke in strokes { draw(stroke, into: &context) }
                     if let currentStroke { draw(currentStroke, into: &context) }
+                    if let cropRect {
+                        // Außerhalb des Ausschnitts abdunkeln, Rand gestrichelt.
+                        var outside = Path(fitRect)
+                        outside.addRect(cropRect)
+                        context.fill(outside, with: .color(.black.opacity(0.45)), style: FillStyle(eoFill: true))
+                        context.stroke(Path(cropRect), with: .color(.white),
+                                       style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                    }
                 }
                 .allowsHitTesting(false)
             }
             .frame(width: canvasSize.width, height: canvasSize.height)
             .contentShape(Rectangle())
             .gesture(drawGesture)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(GeometryReader { proxy in
+                Color.clear
+                    .onAppear { updateCanvas(proxy.size) }
+                    .onChange(of: proxy.size) { _, new in updateCanvas(new) }
+            })
         }
-        .frame(width: canvasSize.width)
+        .frame(minWidth: 480, idealWidth: 760, minHeight: 380, idealHeight: 600)
+    }
+
+    /// Passt die Leinwand an die verfügbare Größe an. Bereits gezeichnete Striche und der
+    /// Ausschnitt werden nur zurückgesetzt, wenn sich die Größe tatsächlich ändert.
+    private func updateCanvas(_ size: CGSize) {
+        guard size.width > 100, size.height > 100,
+              abs(size.width - canvasSize.width) > 1 || abs(size.height - canvasSize.height) > 1 else { return }
+        let sx = size.width / canvasSize.width, sy = size.height / canvasSize.height
+        func map(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x * sx, y: p.y * sy) }
+        strokes = strokes.map { var st = $0; st.points = st.points.map(map); return st }
+        if let r = cropRect { cropRect = CGRect(x: r.minX * sx, y: r.minY * sy, width: r.width * sx, height: r.height * sy) }
+        canvasSize = size
     }
 
     private var header: some View {
@@ -92,7 +125,7 @@ struct ScreenshotMarkupView: View {
             Spacer()
             Button("Abbrechen", action: onCancel)
                 .buttonStyle(.plain)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
         }
         .padding(12)
     }
@@ -136,17 +169,17 @@ struct ScreenshotMarkupView: View {
             .disabled(strokes.isEmpty)
             .help("Letzte Markierung rückgängig machen")
 
-            Button(action: { strokes.removeAll() }) {
+            Button(action: { strokes.removeAll(); cropRect = nil }) {
                 Image(systemName: "trash")
             }
             .buttonStyle(.plain)
-            .disabled(strokes.isEmpty)
+            .disabled(strokes.isEmpty && cropRect == nil)
             .help("Alle Markierungen entfernen")
 
             Spacer()
 
-            Button("Fertig") {
-                onDone(flattenedImage())
+            Button(cropRect == nil ? "Fertig" : "Ausschnitt übernehmen") {
+                onDone(finalImage(), cropRect != nil)
             }
             .buttonStyle(.borderedProminent)
         }
@@ -160,6 +193,12 @@ struct ScreenshotMarkupView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 let p = clamp(value.location)
+                if selectedTool == .crop {
+                    let start = cropStart ?? clamp(value.startLocation)
+                    cropStart = start
+                    cropRect = CGRect(origin: start, size: .zero).union(CGRect(origin: p, size: .zero))
+                    return
+                }
                 if currentStroke == nil {
                     currentStroke = Stroke(tool: selectedTool, points: [p], color: selectedColor, lineWidth: lineWidth)
                 } else if selectedTool == .pen {
@@ -171,6 +210,11 @@ struct ScreenshotMarkupView: View {
                 }
             }
             .onEnded { _ in
+                if selectedTool == .crop {
+                    cropStart = nil
+                    if let rect = cropRect, rect.width < 12 || rect.height < 12 { cropRect = nil }
+                    return
+                }
                 if let currentStroke, !currentStroke.points.isEmpty {
                     strokes.append(currentStroke)
                 }
@@ -189,6 +233,8 @@ struct ScreenshotMarkupView: View {
         var path = Path()
 
         switch stroke.tool {
+        case .crop:
+            return
         case .pen:
             path.move(to: stroke.points[0])
             for pt in stroke.points.dropFirst() { path.addLine(to: pt) }
@@ -221,6 +267,22 @@ struct ScreenshotMarkupView: View {
             path.move(to: end); path.addLine(to: p2)
             context.stroke(path, with: .color(stroke.color), style: style)
         }
+    }
+
+    /// Bild mit Markierungen, ggf. auf den gewählten Ausschnitt zugeschnitten (in Pixeln).
+    private func finalImage() -> NSImage {
+        let full = flattenedImage()
+        guard let cropRect, fitRect.width > 0,
+              let cg = full.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return full }
+        let pxPerPoint = CGFloat(cg.width) / fitRect.width
+        let pixelRect = CGRect(x: (cropRect.minX - fitRect.minX) * pxPerPoint,
+                               y: (cropRect.minY - fitRect.minY) * pxPerPoint,
+                               width: cropRect.width * pxPerPoint,
+                               height: cropRect.height * pxPerPoint).integral
+        guard let cropped = cg.cropping(to: pixelRect) else { return full }
+        let pointSize = NSSize(width: cropRect.width * full.size.width / fitRect.width,
+                               height: cropRect.height * full.size.height / fitRect.height)
+        return NSImage(cgImage: cropped, size: pointSize)
     }
 
     /// Rendert Bild + Markierungen zusammen in der ORIGINAL-Pixelauflösung (nicht der kleineren

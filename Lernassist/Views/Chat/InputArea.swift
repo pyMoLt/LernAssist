@@ -26,8 +26,8 @@ struct InputArea: View {
     /// Gemessene natürliche Höhe des Eingabefelds (siehe InputHeightPreferenceKey) – treibt die
     /// Höhe der umgebenden ScrollView, damit sie bei leerem/kurzem Text klein bleibt und erst ab
     /// maxInputHeight tatsächlich scrollt, statt immer die volle Maximalhöhe einzunehmen.
-    @State private var inputFieldHeight: CGFloat = 20
-    private let minInputHeight: CGFloat = 20
+    @State private var inputFieldHeight: CGFloat = 24
+    private let minInputHeight: CGFloat = 24
     private let maxInputHeight: CGFloat = 160
 
     var body: some View {
@@ -37,31 +37,41 @@ struct InputArea: View {
             // Screenshot landet weiterhin sofort unkommentiert hier und kann direkt gesendet
             // werden; Markup ist ein rein optionaler Zwischenschritt auf Wunsch.
             if let image = lastCapturedImage {
-                HStack(alignment: .top) {
+                HStack(alignment: .top, spacing: DS.Space.s) {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
                         .frame(height: 72)
-                        .cornerRadius(8)
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
+                                .stroke(DS.Ink.hairline, lineWidth: 0.5)
                         )
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "pencil.circle.fill")
-                                .font(.system(size: 15))
-                                .foregroundColor(.blue)
-                                .background(Circle().fill(.white))
-                                .padding(3)
-                        }
                         .contentShape(Rectangle())
                         .onTapGesture { isShowingMarkup = true }
+                        .accessibilityLabel("Screenshot-Vorschau")
+                        .accessibilityAddTraits(.isButton)
                         .help("Klicken zum Markieren (Kreise, Pfeile, Rechtecke)")
-                    Button(action: { lastCapturedImage = nil }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                    GlassEffectContainer(spacing: DS.Space.xs) {
+                        VStack(spacing: DS.Space.xs) {
+                            Button { isShowingMarkup = true } label: {
+                                Image(systemName: "pencil.tip.crop.circle")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                            .help("Markieren oder Ausschnitt wählen")
+                            .accessibilityLabel("Screenshot markieren")
+                            Button { lastCapturedImage = nil } label: {
+                                Image(systemName: "xmark")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                            .help("Screenshot entfernen")
+                            .accessibilityLabel("Screenshot entfernen")
+                        }
                     }
-                    .buttonStyle(.plain)
                     Spacer()
                 }
                 .padding(.horizontal)
@@ -80,7 +90,7 @@ struct InputArea: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.12))
+                        .background(DS.Ink.accent.opacity(0.12))
                         .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -104,12 +114,12 @@ struct InputArea: View {
                         .frame(width: 16, height: 16)
                     Text(docProcessor.currentStatus.statusText)
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Spacer()
                     if docProcessor.currentStatus.estimatedTokens > 0 {
                         Text("~ \(docProcessor.currentStatus.estimatedTokens) Tokens")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(.horizontal)
@@ -119,6 +129,7 @@ struct InputArea: View {
                 // Screenshot-Button (GUI-Neubau: Glas-Kreis statt flacher Button)
                 Button(action: capture) {
                     Image(systemName: "camera.viewfinder")
+                        .symbolEffect(.bounce, value: lastCapturedImage != nil)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
@@ -126,6 +137,7 @@ struct InputArea: View {
                 .buttonStyle(.plain)
                 .glassEffect(.regular, in: Circle())
                 .help("Screenshot aufnehmen (Interaktiv)")
+                .accessibilityLabel("Screenshot aufnehmen")
                 .disabled(docProcessor.currentStatus.isProcessing)
                 
                 // Datei-Button (Büroklammer, Glas-Kreis)
@@ -138,6 +150,7 @@ struct InputArea: View {
                 .buttonStyle(.plain)
                 .glassEffect(.regular, in: Circle())
                 .help("Datei hochladen (PDF, TXT, MD)")
+                .accessibilityLabel("Datei anhängen")
                 .disabled(viewModel.isStreaming || docProcessor.currentStatus.isProcessing)
                 .fileImporter(
                     isPresented: $showFilePicker,
@@ -152,35 +165,34 @@ struct InputArea: View {
                     }
                 }
 
-                // Texteingabe
-                // Bei langen Nachrichten wuchs das Feld vorher NICHT über sein eigenes
-                // lineLimit(1...8) hinaus scrollbar per Mausrad/Trackpad – TextField(axis: .vertical)
-                // bietet auf macOS in dieser (per NSPanel statt regulärer SwiftUI-WindowGroup
-                // verwalteten) Fensterkonfiguration offenbar kein zuverlässiges internes Scrollen.
-                // Eine simple ScrollView mit .frame(maxHeight:) nimmt aber IMMER die volle
-                // Maximalhöhe ein, auch bei leerem Text – deshalb wird die natürliche Höhe des
-                // Feldes per GeometryReader/PreferenceKey gemessen und die ScrollView-Höhe darauf
-                // begrenzt: klein bei kurzem Text, wächst mit, ist ab maxInputHeight gedeckelt und
-                // scrollt erst dann per Mausrad/Trackpad.
-                ScrollView(.vertical) {
-                    TextField("Frage stellen oder Screenshot senden...", text: $inputText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...)
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear.preference(key: InputHeightPreferenceKey.self, value: proxy.size.height)
-                            }
-                        )
-                }
-                .onPreferenceChange(InputHeightPreferenceKey.self) { newHeight in
-                    inputFieldHeight = newHeight
+                // Ein NSTextView bricht lange Zeilen zuverlässig um. TextField(axis: .vertical)
+                // blieb in diesem NSPanel trotz ScrollView einzeilig und scrollte den Text
+                // horizontal. Der Editor misst seine umbrochene Texthöhe, wächst bis maxInputHeight
+                // und bekommt danach einen nativen vertikalen Scrollbalken.
+                ZStack(alignment: .topLeading) {
+                    GrowingTextEditor(
+                        text: $inputText,
+                        height: $inputFieldHeight,
+                        minHeight: minInputHeight,
+                        maxHeight: maxInputHeight,
+                        onSubmit: handleInputSubmit
+                    )
+                    if inputText.isEmpty {
+                        Text("Frage stellen oder Screenshot senden...")
+                            .font(.system(size: NSFont.systemFontSize))
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 3)
+                            .padding(.top, 4)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .frame(height: min(max(inputFieldHeight, minInputHeight), maxInputHeight))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, DS.Space.m)
                     .padding(.vertical, DS.Space.s)
                     // Composer als Liquid-Glass-Fläche (Phase G): Der Composer ist Steuerfläche,
                     // nicht Content – genau dort gehört Glass hin.
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DS.Radius.extraLarge, style: .continuous))
                     .onChange(of: inputText) { newValue in
                         if newValue.hasPrefix("/") {
                             matchedCommands = viewModel.slashCommandRegistry.matching(prefix: newValue)
@@ -200,16 +212,6 @@ struct InputArea: View {
                             }
                         )
                     }
-                    .onSubmit {
-                        if showSlashCommands && !matchedCommands.isEmpty {
-                            // Wenn Popover offen ist, nimm den selektierten Befehl anstatt zu senden
-                            let cmd = matchedCommands[selectedCommandIndex]
-                            inputText = "/" + cmd.id + " "
-                            showSlashCommands = false
-                            return
-                        }
-                        handleSend()
-                    }
                     .disabled(docProcessor.currentStatus.isProcessing)
 
                 // Senden / Stopp / Zur Warteschlange hinzufügen
@@ -223,6 +225,7 @@ struct InputArea: View {
                     .buttonStyle(.plain)
                     .glassEffect(.regular.tint(.red).interactive(), in: Circle())
                     .help("Generierung abbrechen")
+                    .accessibilityLabel("Generierung abbrechen")
                 }
 
                 if viewModel.isStreaming {
@@ -252,18 +255,20 @@ struct InputArea: View {
                     .opacity(canSend ? 1 : 0.4)
                     .disabled(!canSend)
                     .help("Senden (Return)")
+                    .accessibilityLabel("Senden")
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
+            .padding(.horizontal, DS.Space.l)
+            .padding(.top, DS.Space.xs)
+            .padding(.bottom, DS.Space.m)
         }
-        .background(Color(NSColor.windowBackgroundColor))
+        // Kein opaker Balken mehr: Der Composer schwebt als Glas auf dem Chat-Hintergrund.
         .overlay(
             Group {
                 if isHoveringDropZone {
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, dash: [10]))
-                        .background(Color.blue.opacity(0.1))
+                        .stroke(DS.Ink.accent, style: StrokeStyle(lineWidth: 3, dash: [10]))
+                        .background(DS.Ink.accent.opacity(0.1))
                         .allowsHitTesting(false)
                 }
             }
@@ -291,8 +296,11 @@ struct InputArea: View {
             if let image = lastCapturedImage {
                 ScreenshotMarkupView(
                     originalImage: image,
-                    onDone: { annotated in
+                    onDone: { annotated, isCrop in
                         lastCapturedImage = annotated
+                        if isCrop && inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            inputText = "Erkläre diesen Ausschnitt."
+                        }
                         isShowingMarkup = false
                     },
                     onCancel: { isShowingMarkup = false }
@@ -305,6 +313,16 @@ struct InputArea: View {
         for url in urls {
             viewModel.addDocument(url: url)
         }
+    }
+
+    private func handleInputSubmit() {
+        if showSlashCommands && !matchedCommands.isEmpty {
+            let command = matchedCommands[selectedCommandIndex]
+            inputText = "/" + command.id + " "
+            showSlashCommands = false
+            return
+        }
+        handleSend()
     }
 
     /// Muss mit den von `DocumentProcessor` tatsächlich unterstützten Formaten übereinstimmen.
@@ -364,14 +382,123 @@ struct InputArea: View {
     }
 }
 
-// MARK: - InputHeightPreferenceKey
+// MARK: - GrowingTextEditor
 
-/// Reicht die gemessene natürliche Höhe des Eingabefelds nach oben durch, damit die umgebende
-/// ScrollView ihre Höhe entsprechend anpassen kann (siehe InputArea.body).
-private struct InputHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+/// NSTextView liefert tatsächlichen Zeilenumbruch und vertikales Scrollen im Chat-Composer.
+/// Return sendet wie zuvor; Shift+Return fügt einen Zeilenumbruch ein.
+private struct GrowingTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var height: CGFloat
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.backgroundColor = .clear
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+
+        let textView = NSTextView(frame: .zero)
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFontPanel = false
+        textView.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.delegate = context.coordinator
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+        // Nur echte Änderungen von außen übernehmen (Leeren nach dem Senden, Slash-Vervollständigung,
+        // Prefill). Beim schnellen Tippen kam hier sonst ein veralteter SwiftUI-Wert an, der den
+        // Text zurücksetzte und die Einfügemarke an den Anfang springen ließ („ie/search … Leitlin“).
+        // Leeren (nach dem Senden) ist immer eine echte Änderung von außen.
+        if textView.string != text, text.isEmpty || !context.coordinator.recentTextsFromView.contains(text) {
+            textView.string = text
+            context.coordinator.recentTextsFromView = [text]
+            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        }
+        DispatchQueue.main.async {
+            context.coordinator.updateLayout(in: scrollView)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: GrowingTextEditor
+        /// Zuletzt vom Textfeld selbst gemeldete Stände: Verspätete SwiftUI-Updates mit einem
+        /// dieser Werte sind Echos und dürfen das Feld nicht zurücksetzen.
+        var recentTextsFromView: [String] = []
+
+        init(parent: GrowingTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView,
+                  let scrollView = textView.enclosingScrollView else { return }
+            recentTextsFromView.append(textView.string)
+            if recentTextsFromView.count > 64 { recentTextsFromView.removeFirst(recentTextsFromView.count - 64) }
+            parent.text = textView.string
+            updateLayout(in: scrollView)
+            let end = (textView.string as NSString).length
+            textView.scrollRangeToVisible(NSRange(location: end, length: 0))
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                return false
+            }
+            parent.onSubmit()
+            return true
+        }
+
+        func updateLayout(in scrollView: NSScrollView) {
+            guard let textView = scrollView.documentView as? NSTextView else { return }
+            let width = max(1, scrollView.contentSize.width)
+            let desiredHeight = Self.measuredHeight(for: textView.string, width: width, font: textView.font ?? .systemFont(ofSize: NSFont.systemFontSize))
+            let documentHeight = max(desiredHeight, scrollView.contentSize.height)
+            textView.setFrameSize(NSSize(width: width, height: documentHeight))
+            let clampedHeight = min(max(desiredHeight, parent.minHeight), parent.maxHeight)
+            if abs(parent.height - clampedHeight) > 0.5 {
+                parent.height = clampedHeight
+            }
+        }
+
+        private static func measuredHeight(for text: String, width: CGFloat, font: NSFont) -> CGFloat {
+            let container = NSTextContainer(size: NSSize(width: max(1, width - 8), height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            let layoutManager = NSLayoutManager()
+            layoutManager.addTextContainer(container)
+            let storage = NSTextStorage(string: text.isEmpty ? " " : text, attributes: [.font: font])
+            storage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            return ceil(layoutManager.usedRect(for: container).height) + 8
+        }
     }
 }
 
@@ -389,14 +516,14 @@ struct SlashCommandList: View {
                     HStack {
                         Text("/\(cmd.id)").font(.system(.body, design: .monospaced)).bold()
                         if let hint = cmd.paramHint {
-                            Text(hint).font(.caption).foregroundColor(.secondary)
+                            Text(hint).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(cmd.description).font(.caption).foregroundColor(.secondary)
+                        Text(cmd.description).font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(index == selectedIndex ? Color.blue.opacity(0.2) : Color.clear)
+                    .background(index == selectedIndex ? DS.Ink.accent.opacity(0.2) : Color.clear)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -425,7 +552,7 @@ struct QueuedMessagesList: View {
                 HStack(alignment: .top, spacing: 8) {
                     if msg.imageBase64 != nil {
                         Image(systemName: "photo")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     Text(msg.text.isEmpty ? "[Screenshot]" : msg.text)
                         .font(.callout)
@@ -433,7 +560,7 @@ struct QueuedMessagesList: View {
                     Spacer()
                     Button(action: { onRemove(msg.id) }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -446,4 +573,3 @@ struct QueuedMessagesList: View {
         .frame(minWidth: 280, maxWidth: 360)
     }
 }
-

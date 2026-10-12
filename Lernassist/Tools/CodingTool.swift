@@ -6,18 +6,14 @@ final class CodingTool: AppTool {
     let name = "coding_sandbox"
     let displayName = "Coding & Interactive Sandbox"
     let description = """
-Führt Code (Python, HTML, JS) in einer sicheren Umgebung aus.
-Nutze dieses Tool, um:
-- Datenverarbeitung, Logik, Berechnungen und Funktionstests in Python auszuführen.
-- Mathematische Diagramme/Plots in Python zu erstellen (z.B. matplotlib). Speichere Bilder IMMER als '.png'.
-- Interaktive Animationen, 3D-Szenen (z.B. Three.js), Spiele oder GUIs IMMER als HTML/JS/CSS zu rendern.
-
-WICHTIG:
-- Setze `language` auf "python" für Logik, Datenanalyse, Tests und statische Plots. Generierte Bilder werden automatisch angezeigt. Versuche NIEMALS, native interaktive Python-Fenster (wie Pygame, Tkinter, OpenGL) zu öffnen! Diese werden in der sicheren Sandbox blockiert und frieren den Chat ein.
-- Setze `language` auf "html" für interaktive Web-Snippets (HTML, CSS, JS, Canvas, WebGL, Three.js). Diese werden direkt im Chat hardwarebeschleunigt und interaktiv gerendert! Nutze HTML/JS für JEDE interaktive visuelle Anforderung.
-- HTML-Ausgaben müssen selbstständig sein: Verwende inline-JavaScript/CSS, SVG oder Canvas. Externe `<script src="https://...">`-, `<link href="https://...">`- und ähnliche Ressourcen werden aus Sicherheitsgründen blockiert.
-- Das Python-Environment ist app-weit und wird nicht pro Chat neu aufgebaut. Nur die versionierten Skripte/Ergebnisse liegen im jeweiligen temporären Sitzungsordner.
-- Jede Python-Ausführung wird als `script_v1.py`, `script_v2.py` usw. im temporären Sitzungsordner gespeichert. Bei einem Fehler bekommst du Exit-Code und Traceback zurück: Lies bei Bedarf zuerst mit `run_command` die tatsächliche Version und sende danach eine korrigierte Vollversion an dieses Tool.
+Führt Code aus und zeigt das Ergebnis direkt im Chat. language "python" (Python 3.12 mit numpy, \
+pandas, scipy, sympy, matplotlib, seaborn, statsmodels, networkx, openpyxl): Berechnungen, \
+Datenauswertung (angehängte Dateien liegen im Arbeitsordner), Plots (Bilder erscheinen automatisch). \
+Fehlt ein Paket, nenne es in `install_packages`. language "html": interaktive Erklärungen, Simulationen und Animationen als EINE \
+selbstständige HTML-Datei mit inline JS/CSS, SVG oder Canvas (keine externen Skripte/CDNs). \
+Nutze HTML für alles Interaktive, Python für Daten und statische Grafiken. Keine GUI-Fenster \
+(tkinter, pygame) und kein Netzwerkzugriff. Bei Fehlern bekommst du Traceback und betroffene \
+Codezeilen – sende dann eine korrigierte Vollversion.
 """
     let parameters: [String: Any] = [
         "type": "object",
@@ -40,8 +36,12 @@ WICHTIG:
         "required": ["code", "language"]
     ]
     
-    // Default ist aus, da Python ausgeführt wird. Muss in den Settings aktiviert werden.
-    var isEnabled: Bool = false
+    // Standard an (Nutzer, 12.10.2026): Visualisierungen und Datenauswertung sind ausdrücklich
+    // gewünscht. Python läuft in der Sandbox (kein Netz, keine Home-Lesezugriffe).
+    var isEnabled: Bool = true
+
+    /// Daten-Anhänge des Chats (CSV, Excel, JSON …), die in den Arbeitsordner kopiert werden.
+    var dataFilesProvider: (String?) -> [URL] = { _ in [] }
 
     /// Wiederkehrende Aufforderung im Tool-Ergebnis: das Modell soll den generierten Code/das
     /// Ergebnis dem Nutzer aktiv erklären, statt die Ausführung stillschweigend zu bestätigen.
@@ -88,23 +88,28 @@ WICHTIG:
         
         // Code ausführen
         do {
-            let result = try await CodingEnvironment.shared.runPythonScript(code: code, sessionID: sessionID)
+            let inputFiles = dataFilesProvider(sessionID)
+            let result = try await CodingEnvironment.shared.runPythonScript(code: code, sessionID: sessionID, inputFiles: inputFiles)
 
             var finalOutput = ""
             if !setupLog.isEmpty {
                 finalOutput += "--- PIP INSTALL LOG ---\n\(setupLog)\n\n"
             }
-            finalOutput += "--- DATEI ---\nscript_v\(result.scriptVersion).py\n"
-            finalOutput += "Gespeicherter Pfad: \(result.scriptPath)\n"
-            finalOutput += "--- AUSGABE ---\n"
+            if !inputFiles.isEmpty {
+                finalOutput += "--- DATEIEN IM ARBEITSORDNER ---\n" + inputFiles.map(\.lastPathComponent).joined(separator: ", ") + "\n\n"
+            }
+            finalOutput += "--- AUSGABE (script_v\(result.scriptVersion).py) ---\n"
             finalOutput += result.output.isEmpty ? "(Keine Konsolenausgabe)" : result.output
 
             if result.timedOut {
                 finalOutput += "\n\nExit Code: \(result.exitCode)"
-                finalOutput += "\nDas Skript wurde wegen des Zeitlimits beendet. Lies die gespeicherte Datei mit run_command und korrigiere insbesondere Endlosschleifen oder blockierende GUI-Aufrufe."
+                finalOutput += "\nDas Skript wurde wegen des Zeitlimits beendet – prüfe Endlosschleifen oder blockierende Aufrufe und sende eine korrigierte Vollversion."
             } else if result.exitCode != 0 {
                 finalOutput += "\n\nExit Code: \(result.exitCode)"
-                finalOutput += "\nDas Skript ist mit einem Fehler beendet worden. Nutze run_command (z.B. `head`/`grep`/`cat`) für die tatsächliche script_v\(result.scriptVersion).py und sende danach eine korrigierte Vollversion an coding_sandbox."
+                if let context = Self.errorContext(output: result.output, code: code) {
+                    finalOutput += "\n\n--- BETROFFENE CODEZEILEN ---\n" + context
+                }
+                finalOutput += "\nKorrigiere den Fehler und sende eine vollständige, korrigierte Version an coding_sandbox."
             }
 
             // Bilder werden NICHT als Base64 in `content` gepackt (füllt sonst bei jeder
@@ -127,6 +132,23 @@ WICHTIG:
         } catch {
             return .failure("Schwerwiegender Fehler bei Ausführung: \(error.localizedDescription). Der Code wurde nicht erfolgreich ausgeführt; prüfe die Argumente und versuche eine korrigierte Version.")
         }
+    }
+
+    /// Zeilen rund um die letzte Traceback-Stelle im Skript (Zeilennummern bezogen auf den Code
+    /// des Modells, ohne den App-Vorspann). Ersetzt das frühere Nachlesen per run_command.
+    static func errorContext(output: String, code: String, radius: Int = 2) -> String? {
+        let pattern = #"script_v\d+\.py\", line (\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let matches = regex.matches(in: output, range: NSRange(output.startIndex..., in: output))
+        guard let last = matches.last, let range = Range(last.range(at: 1), in: output),
+              let scriptLine = Int(output[range]) else { return nil }
+        let codeLines = code.components(separatedBy: "\n")
+        let line = scriptLine - CodingEnvironment.preludeLineCount
+        guard line >= 1, line <= codeLines.count else { return nil }
+        let lower = max(1, line - radius), upper = min(codeLines.count, line + radius)
+        return (lower...upper).map { number in
+            String(format: "%@%4d | %@", number == line ? "→" : " ", number, codeLines[number - 1])
+        }.joined(separator: "\n")
     }
 
     /// Modellgeneriertes HTML bleibt lokal und deterministisch: Die Chat-Ansicht blockiert

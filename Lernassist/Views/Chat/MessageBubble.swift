@@ -6,19 +6,16 @@ import AppKit
 
 struct MessageBubble: View, Equatable {
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
-        // history ist Teil der Gleichheit (Audit U3): Das InlineExplainPopover baut daraus
-        // seinen Kontext – ohne diesen Vergleich hätte SwiftUI bei Content-Änderungen in
-        // älteren Nachrichten die Neuberechnung des Bubbles (und damit die aktualisierte
-        // Popover-Historie) übersprungen. Da ChatView allen Bubbles dieselbe Array-Instanz
-        // (COW) übergibt statt Prefix-Kopien, ist der Vergleich billig.
+        // Bewusst OHNE den Chatverlauf: Früher war `history` Teil der Gleichheit – da sich beim
+        // Streaming die letzte Nachricht ständig ändert, galten damit ALLE Bubbles als geändert
+        // und wurden alle 200 ms neu berechnet (Audit 2026-10-12, UI H1). Das InlineExplainPopover
+        // liest den Verlauf jetzt beim Öffnen frisch aus dem ViewModel.
         lhs.message == rhs.message &&
-        lhs.history == rhs.history &&
         lhs.isStreaming == rhs.isStreaming &&
         lhs.isContinuation == rhs.isContinuation &&
         lhs.fontScale == rhs.fontScale
     }
     let message: ChatMessage
-    let history: [ChatMessage]
     /// Referenz auf den ChatViewModel (nur für das InlineExplainPopover; bewusst kein
     /// @ObservedObject – der Bubble wird über `message`/`isStreaming` Equatable-diffed,
     /// eine Beobachtung würde den Re-Render-Sturm pro Token wieder einführen (Audit U13).
@@ -54,7 +51,6 @@ struct MessageBubble: View, Equatable {
 
     init(
         message: ChatMessage,
-        history: [ChatMessage] = [],
         chatViewModel: ChatViewModel,
         isStreaming: Bool = false,
         isContinuation: Bool = false,
@@ -68,7 +64,6 @@ struct MessageBubble: View, Equatable {
         onRollbackFailed: (() -> Void)? = nil
     ) {
         self.message = message
-        self.history = history
         self.chatViewModel = chatViewModel
         self.isStreaming = isStreaming
         self.isContinuation = isContinuation
@@ -94,6 +89,7 @@ struct MessageBubble: View, Equatable {
         if !message.content.isEmpty { return false }
         if message.imageID != nil { return false }
         if message.htmlArtifact != nil { return false }
+        if message.quizCard != nil { return false }
         return true
     }
 
@@ -134,7 +130,7 @@ struct MessageBubble: View, Equatable {
                         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
                 }
                 if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(message.content)
+                    Text(message.displayText ?? message.content)
                         .font(.system(size: 13.5 * fontScale, design: .rounded))
                         .foregroundStyle(.primary)
                         .textSelection(.enabled)
@@ -176,9 +172,25 @@ struct MessageBubble: View, Equatable {
             }
 
             VStack(alignment: .leading, spacing: DS.Space.s) {
+                // Vom Coding-Tool erzeugte Python-Plots sind Assistenten-Artefakte. Der
+                // Nutzer-Zweig renderte Bilder bereits, hier fehlte derselbe Pfad bislang –
+                // dadurch war die PNG gespeichert und referenziert, aber im Chat unsichtbar.
+                if let imgID = message.imageID {
+                    OptimizedImageView(imageID: imgID, base64: message.imageBase64)
+                        .frame(maxWidth: 720)
+                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
+                }
+
                 // Tool-Artefakt: interaktives HTML (coding_sandbox), sandboxed direkt gerendert
                 if let html = message.htmlArtifact {
                     HTMLArtifactView(html: html)
+                }
+
+                // Tool-Artefakt: interaktive Abfragekarte (quiz_card)
+                if let card = message.quizCard {
+                    QuizCardView(card: card) { optionIndex, freeText in
+                        chatViewModel.answerQuizCard(messageId: message.id, optionIndex: optionIndex, freeText: freeText)
+                    }
                 }
 
                 // Tool Calls
@@ -191,7 +203,7 @@ struct MessageBubble: View, Equatable {
                         // Tool-Calls werden während des Streamings nur angehängt, daher ist die
                         // Position eine stabile Identität.
                         ForEach(Array(tools.enumerated()), id: \.offset) { _, tool in
-                            ToolCallBadge(tool: tool)
+                            ToolActivityView(call: tool)
                         }
                     }
                 }
@@ -204,7 +216,7 @@ struct MessageBubble: View, Equatable {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
                         Text("Denkt nach...")
-                            .font(.caption).foregroundColor(.secondary).italic()
+                            .font(.caption).foregroundStyle(.secondary).italic()
                     }
                 }
 
@@ -237,7 +249,7 @@ struct MessageBubble: View, Equatable {
                     // Hat Thinking, Content kommt aber noch
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
-                        Text("Formuliert Antwort...").font(.caption).foregroundColor(.secondary).italic()
+                        Text("Formuliert Antwort...").font(.caption).foregroundStyle(.secondary).italic()
                     }
                 }
 
@@ -267,7 +279,7 @@ struct MessageBubble: View, Equatable {
             }
             Text(text)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: DS.Space.s) {
                 if let retry = onRetryFailed {
@@ -302,13 +314,21 @@ struct MessageBubble: View, Equatable {
     private var systemBubbleContent: some View {
         HStack {
             Spacer()
-            Text(message.content)
+            // Inline-Markdown (fett, `Code`, Links) statt roher Sternchen; Zeilenumbrüche bleiben
+            // erhalten (z. B. /help, /tools).
+            Text((try? AttributedString(markdown: message.content,
+                                        options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                 ?? AttributedString(message.content))
                 .font(.caption)
+                .multilineTextAlignment(message.content.contains("\n") ? .leading : .center)
+                .textSelection(.enabled)
+                .frame(maxWidth: 560, alignment: message.content.contains("\n") ? .leading : .center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Color.secondary.opacity(0.15))
                 .cornerRadius(12)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Spacer()
         }
         .padding(.vertical, 4)
@@ -329,7 +349,8 @@ struct MessageBubble: View, Equatable {
             get: { selectedExplanation },
             set: { selectedExplanation = $0 }
         )) { text in
-            InlineExplainPopover(selectedText: text.text, history: history, markedMessageId: message.id, chatViewModel: chatViewModel, fontScale: fontScale, onDismiss: {
+            InlineExplainPopover(selectedText: text.text,
+                                 history: chatViewModel.sessions.first(where: { $0.messages.contains(where: { $0.id == message.id }) })?.messages ?? [message], markedMessageId: message.id, chatViewModel: chatViewModel, fontScale: fontScale, onDismiss: {
                 selectedExplanation = nil
             })
         }
@@ -354,7 +375,7 @@ struct MessageBubble: View, Equatable {
                 HStack(spacing: 6) {
                     Image(systemName: isThinkingExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption2)
-                        .foregroundColor(.blue.opacity(0.5))
+                        .foregroundStyle(DS.Ink.accent.opacity(0.5))
                     Image(systemName: "brain.head.profile")
                         .font(.caption)
 
@@ -371,11 +392,11 @@ struct MessageBubble: View, Equatable {
 
                     Text(wordInfo)
                         .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.7))
+                        .foregroundStyle(.secondary.opacity(0.7))
                 }
                 .padding(8)
                 .contentShape(Rectangle())
-                .foregroundColor(.blue)
+                .foregroundStyle(DS.Ink.accent)
             }
             .buttonStyle(.plain)
             .padding(.top, 2)
@@ -388,22 +409,22 @@ struct MessageBubble: View, Equatable {
                     : thinking
                 Text(displayText)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .lineLimit(nil)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .background(Color.blue.opacity(0.03))
+                    .background(DS.Ink.accent.opacity(0.03))
                     .cornerRadius(6)
                     .padding(.bottom, 4)
             }
         }
         .padding(6)
-        .background(Color.blue.opacity(0.05))
+        .background(DS.Ink.accent.opacity(0.05))
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                .stroke(DS.Ink.accent.opacity(0.2), lineWidth: 1)
         )
     }
 
@@ -411,7 +432,7 @@ struct MessageBubble: View, Equatable {
     private func sourcesView(sources: [String]) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "link.circle.fill")
-                .foregroundColor(.blue.opacity(0.8))
+                .foregroundStyle(DS.Ink.accent.opacity(0.8))
             
             ForEach(sources, id: \.self) { source in
                 if let url = URL(string: source) {
@@ -420,9 +441,9 @@ struct MessageBubble: View, Equatable {
                             .font(.caption2)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.1))
+                            .background(DS.Ink.accent.opacity(0.1))
                             .cornerRadius(4)
-                            .foregroundColor(.blue)
+                            .foregroundStyle(DS.Ink.accent)
                     }
                     .buttonStyle(.plain)
                     .help(source)
@@ -433,7 +454,7 @@ struct MessageBubble: View, Equatable {
                         .padding(.vertical, 2)
                         .background(Color.gray.opacity(0.1))
                         .cornerRadius(4)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -482,7 +503,7 @@ struct MessageBubble: View, Equatable {
                         Text("Andere Erklärung")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundStyle(.secondary.opacity(0.6))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(DS.Surface.chip))
@@ -500,7 +521,7 @@ struct MessageBubble: View, Equatable {
                         Text("Wie sicher?")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundStyle(.secondary.opacity(0.6))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(DS.Surface.chip))
@@ -518,7 +539,7 @@ struct MessageBubble: View, Equatable {
                         Text("Verifizieren")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundStyle(.secondary.opacity(0.6))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(DS.Surface.chip))
@@ -536,7 +557,7 @@ struct MessageBubble: View, Equatable {
                         Text("Abzweigen")
                             .font(.caption2)
                     }
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundStyle(.secondary.opacity(0.6))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(DS.Surface.chip))
@@ -555,7 +576,7 @@ struct MessageBubble: View, Equatable {
                     Text("Teilen")
                         .font(.caption2)
                 }
-                .foregroundColor(.secondary.opacity(0.6))
+                .foregroundStyle(.secondary.opacity(0.6))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
                 .background(Capsule().fill(DS.Surface.chip))
@@ -569,22 +590,14 @@ struct MessageBubble: View, Equatable {
     // Hauptinhalt
     @ViewBuilder
     private var contentView: some View {
-        MarkdownView(markdown: message.content, fontScale: fontScale) { text in
+        MarkdownView(markdown: ChatViewModel.linkCitations(in: message.content,
+                                                           links: chatViewModel.citationLinks(for: message.id)),
+                     fontScale: fontScale) { text in
             self.selectedExplanation = ExplanationRequest(text: text)
         }
-            .padding(isUser ? 10 : 6)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isUser
-                          ? Color.blue.opacity(0.12)
-                          : Color.primary.opacity(0.04))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isUser
-                            ? Color.blue.opacity(0.2)
-                            : Color.secondary.opacity(0.1),
-                            lineWidth: 0.5)
-            )
+            // Antworten als ruhiger Fließtext ohne Kasten (Phase 6): Inhalt bleibt opak und
+            // lesbar, Glas gehört nur auf Bedienelemente.
+            .padding(.vertical, 2)
+            .padding(.horizontal, 2)
     }
 }

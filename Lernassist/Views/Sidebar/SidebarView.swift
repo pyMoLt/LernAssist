@@ -95,7 +95,7 @@ struct SidebarView: View {
             // Volltextsuche über alle Chats (aktiv + archiviert)
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .font(.caption)
                 TextField("Chats durchsuchen...", text: $searchText)
                     .textFieldStyle(.plain)
@@ -121,7 +121,7 @@ struct SidebarView: View {
                         debouncedSearchText = ""
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -191,7 +191,7 @@ struct SidebarView: View {
                             } label: {
                                 Text("\(folderKey) (\(sessions.count))")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundStyle(.secondary)
                             }
                             .onDrop(of: [.text], isTargeted: nil) { providers in
                                 handleDrop(providers: providers, folder: folderKey)
@@ -261,22 +261,14 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
 
-            Divider()
-
-            HStack {
-                Button(action: { viewModel.createNewChat() }) {
-                    Label("Neuer Chat", systemImage: "plus")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundStyle(.white)
-                        .background(
-                            RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                                .fill(DS.Ink.accent.gradient)
-                        )
-                }
-                .buttonStyle(.plain)
+            Button(action: { viewModel.createNewChat() }) {
+                Label("Neuer Chat", systemImage: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DS.Space.xs)
             }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
             .padding(DS.Space.m)
         }
         .sheet(isPresented: $isShowingGallery) {
@@ -399,7 +391,7 @@ private struct SessionRow: View {
             if !isEditing {
                 Button(action: onArchive) {
                     Image(systemName: "archivebox")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
@@ -409,7 +401,7 @@ private struct SessionRow: View {
                 if canDelete {
                     Button(action: onDelete) {
                         Image(systemName: "trash")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -479,15 +471,15 @@ private struct ArchivedSessionRow: View {
     var body: some View {
         HStack {
             Image(systemName: "message")
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .font(.caption)
             Text(session.title)
                 .lineLimit(1)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Spacer()
             Button(action: onRestore) {
                 Image(systemName: "arrow.uturn.up")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .font(.caption)
             }
             .buttonStyle(.plain)
@@ -496,7 +488,7 @@ private struct ArchivedSessionRow: View {
 
             Button(action: onTrash) {
                 Image(systemName: "trash")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .font(.caption)
             }
             .buttonStyle(.plain)
@@ -545,15 +537,15 @@ private struct TrashedSessionRow: View {
     var body: some View {
         HStack {
             Image(systemName: "message")
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .font(.caption)
             Text(session.title)
                 .lineLimit(1)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Spacer()
             Button(action: onRestore) {
                 Image(systemName: "arrow.uturn.up")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .font(.caption)
             }
             .buttonStyle(.plain)

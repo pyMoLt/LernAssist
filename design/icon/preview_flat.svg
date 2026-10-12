@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="squircle"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <g clip-path="url(#squircle)">
+      <g transform="translate(100 100) scale(0.8046875)">
+        <image href="1_background.svg" width="1024" height="1024"/>
+        <image href="2_viewfinder.svg" width="1024" height="1024"/>
+        <image href="3_glass_cap.svg" width="1024" height="1024"/>
+      </g>
+    </g>
+  </g>
+</svg>

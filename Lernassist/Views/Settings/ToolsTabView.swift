@@ -8,46 +8,75 @@ struct ToolsTabView: View {
     @State private var toolStates: [String: Bool] = [:]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Tools & Funktionen")
-                .font(.headline)
-
-            Text("Deaktivierte Tools tauchen weder im API-Schema noch im System-Prompt auf — sie verbrauchen kein Kontext-Budget und verwirren das Modell nicht.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            ForEach(ToolRegistry.shared.tools, id: \.name) { tool in
-                ToolToggleRow(tool: tool, isEnabled: binding(for: tool))
-            }
-
-            if toolStates["run_command"] == true {
-                Text("Das begrenzte Terminal arbeitet nur im temporären Sitzungsordner und fragt vor jedem einzelnen Aufruf nach deiner Bestätigung. Es gibt keinen Shell-String und keine freigegebenen Lösch- oder Netzwerkbefehle.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, -8)
-            }
-
-            Divider()
-
-            // Konfiguration von SearXNG-URL und Zeichen-Limit lebt NUR noch im Websuche-Tab
-            // (Audit P3): Vorher standen hier dieselben Felder noch einmal – zwei Bindings auf
-            // dieselben Properties verstellten sich gegenseitig und verwässerten die Zuständig-
-            // keit (der Websuche-Tab bietet zusätzlich den Ping-Test, den es hier nie gab).
-            if toolStates["web_search"] == true || toolStates["browse_url"] == true {
-                GroupBox("Web-Suche & URL-Browsing") {
-                    Text("SearXNG-URL und das Zeichen-Limit fürs URL-Browsing werden im Tab „Websuche“ konfiguriert.")
+        VStack(alignment: .leading, spacing: DS.Space.xl) {
+            settingsSection(icon: "wrench.and.screwdriver", title: "Tools & Funktionen") {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    Text("Deaktivierte Tools tauchen weder im API-Schema noch im System-Prompt auf – sie verbrauchen kein Kontext-Budget und verwirren das Modell nicht.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(ToolRegistry.shared.tools, id: \.name) { tool in
+                        Divider()
+                        ToolToggleRow(tool: tool, isEnabled: binding(for: tool))
+                    }
+                }
+            }
+
+            // Konfiguration von SearXNG-URL und Zeichen-Limit lebt nur im Tab „Recherche“.
+            if toolStates["coding_sandbox"] ?? true {
+                settingsSection(icon: "terminal", title: "Python-Umgebung (coding_sandbox)") {
+                    VStack(alignment: .leading, spacing: DS.Space.s) {
+                        HStack {
+                            Image(systemName: pythonStatusSymbol)
+                                .foregroundStyle(pythonStatusColor)
+                            Text(viewModel.pythonEnvironmentStatus.label)
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button("Neu einrichten") { viewModel.setupPythonEnvironment(force: true) }
+                                .controlSize(.small)
+                                .disabled({ if case .installing = viewModel.pythonEnvironmentStatus { return true }; return false }())
+                        }
+                        Text("Eigenes Python \(PythonEnvironmentInstaller.pythonVersion) (über uv), unabhängig vom System-Python. Vorinstalliert: \(PythonEnvironmentInstaller.basePackages.joined(separator: ", ")).")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Toggle("Weitere Pakete ohne Rückfrage installieren", isOn: $viewModel.autoInstallPythonPackages)
+                            .toggleStyle(.switch)
+                            .font(.caption)
+                            .settingHelp("Das Modell kann fehlende Pakete selbst nachinstallieren (nur fertige Pakete von PyPI, kein Setup-Code). Aus = jedes Mal nachfragen.")
+                    }
+                }
+            }
+
+            if toolStates["web_search"] == true || toolStates["browse_url"] == true {
+                settingsSection(icon: "magnifyingglass", title: "Websuche & URL-Browsing") {
+                    Text("SearXNG-URL, Quellen und das Zeichen-Limit fürs URL-Browsing werden im Tab „Recherche“ konfiguriert.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .padding()
         .onAppear { loadStates() }
         .onChange(of: toolStates) { _ in applyStates() }
+    }
+
+    private var pythonStatusSymbol: String {
+        switch viewModel.pythonEnvironmentStatus {
+        case .ready: return "checkmark.circle.fill"
+        case .installing: return "arrow.down.circle"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .unknown: return "questionmark.circle"
+        }
+    }
+
+    private var pythonStatusColor: Color {
+        switch viewModel.pythonEnvironmentStatus {
+        case .ready: return .green
+        case .installing: return .accentColor
+        case .failed: return .orange
+        case .unknown: return .secondary
+        }
     }
 
     // MARK: - Binding-Helfer
@@ -93,7 +122,7 @@ private struct ToolToggleRow: View {
                     .font(.body.weight(.medium))
                 Text(tool.name)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
         }

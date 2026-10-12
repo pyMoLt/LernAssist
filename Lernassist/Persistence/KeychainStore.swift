@@ -40,9 +40,18 @@ nonisolated enum KeychainStore {
         }
     }
 
-    /// Liest den API-Key eines Profils. Gibt "" zurück, wenn kein Eintrag existiert.
-    static func apiKey(forProfileID id: UUID) -> String {
-        var query: [String: Any] = [
+    /// Ergebnis eines Lesezugriffs. `failed` (z. B. ACL-Wechsel nach einem ad-hoc-signierten
+    /// Neu-Build, gesperrter Schlüsselbund) ist bewusst von `notFound` getrennt: Ein Lesefehler
+    /// darf nie als „Profil ohne Key“ interpretiert und dann beim nächsten Speichern als
+    /// Löschauftrag zurückgeschrieben werden (Audit 2026-10-12, Chat-Kern H7).
+    enum ReadResult: Equatable {
+        case found(String)
+        case notFound
+        case failed(OSStatus)
+    }
+
+    static func readAPIKey(forProfileID id: UUID) -> ReadResult {
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.uuidString,
@@ -51,12 +60,53 @@ nonisolated enum KeychainStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else {
-            if status != errSecItemNotFound {
-                AppLog.persistence.error("Keychain: API-Key für Profil \(id.uuidString) konnte nicht gelesen werden (Status \(status))")
-            }
-            return ""
+        if status == errSecItemNotFound { return .notFound }
+        guard status == errSecSuccess, let data = result as? Data,
+              let key = String(data: data, encoding: .utf8) else {
+            AppLog.persistence.error("Keychain: API-Key für Profil \(id.uuidString) konnte nicht gelesen werden (Status \(status))")
+            return .failed(status)
         }
+        return .found(key)
+    }
+
+    /// Liest den API-Key eines Profils. Gibt "" zurück, wenn kein Eintrag existiert oder das
+    /// Lesen fehlschlägt (für reine Anzeige-/Request-Zwecke).
+    static func apiKey(forProfileID id: UUID) -> String {
+        if case .found(let key) = readAPIKey(forProfileID: id) { return key }
+        return ""
+    }
+
+    // MARK: Benannte Geheimnisse (z. B. Exa-API-Key)
+
+    private static func secretQuery(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service + ".secrets",
+         kSecAttrAccount as String: account]
+    }
+
+    /// Speichert ein benanntes Geheimnis. Leerstring löscht den Eintrag.
+    static func setSecret(_ value: String, account: String) {
+        let query = secretQuery(account)
+        guard !value.isEmpty else { SecItemDelete(query as CFDictionary); return }
+        let update = [kSecValueData as String: Data(value.utf8)]
+        if SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = Data(value.utf8)
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+            let status = SecItemAdd(add as CFDictionary, nil)
+            if status != errSecSuccess {
+                AppLog.persistence.error("Keychain: Geheimnis \(account) konnte nicht gespeichert werden (Status \(status))")
+            }
+        }
+    }
+
+    static func secret(account: String) -> String {
+        var query = secretQuery(account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
 

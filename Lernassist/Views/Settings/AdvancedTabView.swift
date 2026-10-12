@@ -18,7 +18,7 @@ struct AdvancedTabView: View {
                             .font(.callout.weight(.medium))
                         Text("Öffnet das Ersteinrichtungs-Fenster mit den benötigten Berechtigungen (Zugriffs-Hilfen für „Auswahl erklären“, Bildschirmaufnahme für Screenshots) inkl. Live-Status und Anforderungs-Buttons.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -33,7 +33,7 @@ struct AdvancedTabView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("LernAssist kann Aufgaben im Hintergrund erledigen, wenn du den Chat gerade nicht nutzt, um den Lesefluss nicht zu stören.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
 
                     Toggle("Auto-Labeling aktivieren", isOn: $viewModel.autoLabelingEnabled)
                         .settingHelp("Erstellt nach der ersten Antwort automatisch einen passenden Titel für den Chat.")
@@ -70,12 +70,32 @@ struct AdvancedTabView: View {
                             Spacer()
                             Text("\(Int(viewModel.autoCompactThreshold * 100)) %")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }
                         Slider(value: $viewModel.autoCompactThreshold, in: 0.5...0.9, step: 0.05)
                             .settingHelp("Ab welchem geschätzten Kontext-Füllstand der Vorschlag erscheint.")
                     }
+
+                    Stepper(value: $viewModel.compactSummaryTokens, in: 1_000...16_000, step: 500) {
+                        HStack {
+                            Text("Länge der Zusammenfassung")
+                            Spacer()
+                            Text("\(viewModel.compactSummaryTokens) Tokens")
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                    .settingHelp("Richtwert für die Länge der Zusammenfassung bei „Zusammenfassen“ bzw. /compact – als Anweisung an das Modell, keine harte Grenze (nichts wird abgeschnitten). Länger = mehr Details bleiben erhalten.")
+
+                    Stepper(value: $viewModel.compactKeepLastMessages, in: 0...6) {
+                        HStack {
+                            Text("Letzte Nachrichten wörtlich übernehmen")
+                            Spacer()
+                            Text("\(viewModel.compactKeepLastMessages)")
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                    }
+                    .settingHelp("So viele der letzten Nachrichten werden unverändert hinter die Zusammenfassung gehängt, damit das Modell weiß, worum es gerade ging.")
                 }
             }
 
@@ -108,14 +128,14 @@ struct AdvancedTabView: View {
                             Spacer()
                             Text("\(viewModel.maxToolRounds)")
                                 .monospacedDigit()
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .settingHelp("Bestimmt, wie oft das Modell innerhalb eines Turns Tools iterativ aufrufen darf. Standard: 8. Ein niedrigerer Wert begrenzt Latenz; ein höherer Wert gibt Python-/Recherche-Korrekturen mehr Raum.")
 
                     Text("Der Wert gilt pro Nutzer-Turn und verhindert Endlosschleifen aus Tool-Aufrufen. Nach dem Limit erhält das Modell bzw. der Nutzer ein sichtbares Ergebnis.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

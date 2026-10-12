@@ -102,6 +102,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupFloatingWindow(vm: vm)
         applyHotkeys(from: vm)
+        // /screenshot im Chat nutzt denselben Ablauf wie der Hotkey.
+        NotificationCenter.default.addObserver(forName: .screenshotRequested, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleScreenshot() }
+        }
 
         // Wenn Settings geändert werden → Hotkeys neu verdrahten
         NotificationCenter.default.addObserver(
@@ -131,9 +135,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Task.detached statt DispatchQueue: CodingEnvironment ist `nonisolated`, aber ein
         // gewöhnliches `Task { }` würde hier trotzdem die Main-Actor-Affinität des aufrufenden
         // Kontexts (applicationDidFinishLaunching) erben – detached vermeidet das explizit.
-        Task.detached(priority: .background) {
-            await CodingEnvironment.shared.setupEnvironmentIfNeeded()
-        }
+        // Eigene Python-3.12-Umgebung (uv) im Hintergrund einrichten; Status in Einstellungen → Tools.
+        vm.setupPythonEnvironment()
 
         // Hang-Watchdog (Erweitert-Tab-Bug): Der Nutzer-Report "Tab öffnen → App hängt → nur
         // Force Quit" ließ sich weder im Ruhezustand noch über programmatische Reproduktion
@@ -148,7 +151,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Bildschirmaufnahme für Screenshots) – mit Live-Status statt späterer Frust, wenn ein
         // Hotkey still nichts tut. „Fertig“ merkt sich den Abschluss; „Später“ zeigt das
         // Fenster beim nächsten Start erneut. Auch jederzeit aus den Einstellungen reopenbar.
-        if !UserDefaults.standard.bool(forKey: "hasCompletedPermissionOnboarding") {
+        // „Später“ pausiert den Assistenten 14 Tage statt ihn bei jedem Start zu zeigen.
+        let snoozedUntil = UserDefaults.standard.object(forKey: "permissionOnboardingSnoozedUntil") as? Date ?? .distantPast
+        if !UserDefaults.standard.bool(forKey: "hasCompletedPermissionOnboarding"), snoozedUntil < Date() {
             showPermissionOnboarding()
         }
 
@@ -254,6 +259,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // nicht mehr durch den SwiftUI-Pfad kommt (gleicher Standard-Defaults-Store).
         if completed {
             UserDefaults.standard.set(true, forKey: "hasCompletedPermissionOnboarding")
+        } else {
+            UserDefaults.standard.set(Date().addingTimeInterval(14 * 86_400), forKey: "permissionOnboardingSnoozedUntil")
         }
         permissionOnboardingWindow?.orderOut(nil)
     }
@@ -657,6 +664,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let externalScreenshotCaptured = Notification.Name("ExternalScreenshotCaptured")
+    static let screenshotRequested        = Notification.Name("ScreenshotRequested")
     static let toggleSidebar              = Notification.Name("ToggleSidebar")
     static let hotkeySettingsChanged      = Notification.Name("HotkeySettingsChanged")
     /// Öffnet das Settings-Sheet, optional auf einem bestimmten Tab (userInfo["tab"] als String).

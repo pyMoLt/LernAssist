@@ -19,7 +19,7 @@ struct HTMLArtifactView: View {
                 Text("Interaktive Ausgabe")
                     .font(.caption2)
                     .fontWeight(.medium)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     NativeWindowManager.openWindow(
@@ -44,6 +44,11 @@ struct HTMLArtifactView: View {
 }
 
 // MARK: - SandboxedHTMLWebView
+
+extension HTMLArtifactView {
+    /// Testbarer Zugang zur CSP-Härtung des Artefakt-HTML.
+    static func hardenedHTML(_ html: String) -> String { SandboxedHTMLWebView.hardenedHTML(html) }
+}
 
 private struct SandboxedHTMLWebView: NSViewRepresentable {
     let html: String
@@ -109,14 +114,26 @@ private struct SandboxedHTMLWebView: NSViewRepresentable {
     /// die Navigation-Policy: Sie blockiert auch `fetch`, XHR und externe Subressourcen, die nicht
     /// als NavigationAction beim Delegate auftauchen. `data:`/`blob:` bleiben für lokale Plots
     /// und vom Skript erzeugte Artefakte verfügbar.
-    private static func hardenedHTML(_ html: String) -> String {
+    static func hardenedHTML(_ html: String) -> String {
         let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; media-src data: blob:; worker-src blob:;\">"
-        if let headRange = html.range(of: "<head", options: .caseInsensitive),
-           let end = html.range(of: ">", range: headRange.lowerBound..<html.endIndex) {
+        // Eine CSP per <meta> wirkt NUR im <head>. Früher traf die Suche nach "<head" auch
+        // "<header>" – fehlte ein echtes <head>, landete die Policy im Body und wurde ignoriert
+        // (Audit 2026-10-12, H-1). Deshalb exakt auf das head-Tag matchen und sonst einen
+        // eigenen head erzeugen.
+        if let head = html.range(of: #"<head(\s[^>]*)?>"#, options: [.regularExpression, .caseInsensitive]) {
             var result = html
-            result.insert(contentsOf: csp, at: end.upperBound)
+            result.insert(contentsOf: csp, at: head.upperBound)
             return result
         }
-        return csp + html
+        if let root = html.range(of: #"<html(\s[^>]*)?>"#, options: [.regularExpression, .caseInsensitive]) {
+            var result = html
+            result.insert(contentsOf: "<head>" + csp + "</head>", at: root.upperBound)
+            return result
+        }
+        // Ein <head> ganz am Dokumentanfang wird vom HTML-Parser als Kopf übernommen.
+        let doctype = html.range(of: #"^\s*<!doctype[^>]*>"#, options: [.regularExpression, .caseInsensitive])
+        var result = html
+        result.insert(contentsOf: "<head>" + csp + "</head>", at: doctype?.upperBound ?? result.startIndex)
+        return result
     }
 }

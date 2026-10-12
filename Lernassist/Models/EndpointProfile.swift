@@ -3,11 +3,12 @@ import Foundation
 // MARK: - EndpointProvider
 
 /// Art des Backend-Servers — bestimmt URL-Schema, Auth-Header und Streaming-Format.
-enum EndpointProvider: String, Codable, CaseIterable {
+nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
     case openAICompatible = "openai_compat"   // OpenAI, Groq, Together, LM Studio /v1, llama.cpp
     case lmStudioNative   = "lmstudio_native" // LM Studio /api/v0 — echte server-seitige Tok/s
     case ollama           = "ollama"          // Ollama /api/chat — echte Tok/s via eval_count/eval_duration
     case mlx              = "mlx"             // Apple MLX Server (OpenAI-kompatibel, localhost:8080)
+    case omlx             = "omlx"            // oMLX (OpenAI-kompatibel + Modellstatus/Laden, Rerank), Port 8072
 
     var displayName: String {
         switch self {
@@ -15,6 +16,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
         case .lmStudioNative:   return "LM Studio Native (/api/v0)"
         case .ollama:           return "Ollama (/api/chat)"
         case .mlx:              return "MLX (Apple Silicon)"
+        case .omlx:             return "oMLX"
         }
     }
 
@@ -24,6 +26,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
         case .lmStudioNative:   return "LM Studio"
         case .ollama:           return "Ollama"
         case .mlx:              return "MLX"
+        case .omlx:             return "oMLX"
         }
     }
 
@@ -33,6 +36,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
         case .lmStudioNative:   return "http://localhost:1234"
         case .ollama:           return "http://localhost:11434"
         case .mlx:              return "http://localhost:8080"
+        case .omlx:             return "http://127.0.0.1:8072"
         }
     }
 
@@ -42,6 +46,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
         case .lmStudioNative:   return "API Key (optional)"
         case .ollama:           return "API Key (optional, Standard: leer)"
         case .mlx:              return "API Key (optional)"
+        case .omlx:             return "API-Key (Pflicht, sobald oMLX nicht nur lokal lauscht)"
         }
     }
 
@@ -51,6 +56,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
         case .lmStudioNative:   return "gauge.high"
         case .ollama:           return "hare.fill"
         case .mlx:              return "apple.logo"
+        case .omlx:             return "cpu"
         }
     }
 
@@ -115,6 +121,38 @@ enum EndpointProvider: String, Codable, CaseIterable {
             Metriken: Standard OpenAI usage-Objekt.
             TPS wird clientseitig berechnet.
             """
+        case .omlx:
+            return """
+            **oMLX** (POST /v1/chat/completions, Port 8072)
+
+            OpenAI-kompatibler MLX-Server mit Modellverwaltung:
+            • lädt Modelle bei Bedarf automatisch
+            • Kontextfenster und Vision-Fähigkeit werden vom Server gelesen
+            • Thinking an/aus und Thinking-Budget pro Profil
+            • Reranker (/v1/rerank) für die Websuche
+
+            Remote (Tailscale): oMLX muss auf der Tailscale-IP lauschen,
+            dann ist ein API-Key Pflicht.
+            Metriken: echte Server-Tok/s und TTFT im usage-Objekt.
+            """
+        }
+    }
+}
+
+// MARK: - Thinking
+
+/// Steuerung des Denkprozesses von Reasoning-Modellen (Qwen 3.x u. a.).
+nonisolated enum ThinkingMode: String, Codable, CaseIterable, Sendable {
+    /// Nichts senden – der Server bzw. das Chat-Template entscheidet.
+    case serverDefault
+    case on
+    case off
+
+    var label: String {
+        switch self {
+        case .serverDefault: return "Server-Standard"
+        case .on:            return "An"
+        case .off:           return "Aus"
         }
     }
 }
@@ -123,7 +161,7 @@ enum EndpointProvider: String, Codable, CaseIterable {
 
 /// Generierungs-Parameter für OpenAI-kompatible Endpunkte. Alle Felder optional —
 /// nur gesetzte Werte werden gesendet, damit der Server bei nil seine Defaults verwendet.
-struct ModelParams: Codable, Equatable {
+nonisolated struct ModelParams: Codable, Equatable, Sendable {
     var temperature: Double?
     var topP: Double?
     var topK: Int?
@@ -139,7 +177,7 @@ struct ModelParams: Codable, Equatable {
 // MARK: - EndpointProfile
 
 /// Ein konfigurierbares Backend-Endpunkt-Profil.
-struct EndpointProfile: Identifiable, Codable, Equatable {
+nonisolated struct EndpointProfile: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     var name: String
     var baseURL: String
@@ -158,6 +196,19 @@ struct EndpointProfile: Identifiable, Codable, Equatable {
     var lmStudioModelId: String = ""
     /// Wie `lmStudioModelId`, aber für das Hintergrund-Modell. Leer = `backgroundJobModel` wird verwendet.
     var backgroundJobModelLMStudioId: String = ""
+    /// Leerlauf-Timeout für Chat-Requests in Sekunden (Zeit ohne neue Bytes, nicht Gesamtdauer).
+    /// nil = Standard: remote 300 s, lokal 180 s. Große Modelle über Tailscale brauchen für
+    /// Prefill/Thinking deutlich länger als die früher fest eingebauten 120 s (Audit 2026-10-12, H6).
+    var requestTimeout: Double? = nil
+    /// Denkprozess für Chat-Antworten (Hintergrund-Jobs steuern ihn separat).
+    var thinkingMode: ThinkingMode = .serverDefault
+    /// Maximale Denk-Tokens bei `thinkingMode == .on` (nil = unbegrenzt). oMLX: `thinking_budget`.
+    var thinkingBudget: Int? = nil
+
+    var effectiveRequestTimeout: TimeInterval {
+        if let requestTimeout, requestTimeout >= 10 { return requestTimeout }
+        return isRemote ? 300 : 180
+    }
 
     // Audit 2.7: Die Legacy-computed-property `useNativeMetricsEndpoint` hatte 0 Aufrufer
     // (die JSON-Migration decodiert das Legacy-Bool weiter unten direkt aus dem Container) –
@@ -194,7 +245,8 @@ struct EndpointProfile: Identifiable, Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, name, baseURL, apiKey, model, params, isRemote, contextSizeOverride
         case provider, useNativeMetricsEndpoint, backgroundJobModel
-        case lmStudioModelId, backgroundJobModelLMStudioId
+        case lmStudioModelId, backgroundJobModelLMStudioId, requestTimeout
+        case thinkingMode, thinkingBudget
     }
 
     init(from decoder: Decoder) throws {
@@ -210,12 +262,19 @@ struct EndpointProfile: Identifiable, Codable, Equatable {
         backgroundJobModel = try c.decodeIfPresent(String.self, forKey: .backgroundJobModel) ?? ""
         lmStudioModelId = try c.decodeIfPresent(String.self, forKey: .lmStudioModelId) ?? ""
         backgroundJobModelLMStudioId = try c.decodeIfPresent(String.self, forKey: .backgroundJobModelLMStudioId) ?? ""
+        requestTimeout = try c.decodeIfPresent(Double.self, forKey: .requestTimeout)
+        thinkingMode = try c.decodeIfPresent(ThinkingMode.self, forKey: .thinkingMode) ?? .serverDefault
+        thinkingBudget = try c.decodeIfPresent(Int.self, forKey: .thinkingBudget)
         // Migration: useNativeMetricsEndpoint (Bool) → provider (EndpointProvider)
         if let prov = try c.decodeIfPresent(EndpointProvider.self, forKey: .provider) {
             provider = prov
         } else {
             let legacy = try c.decodeIfPresent(Bool.self, forKey: .useNativeMetricsEndpoint) ?? false
             provider = legacy ? .lmStudioNative : .openAICompatible
+        }
+        // Das frühere Preset „OMLX (lokal)“ lief als OpenAI-kompatibel auf Port 8072.
+        if provider == .openAICompatible, Self.looksLikeOMLX(baseURL) {
+            provider = .omlx
         }
     }
 
@@ -233,6 +292,47 @@ struct EndpointProfile: Identifiable, Codable, Equatable {
         try c.encode(backgroundJobModel, forKey: .backgroundJobModel)
         try c.encode(lmStudioModelId, forKey: .lmStudioModelId)
         try c.encode(backgroundJobModelLMStudioId, forKey: .backgroundJobModelLMStudioId)
+        try c.encodeIfPresent(requestTimeout, forKey: .requestTimeout)
+        try c.encode(thinkingMode, forKey: .thinkingMode)
+        try c.encodeIfPresent(thinkingBudget, forKey: .thinkingBudget)
+    }
+
+    static func looksLikeLoopback(_ url: String) -> Bool {
+        let host = URLComponents(string: EndpointManager.normalizedBase(url))?.host?.lowercased() ?? ""
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    static func looksLikeOMLX(_ url: String) -> Bool {
+        guard let components = URLComponents(string: EndpointManager.normalizedBase(url)) else { return false }
+        return components.port == 8072
+    }
+
+    // MARK: - Vorlagen
+
+    /// Empfohlenes Standardmodell (Chat + Vision) auf oMLX.
+    static let recommendedOMLXModel = "Qwen3.6-35B-A3B-oQ4e-mtp"
+
+    /// Qwen-3.x-Empfehlung mit Thinking: T 0.6, top_p 0.95, top_k 20.
+    static let qwenThinkingParams = ModelParams(temperature: 0.6, topP: 0.95, topK: 20)
+
+    /// „oMLX lokal“: oMLX auf diesem Mac. Hintergrund-Jobs nutzen das Hauptmodell.
+    static func omlxLocal() -> EndpointProfile {
+        var p = EndpointProfile(name: "oMLX lokal", baseURL: "http://127.0.0.1:8072",
+                                model: recommendedOMLXModel, params: qwenThinkingParams,
+                                isRemote: false, provider: .omlx)
+        p.thinkingMode = .on
+        p.thinkingBudget = 4_096
+        return p
+    }
+
+    /// „oMLX remote“: oMLX auf dem MacBook Pro über Tailscale (MagicDNS `macbook-pro`).
+    static func omlxRemote(host: String = "macbook-pro") -> EndpointProfile {
+        var p = EndpointProfile(name: "oMLX remote", baseURL: "http://\(host):8072",
+                                model: recommendedOMLXModel, params: qwenThinkingParams,
+                                isRemote: true, provider: .omlx)
+        p.thinkingMode = .on
+        p.thinkingBudget = 4_096
+        return p
     }
 
     // MARK: - Schnell-Presets
@@ -241,7 +341,8 @@ struct EndpointProfile: Identifiable, Codable, Equatable {
         ("LM Studio (lokal)",    .lmStudioNative,   "http://localhost:1234",          "local-model"),
         ("Ollama (lokal)",       .ollama,            "http://localhost:11434",         "llama3.2"),
         ("MLX (lokal)",          .mlx,               "http://localhost:8080",          "mlx-community/Llama-3.2-3B-Instruct-4bit"),
-        ("OMLX (lokal)",         .openAICompatible,  "http://127.0.0.1:8072/v1",       "local-model"),
+        ("oMLX lokal",           .omlx,              "http://127.0.0.1:8072",          recommendedOMLXModel),
+        ("oMLX remote (Tailscale)", .omlx,           "http://macbook-pro:8072",        recommendedOMLXModel),
         ("OpenAI",               .openAICompatible,  "https://api.openai.com",        "gpt-4o"),
         ("Groq",                 .openAICompatible,  "https://api.groq.com/openai",   "llama-3.3-70b-versatile"),
         ("Together AI",          .openAICompatible,  "https://api.together.ai",       "meta-llama/Llama-3.3-70B-Instruct-Turbo"),

@@ -6,6 +6,9 @@
 //
 
 import XCTest
+import AppKit
+import CoreText
+import PDFKit
 @testable import Lernassist
 
 final class LernassistTests: XCTestCase {
@@ -60,6 +63,76 @@ final class LernassistTests: XCTestCase {
 
         XCTAssertEqual(ranked.first?.url, cabinet.url)
         XCTAssertFalse(ranked.contains(where: { $0.url == unrelated.url }))
+    }
+
+    func testParallelSearchesReceiveDifferentStartSlotsAndCancelledCallStops() async throws {
+        let pacing = SearchRequestPacing(minimumSpacing: 0.05, jitterRange: 0...0)
+        let starts = try await withThrowingTaskGroup(of: Date.self) { group in
+            for _ in 0..<3 {
+                group.addTask {
+                    try await pacing.waitTurn(for: "test-backend")
+                    return Date()
+                }
+            }
+            var dates: [Date] = []
+            for try await date in group { dates.append(date) }
+            return dates.sorted()
+        }
+        XCTAssertEqual(starts.count, 3)
+        XCTAssertGreaterThanOrEqual(starts[1].timeIntervalSince(starts[0]), 0.035)
+        XCTAssertGreaterThanOrEqual(starts[2].timeIntervalSince(starts[1]), 0.035)
+
+        let blocked = Task {
+            try await pacing.waitTurn(for: "cancelled-backend")
+            try await pacing.waitTurn(for: "cancelled-backend")
+        }
+        blocked.cancel()
+        do {
+            try await blocked.value
+            XCTFail("Abgebrochene Suchanfrage hätte nicht starten dürfen")
+        } catch is CancellationError { }
+    }
+
+    func testSearchCacheHasBoundedEntriesAndExpires() async {
+        let cache = SearchResultCache(lifetime: 0.15, limit: 2)
+        let result = [SearchResult(title: "Treffer", url: "https://example.org", snippet: "Text")]
+        await cache.put(result, for: "a")
+        await cache.put(result, for: "b")
+        await cache.put(result, for: "c")
+        let evicted = await cache.get("a")
+        let present = await cache.get("c")
+        XCTAssertNil(evicted)
+        XCTAssertNotNil(present)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        let expired = await cache.get("c")
+        XCTAssertNil(expired)
+    }
+
+    func testPDFTextCanBeReadInConsecutiveOffsets() throws {
+        let pdfData = NSMutableData()
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else {
+            return XCTFail("PDF consumer konnte nicht erstellt werden")
+        }
+        var rect = CGRect(x: 0, y: 0, width: 400, height: 200)
+        guard let context = CGContext(consumer: consumer, mediaBox: &rect, nil) else {
+            return XCTFail("PDF context konnte nicht erstellt werden")
+        }
+        context.beginPDFPage(nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(
+            string: "Alpha Beta Gamma Delta",
+            attributes: [.font: NSFont.systemFont(ofSize: 14)]
+        ))
+        context.textPosition = CGPoint(x: 30, y: 100)
+        CTLineDraw(line, context)
+        context.endPDFPage()
+        context.closePDF()
+
+        let full = try WebContentService.extractPDFText(from: pdfData as Data)
+        XCTAssertTrue(full.contains("Alpha Beta Gamma Delta"))
+        let first = WebContentService.sliceContent(full, offset: 0, maxCharacters: 22)
+        let second = WebContentService.sliceContent(full, offset: 22, maxCharacters: 10_000)
+        XCTAssertTrue(first.contains("offset=22"))
+        XCTAssertTrue(second.contains("Alpha Beta Gamma Delta"))
     }
 
     func testRestoredSessionMarksInterruptedToolCallAsFinished() {

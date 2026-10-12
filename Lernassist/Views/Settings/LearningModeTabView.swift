@@ -52,7 +52,7 @@ struct LearningModeTabView: View {
                         .cornerRadius(6)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .stroke(isCustom ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.15),
+                                .stroke(isCustom ? DS.Ink.accent.opacity(0.3) : Color.secondary.opacity(0.15),
                                         lineWidth: 1)
                         )
 
@@ -60,11 +60,11 @@ struct LearningModeTabView: View {
                         if isCustom {
                             Label("Angepasst", systemImage: "pencil.circle.fill")
                                 .font(.caption2)
-                                .foregroundColor(.blue)
+                                .foregroundStyle(DS.Ink.accent)
                         } else {
                             Label("Werkseinstellung", systemImage: "checkmark.circle")
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                         if isCustom {

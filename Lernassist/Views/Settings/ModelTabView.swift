@@ -56,7 +56,7 @@ struct ModelTabView: View {
                             .font(.caption2)
                         }
                         if let loadError {
-                            Text(loadError).font(.caption2).foregroundColor(.red)
+                            Text(loadError).font(.caption2).foregroundStyle(.red)
                         }
 
                     }
@@ -110,7 +110,7 @@ struct ModelTabView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Wenn ein Modell nicht geladen ist, lädt LernAssist es automatisch über die LM Studio API.\n• Haupt-Modell: bleibt geladen, solange du dieses Profil/Modell aktiv nutzt (kein Idle-Entladen – das würde sonst zwischen zwei Nachrichten den Server-Cache verwerfen und die nächste Antwort verlangsamen). Wird erst beim Wechsel auf ein anderes Modell/Profil freigegeben.\n• Hintergrund-Modell: wird nur für die Dauer eines einzelnen Hintergrund-Jobs geladen und nach 3 Sekunden Leerlauf automatisch wieder entladen.")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
 
                             labeledField("Modell-ID (Haupt-Modell)") {
                                 HStack {
@@ -203,7 +203,7 @@ struct ModelTabView: View {
                             }
                             .buttonStyle(.plain)
                             .font(.caption2)
-                            .foregroundColor(.blue)
+                            .foregroundStyle(DS.Ink.accent)
                         } else {
                             EmptyView()
                         }
@@ -230,7 +230,7 @@ struct ModelTabView: View {
                 }
             } else {
                 Text("Kein aktives Profil ausgewählt – lege eines im Tab „Endpunkte“ an.")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
 
             settingsSection(icon: "photo.on.rectangle", title: "Bilder im Verlauf") {

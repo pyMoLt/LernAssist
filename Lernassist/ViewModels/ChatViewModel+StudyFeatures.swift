@@ -186,4 +186,73 @@ extension ChatViewModel {
             }
         }
     }
+
+    // MARK: - Abfragekarten (quiz_card)
+
+    /// Speichert die Antwort auf einer Abfragekarte und schickt sie als Nachricht an das Modell.
+    func answerQuizCard(messageId: UUID, optionIndex: Int?, freeText: String?) {
+        guard let sIdx = sessions.firstIndex(where: { $0.messages.contains { $0.id == messageId } }),
+              let mIdx = sessions[sIdx].messages.firstIndex(where: { $0.id == messageId }),
+              var card = sessions[sIdx].messages[mIdx].quizCard, !card.isAnswered else { return }
+        card.selectedIndex = optionIndex
+        card.freeTextAnswer = freeText
+        sessions[sIdx].messages[mIdx].quizCard = card
+        let text = Self.quizAnswerText(card: card, optionIndex: optionIndex, freeText: freeText)
+        if isStreaming { enqueueMessage(text: text) } else { sendMessage(text: text) }
+    }
+
+    static func quizAnswerText(card: QuizCard, optionIndex: Int?, freeText: String?) -> String {
+        if let optionIndex, card.options.indices.contains(optionIndex) {
+            let letter = String(UnicodeScalar(65 + optionIndex).map(Character.init) ?? "?")
+            var text = "Meine Antwort auf „\(card.question)“: \(letter)) \(card.options[optionIndex])"
+            if let correct = card.correctIndex {
+                text += optionIndex == correct ? " (richtig)" : " (falsch)"
+            }
+            return text
+        }
+        return "Meine Antwort auf „\(card.question)“: \(freeText ?? "")"
+    }
+
+    // MARK: - Anklickbare Belege [W#]
+
+    /// Quellen-URLs der Websuchen, die zu einer Antwort gehören (alle Tool-Aufrufe seit der
+    /// letzten Nutzernachricht). Bei mehreren Suchen gilt die jüngste Zuordnung je Nummer.
+    func citationLinks(for messageID: UUID) -> [String: String] {
+        guard let session = sessions.first(where: { $0.messages.contains { $0.id == messageID } }),
+              let index = session.messages.firstIndex(where: { $0.id == messageID }) else { return [:] }
+        var links: [String: String] = [:]
+        var i = index
+        while i >= 0 {
+            let msg = session.messages[i]
+            if msg.role == "user" { break }
+            for call in msg.toolCalls ?? [] where call.name == "web_search" {
+                for source in ToolCallPresentation(call: call).sources where links[source.number] == nil && !source.url.isEmpty {
+                    links[source.number] = source.url
+                }
+            }
+            i -= 1
+        }
+        return links
+    }
+
+    /// Ersetzt [W1] bzw. [W1, W3] durch Markdown-Links auf die Quellen.
+    static func linkCitations(in markdown: String, links: [String: String]) -> String {
+        guard !links.isEmpty, markdown.contains("[W") else { return markdown }
+        guard let regex = try? NSRegularExpression(pattern: #"\[(W\d+(?:\s*[,;]\s*W\d+)*)\](?!\()"#) else { return markdown }
+        let ns = markdown as NSString
+        var result = ""
+        var last = 0
+        for match in regex.matches(in: markdown, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+            let inner = ns.substring(with: match.range(at: 1))
+            let parts = inner.components(separatedBy: CharacterSet(charactersIn: ",;")).map { $0.trimmingCharacters(in: .whitespaces) }
+            result += parts.map { part in
+                if let url = links[part] { return "[\(part)](\(url))" }
+                return "[\(part)]"
+            }.joined(separator: " ")
+            last = match.range.location + match.range.length
+        }
+        result += ns.substring(from: last)
+        return result
+    }
 }

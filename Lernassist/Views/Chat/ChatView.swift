@@ -7,8 +7,6 @@ struct ChatView: View {
     @StateObject var viewModel: ChatViewModel
     @State private var inputText = ""
     @State private var lastCapturedImage: NSImage? = nil
-    @State private var isShowingSettings = false
-    @State private var settingsInitialTab: String? = nil
     @State private var isShowingQuizPanel = false
     @State private var isShowingChatScreenshots = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
@@ -30,7 +28,6 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 headerBar
                 messageList
-                Divider()
                 InputArea(
                     viewModel: viewModel,
                     inputText: $inputText,
@@ -52,8 +49,7 @@ struct ChatView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { note in
-            settingsInitialTab = note.userInfo?["tab"] as? String
-            isShowingSettings = true
+            SettingsWindowController.shared.show(viewModel: viewModel, tab: note.userInfo?["tab"] as? String)
         }
         // Systemweites "Auswahl erklären" (Phase H): Gelesene Auswahl landet als vorbereitete
         // Frage im Eingabefeld – der Nutzer kann sie noch anpassen und dann senden.
@@ -69,9 +65,6 @@ struct ChatView: View {
                 quizPanelSeed = (text: text, mode: mode)
                 isShowingQuizPanel = true
             }
-        }
-        .sheet(isPresented: $isShowingSettings) {
-            SettingsView(viewModel: viewModel, initialTab: settingsInitialTab)
         }
         .sheet(isPresented: $isShowingQuizPanel) {
             QuizFlashcardPanel(viewModel: viewModel, studySeed: quizPanelSeed)
@@ -90,9 +83,16 @@ struct ChatView: View {
                 .foregroundStyle(DS.Ink.accent.gradient)
                 .padding(.leading, DS.Space.m)
             headerTitleBlock
+                .layoutPriority(1)
             Spacer(minLength: DS.Space.s)
-            headerGlassControls
-                .padding(.trailing, DS.Space.m)
+            // Breite reicht nicht? Erst Beschriftungen weg (nur Symbole), dann die Metriken.
+            // Vorher wurden die Chips bei 800 px mit Seitenleiste zu senkrechten Schläuchen gequetscht.
+            ViewThatFits(in: .horizontal) {
+                headerGlassControls(compact: false)
+                headerGlassControls(compact: true)
+                headerGlassControls(compact: true, showMetrics: false)
+            }
+            .padding(.trailing, DS.Space.m)
         }
         .frame(minHeight: 54)
         .padding(.top, DS.Space.xxs)
@@ -146,23 +146,25 @@ struct ChatView: View {
     /// Rechte Steuerseite: alle Glas-Elemente in EINEM Container – nur so sampeln verwandte
     /// Glass-Flächen konsistent (Kernregel der Liquid-Glass-Designsprache: Glass kann kein
     /// anderes Glass sampeln).
-    private var headerGlassControls: some View {
+    private func headerGlassControls(compact: Bool, showMetrics: Bool = true) -> some View {
         GlassEffectContainer {
             HStack(spacing: DS.Space.s) {
-                headerGlassChips
+                headerGlassChips(compact: compact, showMetrics: showMetrics)
                 headerIconButtons
             }
+            .fixedSize()
         }
     }
 
     @ViewBuilder
-    private var headerGlassChips: some View {
+    private func headerGlassChips(compact: Bool, showMetrics: Bool) -> some View {
         // Auto-Kompakt-Angebot (Phase H): nur sichtbar, wenn der Chat lang wird.
         if viewModel.shouldSuggestCompaction {
             Button {
                 viewModel.compactChat()
             } label: {
                 Label("Zusammenfassen", systemImage: "sparkles")
+                    .labelStyle(AdaptiveLabelStyle(compact: compact))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, DS.Space.s)
@@ -173,13 +175,16 @@ struct ChatView: View {
             .help("Der Chat füllt das Kontextfenster – hier zusammenfassen und als neuen Chat weiterführen")
         }
 
-        MetricsBar(viewModel: viewModel)
+        if showMetrics {
+            MetricsBar(viewModel: viewModel)
+        }
 
         // Bilder dieses Chats
         if let session = viewModel.activeSession,
            session.messages.contains(where: { $0.imageID != nil }) {
             Button(action: { isShowingChatScreenshots = true }) {
                 Label("Bilder", systemImage: "photo.stack")
+                    .labelStyle(AdaptiveLabelStyle(compact: compact))
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, DS.Space.s)
@@ -190,7 +195,7 @@ struct ChatView: View {
             .help("Zeigt alle Screenshots dieses Chats")
         }
 
-        headerQuizChip
+        headerQuizChip(compact: compact)
 
         // Teilen (Safari-Stil, Phase H): ganzer Chat als Markdown über das System-Share-Menü.
         // Lazy (Perf-Audit K2): Der Markdown-String entsteht erst beim Klick, nicht pro Render.
@@ -208,13 +213,14 @@ struct ChatView: View {
     /// Quiz-/Karteikarten-Chip mit Fällig-Badge (bleibt auch bei kurzen Chats sichtbar, wenn
     /// global Karteikarten fällig sind).
     @ViewBuilder
-    private var headerQuizChip: some View {
+    private func headerQuizChip(compact: Bool) -> some View {
         if let session = viewModel.activeSession,
            (session.messages.count >= 2 || viewModel.dueFlashcardsCount > 0),
            !viewModel.isStreaming {
             Button(action: { isShowingQuizPanel = true; quizPanelSeed = nil }) {
                 HStack(spacing: DS.Space.xxs) {
                     Label("Quiz", systemImage: "checkmark.circle.badge.questionmark")
+                        .labelStyle(AdaptiveLabelStyle(compact: compact))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.primary)
                     if viewModel.dueFlashcardsCount > 0 {
@@ -243,7 +249,7 @@ struct ChatView: View {
             NotificationCenter.default.post(name: .toggleSidebar, object: nil)
         }
         GlassIconButton(systemImage: "slider.horizontal.3", help: "Einstellungen öffnen") {
-            isShowingSettings.toggle()
+            SettingsWindowController.shared.show(viewModel: viewModel, tab: nil)
         }
     }
 
@@ -304,6 +310,12 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.vertical, 12)
+                // Auch im Vollbild bleibt der Dialog eine zusammenhängende Spalte:
+                // Nutzer-Bubbles rechts und Assistenten-Inhalte links innerhalb derselben
+                // lesbaren Breite, statt an entgegengesetzten Fensterrändern zu kleben.
+                .frame(maxWidth: 1100)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 20)
                 // ScrollBottomDetector als Background des VStack – INNERHALB des ScrollView.
                 // Nur so liegt _ScrollDetectorView im Document View des NSScrollView und
                 // kann via superview-Traversal den NSScrollView finden.
@@ -371,10 +383,17 @@ struct ChatView: View {
                     .multilineTextAlignment(.center)
             }
 
-            HStack(spacing: DS.Space.s) {
-                welcomePrompt("Einfach erklären", icon: "text.book.closed", text: "Erkläre mir dieses Thema einfach und mit einem Beispiel:")
-                welcomePrompt("Lernplan erstellen", icon: "calendar.badge.plus", text: "Erstelle mir einen kurzen Lernplan für:")
-                welcomePrompt("Mich abfragen", icon: "checkmark.circle", text: "Frage mich mit drei kurzen Kontrollfragen zu:")
+            Grid(horizontalSpacing: DS.Space.s, verticalSpacing: DS.Space.s) {
+                GridRow {
+                    welcomePrompt("Screenshot aufnehmen", icon: "camera.viewfinder", action: captureAndSend)
+                    welcomePrompt("Einfach erklären", icon: "text.book.closed", text: "Erkläre mir dieses Thema einfach und mit einem Beispiel:")
+                    welcomePrompt("Lernplan erstellen", icon: "calendar.badge.plus", text: "Erstelle mir einen kurzen Lernplan für:")
+                }
+                GridRow {
+                    welcomePrompt("Mich abfragen", icon: "checkmark.circle", text: "/quiz ")
+                    welcomePrompt("Diagramm", icon: "chart.xyaxis.line", text: "/diagram ")
+                    welcomePrompt("Zusammenfassen", icon: "list.bullet.rectangle", text: "/summary ")
+                }
             }
         }
         .padding(DS.Space.xxl)
@@ -382,9 +401,9 @@ struct ChatView: View {
         .frame(maxWidth: .infinity, minHeight: 330)
     }
 
-    private func welcomePrompt(_ title: String, icon: String, text: String) -> some View {
+    private func welcomePrompt(_ title: String, icon: String, text: String = "", action: (() -> Void)? = nil) -> some View {
         Button {
-            inputText = text
+            if let action { action() } else { inputText = text }
         } label: {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 Image(systemName: icon)
@@ -542,7 +561,6 @@ private struct MessageRow: View {
             } else {
                 MessageBubble(
                     message: message,
-                    history: messages,
                     chatViewModel: viewModel,
                     isStreaming: isStreaming && isLast,
                     isContinuation: isContinuation,
@@ -600,6 +618,18 @@ private struct MessageRow: View {
                 .id(message.id)
                 .padding(.top, extraPadding)
             }
+        }
+    }
+}
+
+/// Label mit Text, im kompakten Header nur das Symbol.
+struct AdaptiveLabelStyle: LabelStyle {
+    let compact: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if compact {
+            configuration.icon
+        } else {
+            HStack(spacing: 4) { configuration.icon; configuration.title }
         }
     }
 }

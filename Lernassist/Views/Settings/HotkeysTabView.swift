@@ -8,32 +8,28 @@ struct HotkeysTabView: View {
     @ObservedObject var viewModel: ChatViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Tastenkombinationen")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: DS.Space.xl) {
+            settingsSection(icon: "keyboard", title: "Tastenkombinationen") {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    Text("Drücke auf ein Feld und halte danach die gewünschte Tastenkombination gedrückt.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
 
-            Text("Drücke auf ein Feld und halte danach die gewünschte Tastenkombination gedrückt.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Divider()
-
-            ForEach(HotkeyAction.allCases) { action in
-                HotkeyRow(action: action, viewModel: viewModel)
+                    ForEach(HotkeyAction.allCases) { action in
+                        Divider()
+                        HotkeyRow(action: action, viewModel: viewModel)
+                    }
+                }
             }
 
-            Divider()
-
-            Button("Alle zurücksetzen") {
+            Button("Alle zurücksetzen", role: .destructive) {
                 for action in HotkeyAction.allCases {
                     if let def = Hotkey.defaultMap[action] {
                         viewModel.updateHotkey(def, for: action)
                     }
                 }
             }
-            .foregroundColor(.red)
         }
-        .padding()
     }
 }
 
@@ -72,7 +68,7 @@ private struct HotkeyRow: View {
             if let collidingActionName {
                 Text("⚠️ Kollidiert mit „\(collidingActionName)“ – nur eine der beiden Aktionen wird tatsächlich ausgelöst.")
                     .font(.caption2)
-                    .foregroundColor(.orange)
+                    .foregroundStyle(.orange)
             }
         }
         .padding(.vertical, 4)
@@ -172,9 +168,10 @@ final class HotkeyTextField: NSTextField {
         // ESC → Abbrechen
         if event.keyCode == 53 { stopRecording(); return }
 
-        // Mindestens eine Modifier-Taste nötig
+        // Mindestens ⌘, ⌥ oder ⌃ nötig – reine ⇧-Kombinationen sind Großbuchstaben und
+        // würden als globaler Hotkey normales Tippen in allen Apps blockieren.
         let mods = carbonModifiers(from: event.modifierFlags)
-        guard mods != 0 else { return }
+        guard mods & (Int(cmdKey) | Int(optionKey) | Int(controlKey)) != 0 else { return }
 
         let hk = Hotkey(keyCode: Int(event.keyCode), modifiers: mods)
         update(hotkey: hk)

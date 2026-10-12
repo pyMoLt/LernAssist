@@ -15,7 +15,7 @@ struct ExperimentalTabView: View {
                     if viewModel.isSemanticSearchEnabled {
                         Text("Wenn aktiviert, werden Dokumente und Bilder aus hochgeladenen Dateien beim Hinzufügen indiziert und durchsucht.")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <g fill="none" stroke="#FFFFFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" opacity="0.95">
+    <path d="M232 372 V292 Q232 232 292 232 H372"/>
+    <path d="M652 232 H732 Q792 232 792 292 V372"/>
+    <path d="M792 652 V732 Q792 792 732 792 H652"/>
+    <path d="M372 792 H292 Q232 792 232 732 V652"/>
+  </g>
+</svg>

@@ -2,7 +2,7 @@ import Foundation
 
 /// Zustandslose Netzwerk-Helfer: URL-Normalisierung, adaptive Endpunkte je Provider,
 /// Auth-Header, Modell-Liste und Verbindungs-Fehlererkennung.
-enum EndpointManager {
+nonisolated enum EndpointManager {
 
     // MARK: - URL-Normalisierung
 
@@ -55,28 +55,14 @@ enum EndpointManager {
 
     /// Gibt die passende Chat-Completions-URL für den angegebenen Provider zurück.
     static func chatCompletionsURL(for profile: EndpointProfile) -> URL? {
-        let base = normalizedBase(profile.baseURL)
-        switch profile.provider {
-        case .openAICompatible, .mlx:
-            return URL(string: base + "/v1/chat/completions")
-        case .lmStudioNative:
-            return URL(string: base + "/api/v0/chat/completions")
-        case .ollama:
-            return URL(string: base + "/api/chat")
-        }
+        ProviderAdapters.adapter(for: profile.provider).chatURL(base: normalizedBase(profile.baseURL))
     }
 
     // MARK: - Models-URL
 
     /// Gibt die Modell-Listen-URL für den angegebenen Provider zurück.
     static func modelsURL(for profile: EndpointProfile) -> URL? {
-        let base = normalizedBase(profile.baseURL)
-        switch profile.provider {
-        case .openAICompatible, .lmStudioNative, .mlx:
-            return URL(string: base + "/v1/models")
-        case .ollama:
-            return URL(string: base + "/api/tags")
-        }
+        ProviderAdapters.adapter(for: profile.provider).modelsURL(base: normalizedBase(profile.baseURL))
     }
 
     // MARK: - Auth-Header
@@ -92,80 +78,12 @@ enum EndpointManager {
     /// Passt den Streaming-Payload an das Provider-Format an.
     /// Hauptanpassungen: Ollama braucht kein stream_options, Ollama /api/chat hat Sonderformat.
     static func adaptPayload(_ payload: [String: Any], for profile: EndpointProfile) -> [String: Any] {
-        var p = payload
-        switch profile.provider {
-        case .ollama:
-            // Ollama /api/chat kennt stream_options nicht → entfernen
-            p.removeValue(forKey: "stream_options")
-            if let messages = p["messages"] as? [[String: Any]] {
-                // Die native Ollama-API verwendet für Tool-Ergebnisse `tool_name` statt
-                // OpenAIs `tool_call_id` und erwartet die Argumente als Objekt. Ohne diese
-                // Übersetzung konnte ein nativer Ollama-Agent nach einem Tool-Call vorzeitig
-                // abbrechen oder den Folge-Turn ablehnen.
-                p["messages"] = ollamaMessages(from: messages)
-            }
-        default:
-            break
-        }
-        return p
+        ProviderAdapters.adapter(for: profile.provider).adapt(payload: payload)
     }
 
-    /// Wandelt die einheitlich intern gespeicherte OpenAI-Tool-Historie in das native
-    /// `/api/chat`-Format von Ollama um. Mehrere Tool-Ergebnisse werden positionsgetreu mit
-    /// dem zugehörigen Funktionsnamen verknüpft, wie es Ollamas Agent-Loop verlangt.
+    /// Weiterleitung für bestehende Aufrufer/Tests (Implementierung im OllamaAdapter).
     static func ollamaMessages(from messages: [[String: Any]]) -> [[String: Any]] {
-        var pendingToolNames: [String] = []
-        var nextToolNameIndex = 0
-
-        return messages.map { message in
-            var converted = message
-            let role = converted["role"] as? String
-
-            if role == "assistant", let calls = converted["tool_calls"] as? [[String: Any]] {
-                pendingToolNames = calls.compactMap { call in
-                    (call["function"] as? [String: Any])?["name"] as? String
-                }
-                nextToolNameIndex = 0
-
-                converted["tool_calls"] = calls.enumerated().map { index, call in
-                    let function = call["function"] as? [String: Any] ?? [:]
-                    let arguments = ollamaArguments(from: function["arguments"])
-                    return [
-                        "type": "function",
-                        "function": [
-                            "index": index,
-                            "name": function["name"] as? String ?? "",
-                            "arguments": arguments
-                        ] as [String: Any]
-                    ]
-                }
-
-                // OpenAI erlaubt bei Tool-Calls null; Ollama erwartet einen String bzw. ein
-                // ausgelassenes Feld. Ein leerer String ist für die gestreamte Antwort stabil.
-                if !(converted["content"] is String) {
-                    converted["content"] = ""
-                }
-            } else if role == "tool" {
-                if nextToolNameIndex < pendingToolNames.count {
-                    converted["tool_name"] = pendingToolNames[nextToolNameIndex]
-                    nextToolNameIndex += 1
-                }
-                converted.removeValue(forKey: "tool_call_id")
-                if !(converted["content"] is String) {
-                    converted["content"] = ""
-                }
-            }
-            return converted
-        }
-    }
-
-    private static func ollamaArguments(from raw: Any?) -> [String: Any] {
-        if let object = raw as? [String: Any] { return object }
-        guard let string = raw as? String,
-              let data = string.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return object
+        OllamaAdapter.ollamaMessages(from: messages)
     }
 
     // MARK: - "No Thinking" für Hintergrund-Jobs (Best-effort)
@@ -193,11 +111,10 @@ enum EndpointManager {
     /// OpenAI-kompatibel: `content` wird ein Array aus Text-/Image-Teilen.
     /// Ollama `/api/chat`: `content` bleibt ein einfacher String, das Bild wandert in ein
     /// separates `images: [base64]`-Feld auf der Nachricht (Ollama kennt kein `image_url`).
+    /// Intern immer im OpenAI-Format – die Übersetzung für Ollama übernimmt `OllamaAdapter`
+    /// beim Senden. Dadurch passt der Payload auch nach einem Fallback auf einen anderen Anbieter.
     static func userImageMessage(text: String, base64: String, provider: EndpointProvider) -> [String: Any] {
         let safeText = text.isEmpty ? " " : text
-        if provider == .ollama {
-            return ["role": "user", "content": safeText, "images": [base64]]
-        }
         return ["role": "user", "content": [
             ["type": "text", "text": safeText],
             ["type": "image_url", "image_url": ["url": "data:image/png;base64,\(base64)"]]
@@ -223,42 +140,28 @@ enum EndpointManager {
 
     /// Fragt die Modell-Liste inkl. Kontextfenster-Größe ab.
     static func fetchModels(for profile: EndpointProfile) async throws -> [(id: String, contextWindow: Int?)] {
+        try await fetchProviderModels(for: profile).map { (id: $0.id, contextWindow: $0.contextWindow) }
+    }
+
+    static func fetchProviderModels(for profile: EndpointProfile) async throws -> [ProviderModel] {
         guard let url = modelsURL(for: profile) else {
             throw EndpointError.invalidURL
         }
 
-        var request = URLRequest(url: url, timeoutInterval: 8)
+        var request = URLRequest(url: url, timeoutInterval: profile.isRemote ? 15 : 8)
         authHeaders(for: profile).forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw EndpointError.httpError(http.statusCode)
+            throw EndpointError.httpError(http.statusCode,
+                                          message: LLMClient.serverMessage(fromBody: String(decoding: data.prefix(4_096), as: UTF8.self)))
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw EndpointError.parseError }
-
-        // OpenAI-Format: { "data": [ { "id": "...", "context_window": 8192, ... } ] }
-        if let list = json["data"] as? [[String: Any]] {
-            return list.compactMap { item -> (id: String, contextWindow: Int?)? in
-                guard let id = item["id"] as? String else { return nil }
-                let ctx = (item["context_window"] as? Int)
-                    ?? (item["context_length"] as? Int)
-                    ?? (item["max_context_length"] as? Int)
-                    ?? (item["loaded_context_length"] as? Int)
-                return (id: id, contextWindow: ctx)
-            }.sorted(by: { $0.id < $1.id })
-        }
-
-        // Ollama /api/tags Format: { "models": [ { "name": "llama3.2:latest", ... } ] }
-        if let list = json["models"] as? [[String: Any]] {
-            return list.compactMap { item -> (id: String, contextWindow: Int?)? in
-                guard let name = item["name"] as? String else { return nil }
-                return (id: name, contextWindow: nil)
-            }.sorted(by: { $0.id < $1.id })
-        }
-
-        throw EndpointError.parseError
+        let models = ProviderAdapters.adapter(for: profile.provider).parseModels(json)
+        guard !models.isEmpty || json["data"] != nil || json["models"] != nil else { throw EndpointError.parseError }
+        return models
     }
 
     // MARK: - Verbindungs-Fehler-Erkennung
@@ -281,7 +184,7 @@ enum EndpointManager {
     /// genauso trifft, und würde nur einen sinnlosen zweiten Request kosten.
     static func shouldAttemptFallback(error: Error) -> Bool {
         if isConnectivityError(error) { return true }
-        if case EndpointError.httpError(let code) = error {
+        if case EndpointError.httpError(let code, _) = error {
             return [401, 403, 404, 408, 429, 500, 502, 503, 504, 529].contains(code)
         }
         return false
@@ -289,13 +192,16 @@ enum EndpointManager {
 
     enum EndpointError: LocalizedError {
         case invalidURL
-        case httpError(Int)
+        /// HTTP-Status plus (falls vorhanden) die Fehlermeldung des Servers.
+        case httpError(Int, message: String?)
         case parseError
 
         var errorDescription: String? {
             switch self {
             case .invalidURL:       return "Ungültige Endpunkt-URL"
-            case .httpError(let c): return "HTTP-Fehler \(c)"
+            case .httpError(let c, let message):
+                if let message, !message.isEmpty { return "HTTP-Fehler \(c): \(message)" }
+                return "HTTP-Fehler \(c)"
             case .parseError:       return "Antwort konnte nicht verarbeitet werden"
             }
         }

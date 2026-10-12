@@ -41,7 +41,7 @@ struct InlineExplainPopover: View {
                 Spacer()
                 Button(action: onDismiss) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -51,7 +51,7 @@ struct InlineExplainPopover: View {
                 Text(selectedText)
                     .font(.subheadline)
                     .italic()
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 80)
@@ -69,7 +69,7 @@ struct InlineExplainPopover: View {
                                 Text(msg.role == "user" ? "Du" : "LernAssist")
                                     .font(.caption2)
                                     .fontWeight(.bold)
-                                    .foregroundColor(.secondary)
+                                    .foregroundStyle(.secondary)
 
                                 if msg.role == "user" {
                                     Text(msg.content)
@@ -79,14 +79,14 @@ struct InlineExplainPopover: View {
                                         ProgressView().controlSize(.mini)
                                         Text("Antwortet...")
                                             .font(.caption)
-                                            .foregroundColor(.secondary).italic()
+                                            .foregroundStyle(.secondary).italic()
                                     }
                                 } else {
                                     MarkdownView(markdown: msg.content, fontScale: fontScale)
                                 }
                             }
                             .padding(8)
-                            .background(msg.role == "user" ? Color.blue.opacity(0.1) : Color.secondary.opacity(0.1))
+                            .background(msg.role == "user" ? DS.Ink.accent.opacity(0.1) : Color.secondary.opacity(0.1))
                             .cornerRadius(8)
                         }
                     }
@@ -98,7 +98,7 @@ struct InlineExplainPopover: View {
                     ProgressView().controlSize(.small)
                     Text("Nachdenken...")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 8)
             }

@@ -13,7 +13,11 @@ struct SettingsView: View {
     @State private var isHelpModeActive = false
     @AppStorage("hasSeenHelpIntro") private var hasSeenHelpIntro = false
 
-    init(viewModel: ChatViewModel, initialTab: String? = nil) {
+    /// Schließt das eigenständige Einstellungsfenster (nil = als Sheet präsentiert).
+    var onClose: (() -> Void)? = nil
+
+    init(viewModel: ChatViewModel, initialTab: String? = nil, onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
         self.viewModel = viewModel
         self._selectedTab = State(initialValue: SettingsTab(rawValue: initialTab ?? "") ?? .endpoints)
     }
@@ -32,7 +36,10 @@ struct SettingsView: View {
             }
             helpIntro
         }
-        .frame(width: 920, height: 640)
+        // Eigenes, größenveränderbares Fenster statt festem 920×640-Sheet im 800×600-Panel:
+        // Das Sheet war breiter als das Panel und wurde links/rechts abgeschnitten
+        // (Audit 2026-10-12, UI H2).
+        .frame(minWidth: 760, idealWidth: 920, minHeight: 520, idealHeight: 640)
         .onReceive(NotificationCenter.default.publisher(for: .debugSwitchSettingsTab)) { note in
             if let rawTab = note.userInfo?["tab"] as? String,
                let tab = SettingsTab(rawValue: rawTab) {
@@ -96,6 +103,7 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .help("Einstellungen schließen")
+            .accessibilityLabel("Einstellungen schließen")
         }
         .padding(.horizontal, DS.Space.xl)
         .padding(.vertical, DS.Space.m)
@@ -104,8 +112,8 @@ struct SettingsView: View {
 
     private var navigation: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            navigationGroup("Konfiguration", tabs: [.endpoints, .model, .learning, .search, .tools])
-            navigationGroup("App", tabs: [.hotkeys, .advanced, .appearance, .experimental])
+            navigationGroup("Konfiguration", tabs: [.endpoints, .model, .search, .tools, .learning])
+            navigationGroup("App", tabs: [.hotkeys, .appearance, .advanced, .experimental])
             Spacer(minLength: 0)
             Label("Änderungen werden lokal gespeichert", systemImage: "lock.fill")
                 .font(.caption2)
@@ -235,7 +243,7 @@ struct SettingsView: View {
 
     private func finish() {
         viewModel.saveSettings()
-        dismiss()
+        if let onClose { onClose() } else { dismiss() }
     }
 }
 
@@ -257,7 +265,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .endpoints: "Endpunkte"
         case .model: "Modell"
         case .learning: "Lernmodus"
-        case .search: "Websuche"
+        case .search: "Recherche"
         case .hotkeys: "Hotkeys"
         case .tools: "Tools"
         case .advanced: "Erweitert"
@@ -285,7 +293,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .endpoints: "Verbindungen und Profile"
         case .model: "Modell und Kontext"
         case .learning: "Lernstil und Antworten"
-        case .search: "Websuche und Browsing"
+        case .search: "Websuche, Quellen und Browsing"
         case .hotkeys: "Schnellzugriffe"
         case .tools: "Werkzeuge und Berechtigungen"
         case .advanced: "Hintergrund und Kontext"

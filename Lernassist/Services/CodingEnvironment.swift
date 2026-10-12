@@ -23,9 +23,14 @@ nonisolated final class CodingEnvironment {
         return appSupport.appendingPathComponent("LernAssist")
     }
 
+    /// Aktive Umgebung: die eigene Python-3.12-Umgebung (PythonEnvironmentInstaller), solange
+    /// sie noch nicht fertig ist das alte venv aus dem System-Python.
     var venvDirectory: URL {
-        baseDirectory.appendingPathComponent("venv")
+        PythonEnvironmentInstaller.isReady ? PythonEnvironmentInstaller.venv : baseDirectory.appendingPathComponent("venv")
     }
+
+    /// Pakete ohne Rückfrage installieren (Einstellung; Standard: nachfragen).
+    var autoInstallPackages = false
 
     var outputDirectory: URL {
         baseDirectory.appendingPathComponent("CodingOutput")
@@ -44,23 +49,15 @@ nonisolated final class CodingEnvironment {
     /// Initialisiert das Environment (erstellt Ordner und venv falls nötig).
     /// Bewusst `async` statt `waitUntilExit()` — wird per `Task.detached` beim App-Start
     /// angestoßen und darf dabei niemals die UI blockieren (venv-Erstellung kann Sekunden dauern).
-    func setupEnvironmentIfNeeded() async {
+    func setupEnvironmentIfNeeded(onStatus: @escaping @Sendable (PythonEnvironmentStatus) -> Void = { _ in }) async {
         do {
             if !fileManager.fileExists(atPath: outputDirectory.path) {
                 try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             }
-
-            if !fileManager.fileExists(atPath: venvDirectory.path) {
-                AppLog.services.info("Erstelle Python Virtual Environment (kann einen Moment dauern)...")
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-                process.arguments = ["-m", "venv", venvDirectory.path]
-                _ = try await runProcess(process, timeout: 90)
-                AppLog.services.info("Virtual Environment erfolgreich erstellt.")
-            }
         } catch {
-            AppLog.services.error("Fehler beim Einrichten der Coding Environment: \(error.localizedDescription)")
+            AppLog.services.error("CodingOutput konnte nicht angelegt werden: \(error.localizedDescription)")
         }
+        await PythonEnvironmentInstaller.shared.ensureInstalled(onStatus: onStatus)
     }
 
     /// Ergebnis eines Python-Laufs (Nutzer-Feature Python-Iteration): rohe Bestandteile für
@@ -99,7 +96,7 @@ nonisolated final class CodingEnvironment {
     /// ...) – so kann das Modell seine eigenen früheren Versionen über das Terminal-Tool
     /// (cat/grep/head) erneut lesen und iterativ überarbeiten, statt aus dem Gedächtnis neu
     /// zu schreiben. Vorher wurde pro Run immer dieselbe script.py überschrieben.
-    func runPythonScript(code: String, sessionID: String?) async throws -> PythonRunResult {
+    func runPythonScript(code: String, sessionID: String?, inputFiles: [URL] = []) async throws -> PythonRunResult {
         let chatID = Self.safeSessionID(sessionID)
         let chatOutputDirectory = outputDirectory.appendingPathComponent(chatID)
 
@@ -118,35 +115,24 @@ nonisolated final class CodingEnvironment {
             }
         }
 
+        // Daten-Anhänge des Chats (CSV, Excel, JSON …) in den Arbeitsordner kopieren: Die Sandbox
+        // darf außerhalb dieses Ordners im Home nichts lesen (Phase 0, Lese-Sperre).
+        var copiedInputNames: Set<String> = []
+        for file in inputFiles {
+            let target = chatOutputDirectory.appendingPathComponent(file.lastPathComponent)
+            try? fileManager.removeItem(at: target)
+            if (try? fileManager.copyItem(at: file, to: target)) != nil {
+                copiedInputNames.insert(file.lastPathComponent)
+            }
+        }
+
         let nextScript = nextScriptURL(in: chatOutputDirectory)
         let scriptURL = nextScript.url
         // Erzwingt einen Headless-Matplotlib-Backend und überschreibt plt.show()
         // automatisch mit plt.savefig(), damit die KI keinen Fehler bekommt, wenn sie plt.show() aufruft.
         // Wenn das Skript aber schon selbst plt.savefig() genutzt hat, wird plt.show() ignoriert,
         // um doppelte Bilder in der Ausgabe zu vermeiden.
-        let guardedCode = """
-        try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
-            import glob
-            import os
-            
-            # Höhere DPI und größere Basis-Dimensionen für bessere Lesbarkeit
-            plt.rcParams['figure.dpi'] = 300
-            plt.rcParams['figure.figsize'] = (12, 8)
-            plt.rcParams['font.size'] = 12
-            
-            def custom_show(*args, **kwargs):
-                # Nur speichern, wenn nicht schon andere Bilder generiert wurden
-                existing_images = glob.glob('*.png') + glob.glob('*.jpg') + glob.glob('*.jpeg')
-                if not existing_images:
-                    plt.savefig('output_auto_plot.png', bbox_inches='tight')
-            plt.show = custom_show
-        except ImportError:
-            pass
-        \(code)
-        """
+        let guardedCode = Self.pythonPrelude + "\n" + code
         try guardedCode.write(to: scriptURL, atomically: true, encoding: .utf8)
 
         // Sandbox-Profil mit gezielter Read-Denylist und Exec-Allowlist schreiben. Das Profil
@@ -188,7 +174,7 @@ nonisolated final class CodingEnvironment {
         var imagePaths: [String] = []
         if let files = try? fileManager.contentsOfDirectory(atPath: chatOutputDirectory.path) {
             for file in files {
-                if file.hasSuffix(".png") || file.hasSuffix(".jpg") || file.hasSuffix(".jpeg") {
+                if (file.hasSuffix(".png") || file.hasSuffix(".jpg") || file.hasSuffix(".jpeg")) && !copiedInputNames.contains(file) {
                     imagePaths.append(chatOutputDirectory.appendingPathComponent(file).path)
                 }
             }
@@ -203,6 +189,29 @@ nonisolated final class CodingEnvironment {
             scriptVersion: nextScript.version
         )
     }
+
+    /// Vorspann jedes Skripts: Headless-Matplotlib, plt.show() → PNG. 150 dpi statt 300: Die
+    /// Bilder gehen remote über Tailscale und als Base64 in den Chat – 300 dpi bei 12×8 Zoll
+    /// ergaben 3600×2400 px (mehrere MB) ohne sichtbaren Gewinn im Chat.
+    static let pythonPrelude = """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import glob
+        plt.rcParams['figure.dpi'] = 150
+        plt.rcParams['figure.figsize'] = (10, 6)
+        plt.rcParams['font.size'] = 12
+        def custom_show(*args, **kwargs):
+            if not (glob.glob('*.png') + glob.glob('*.jpg') + glob.glob('*.jpeg')):
+                plt.savefig('output_auto_plot.png', bbox_inches='tight')
+        plt.show = custom_show
+    except ImportError:
+        pass
+    """
+
+    /// Zeilen vor dem Nutzer-Code im Skript (für Traceback-Zeilennummern).
+    static var preludeLineCount: Int { pythonPrelude.components(separatedBy: "\n").count }
 
     // MARK: - Begrenztes Terminal
 
@@ -310,6 +319,20 @@ nonisolated final class CodingEnvironment {
         }
         for executable in Self.terminalExecAllowlist {
             profileLines.append("(allow process-exec* (literal \"\(executable)\"))")
+        }
+        // Lesezugriff im Home-Verzeichnis: Inhalte (file-read-data) sind gesperrt, Metadaten
+        // (stat) bleiben erlaubt, damit Python/Matplotlib beim Start nicht scheitern. Freigegeben
+        // sind nur das venv und der eigene Arbeitsordner. Die frühere reine Denylist ließ u.a.
+        // App-Daten, settings.json, ~/.zsh_history und ~/.config lesbar (Audit 2026-10-12, H-2).
+        // Getestet mit dem App-venv: matplotlib-Plot ok, Home-Dateien → PermissionError.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        profileLines.append("(deny file-read-data (subpath \"\(home)\"))")
+        profileLines.append("(allow file-read-data (subpath \"\(venvDirectory.path)\"))")
+        profileLines.append("(allow file-read-data (subpath \"\(outputDirectory.path)\"))")
+        if resolvedPython.hasPrefix(home) {
+            let pythonRoot = URL(fileURLWithPath: resolvedPython)
+                .deletingLastPathComponent().deletingLastPathComponent().path
+            profileLines.append("(allow file-read-data (subpath \"\(pythonRoot)\"))")
         }
         for path in Self.sensitiveReadDenyPaths {
             profileLines.append("(deny file-read* (subpath \"\(path)\"))")
@@ -528,25 +551,14 @@ nonisolated final class CodingEnvironment {
                           userInfo: [NSLocalizedDescriptionKey:
                                 "Ungültiger Paketname: '\(spec)'. Erlaubt sind nur Paketname mit optionaler Version, z.B. 'pandas==2.0'."])
         }
-        guard await Self.requestInstallConfirmation(package: spec) else {
-            return "Installation von '\(spec)' wurde vom Nutzer abgelehnt."
+        if !autoInstallPackages {
+            guard await Self.requestInstallConfirmation(package: spec) else {
+                return "Installation von '\(spec)' wurde vom Nutzer abgelehnt."
+            }
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: pipPath)
-        process.arguments = ["install", spec]
-        process.environment = [
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "HOME": baseDirectory.path, // pip-Cache (pip läuft bewusst außerhalb der Skript-Sandbox)
-            "TMPDIR": NSTemporaryDirectory(),
-        ]
-        // 300s: größere Pakete (z.B. Erstinstallation von matplotlib/numpy ohne vorhandenen
-        // Cache) können legitim deutlich länger brauchen als ein einzelnes Skript.
-        let result = try await runProcess(process, timeout: 300)
-        var output = result.output
-        if result.timedOut {
-            output += "\n\n[pip install nach 300s abgebrochen.]"
-        }
-        return output
+        // uv installiert nur fertige Wheels (--only-binary): Es läuft kein Setup-Code des Pakets
+        // außerhalb der Sandbox.
+        return try await PythonEnvironmentInstaller.shared.installPackage(spec)
     }
 
     /// Nur "name" oder "name==1.2.3" – alles andere (URLs, git+/lokalen Pfade, -Flags,

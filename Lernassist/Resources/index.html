@@ -119,6 +119,9 @@ hr { border: none; border-top: 1px solid var(--table-border); margin: 0.9em 0; }
 /* Fett / Kursiv */
 strong { font-weight: 600; }
 em { font-style: italic; }
+.mermaid-block { margin: 0.8em 0; overflow-x: auto; }
+.mermaid-block.rendered { text-align: center; }
+.mermaid-block svg { max-width: 100%; height: auto; }
 </style>
 </head>
 <body>
@@ -126,9 +129,7 @@ em { font-style: italic; }
 
 <!-- Bibliotheken (lokal aus Resources-Ordner, kein Netzwerk) -->
 <script src="markdown-it.min.js"></script>
-<script src="highlight.bundle.js"></script>
-<script src="katex.min.js"></script>
-<script src="auto-render.min.js"></script>
+<!-- highlight.js (1,1 MB) und KaTeX werden erst geladen, wenn der Inhalt sie braucht (ensureLibs). -->
 
 <script>
 // ── markdown-it Setup ──────────────────────────────────────────────────
@@ -154,12 +155,105 @@ var md = window.markdownit({
   }
 });
 
+// ── Mermaid-Diagramme ──────────────────────────────────────────────────
+// ```mermaid-Blöcke werden als Platzhalter gerendert und erst dann gezeichnet, wenn die
+// Bibliothek (2,5 MB) gebraucht wird – sie wird nur bei Bedarf nachgeladen. Fertige SVGs
+// werden pro Quelltext gecacht, damit Streaming-Updates nicht ständig neu zeichnen.
+var defaultFence = md.renderer.rules.fence;
+md.renderer.rules.fence = function(tokens, idx, options, env, self) {
+  var token = tokens[idx];
+  if ((token.info || '').trim().toLowerCase() === 'mermaid') {
+    var src = token.content;
+    var escaped = src.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return '<div class="mermaid-block" data-src="' + escaped + '"><pre><code>' + escaped + '</code></pre></div>';
+  }
+  return defaultFence(tokens, idx, options, env, self);
+};
+
+window._mermaidCache = window._mermaidCache || {};
+var mermaidLoading = null;
+function loadMermaid() {
+  if (window.mermaid) { return Promise.resolve(window.mermaid); }
+  if (mermaidLoading) { return mermaidLoading; }
+  mermaidLoading = new Promise(function(resolve, reject) {
+    var script = document.createElement('script');
+    script.src = 'mermaid.min.js';
+    script.onload = function() {
+      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: 'antiscript', htmlLabels: false, flowchart: { htmlLabels: false }, theme: dark ? 'dark' : 'neutral',
+                                  fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' });
+      resolve(window.mermaid);
+    };
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+  return mermaidLoading;
+}
+
+var mermaidCounter = 0;
+var mermaidTimer = null;
+function renderMermaidBlocks(el) {
+  var blocks = el.querySelectorAll('.mermaid-block');
+  if (!blocks.length) { return; }
+  // Gecachte Diagramme sofort einsetzen.
+  blocks.forEach(function(block) {
+    var src = block.getAttribute('data-src');
+    if (window._mermaidCache[src]) { block.innerHTML = window._mermaidCache[src]; block.classList.add('rendered'); }
+  });
+  // Neue Diagramme erst nach kurzer Ruhe zeichnen (während des Streamings ist der Code oft unvollständig).
+  clearTimeout(mermaidTimer);
+  mermaidTimer = setTimeout(function() {
+    loadMermaid().then(function(mermaid) {
+      document.querySelectorAll('.mermaid-block:not(.rendered)').forEach(function(block) {
+        var src = block.getAttribute('data-src');
+        var decoded = new DOMParser().parseFromString(src, 'text/html').documentElement.textContent.replace(/<br\s*\/?>/gi, '<br/>');
+        mermaid.render('mmd' + (++mermaidCounter), decoded).then(function(result) {
+          window._mermaidCache[src] = result.svg;
+          block.innerHTML = result.svg;
+          block.classList.add('rendered');
+          reportHeight();
+        }).catch(function() { /* unvollständig oder fehlerhaft: Quelltext bleibt sichtbar */ });
+      });
+    }).catch(function() {});
+  }, 450);
+}
+
+function reportHeight() {
+  try { window.webkit.messageHandlers.heightChanged.postMessage(document.body.scrollHeight); } catch(e) {}
+}
+
 // ── Haupt-Render-Funktion (wird von Swift via evaluateJavaScript aufgerufen) ──
 // fontScale: Multiplikator (0.8...1.5) aus den Einstellungen (Erscheinungsbild-Tab).
 // Skaliert die Basis-Schriftgröße; alle anderen Größen (h1, code, ...) sind in em/relativen
 // Einheiten definiert und skalieren automatisch mit.
+function loadScript(src) {
+  return new Promise(function(resolve) {
+    var s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = resolve;
+    document.head.appendChild(s);
+  });
+}
+var libsLoading = {};
+// Lädt schwere Bibliotheken nur bei Bedarf nach und rendert danach erneut.
+function ensureLibs(content, fontScale) {
+  var jobs = [];
+  if (typeof hljs === 'undefined' && content.indexOf('```') >= 0) {
+    libsLoading.hl = libsLoading.hl || loadScript('highlight.bundle.js'); jobs.push(libsLoading.hl);
+  }
+  if (typeof renderMathInElement === 'undefined' && /\$|\\\(|\\\[/.test(content)) {
+    libsLoading.math = libsLoading.math || loadScript('katex.min.js').then(function() { return loadScript('auto-render.min.js'); });
+    jobs.push(libsLoading.math);
+  }
+  if (!jobs.length) { return; }
+  window._latestContent = content;
+  Promise.all(jobs).then(function() {
+    if (window._latestContent === content) { updateContent(content, fontScale); }
+  });
+}
+
 function updateContent(content, fontScale) {
   var el = document.getElementById('content');
+  ensureLibs(content, fontScale);
 
   if (typeof fontScale === 'number' && fontScale > 0) {
     document.documentElement.style.fontSize = (14 * fontScale) + 'px';
@@ -189,6 +283,9 @@ function updateContent(content, fontScale) {
     } catch(e) {}
   }
 
+  // 2a. Mermaid-Diagramme
+  renderMermaidBlocks(el);
+
   // 2b. ResizeObserver (Audit U10): Nachladende Remote-Bilder vergrößern scrollHeight ERST
   // nach dem ersten Layout – die einmalige rAF-Meldung unten verpasst das, das Bild wurde
   // abgeschnitten. Der Observer meldet jede echte Inhaltsgrößen-Änderung erneut an Swift.
@@ -204,8 +301,8 @@ function updateContent(content, fontScale) {
   }
 
   // 3. Höhe ans Swift melden (nach nächstem Paint für korrektes scrollHeight)
-  //    Hinweis: Der Single-`$`-KaTeX-Delimiter ist bewusst entfernt (Audit U11) –
-  //    Texte wie "5$ ... 10$" wurden sonst als Mathe-Formel interpretiert.
+  //    Hinweis: Der Single-`$`-Delimiter bleibt aktiv, weil die Lernmodus-Prompts Inline-Formeln
+  //    als $...$ verlangen; Preisangaben wie „5$ … 10$“ können dadurch als Formel erscheinen.
   requestAnimationFrame(function() {
     var h = document.body.scrollHeight;
     try {

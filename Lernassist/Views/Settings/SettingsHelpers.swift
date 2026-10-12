@@ -13,7 +13,7 @@ func settingsSection<Content: View, Trailing: View>(
         HStack(spacing: DS.Space.s) {
             Label(title, systemImage: icon)
                 .font(.subheadline.weight(.semibold))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             Spacer()
             trailing()
         }

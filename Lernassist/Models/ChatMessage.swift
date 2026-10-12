@@ -23,6 +23,23 @@ struct DocumentAttachment: Identifiable, Codable, Equatable {
     var currentPreviewImageBase64: String? = nil
 }
 
+/// Interaktive Abfragekarte (Tool `quiz_card`, v. a. im Tutor-Modus).
+nonisolated struct QuizCard: Codable, Equatable, Sendable {
+    var question: String
+    /// Antwortoptionen; leer = Freitext-Antwort.
+    var options: [String]
+    /// Index der richtigen Option (optional – ohne Angabe bewertet das Modell die Antwort).
+    var correctIndex: Int?
+    /// Wird erst nach der Antwort gezeigt.
+    var explanation: String?
+    var hint: String?
+    /// Gewählte Option bzw. Freitext, sobald beantwortet.
+    var selectedIndex: Int?
+    var freeTextAnswer: String?
+
+    var isAnswered: Bool { selectedIndex != nil || freeTextAnswer != nil }
+}
+
 struct ChatMessage: Identifiable, Codable, Equatable {
     let id: UUID
     let role: String
@@ -60,6 +77,11 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     /// danach noch wird.
     var frozenImageContext: String?
     var isImageContextFrozen: Bool = false
+    /// Interaktive Abfragekarte (nur Anzeige; der zugehörige Tool-Call steht in der Nachricht davor).
+    var quizCard: QuizCard?
+    /// Kurze Originaleingabe (z. B. „/search Thrombin“), die statt des ausformulierten Prompts in der
+    /// Nutzerblase und im Chat-Titel erscheint. `content` bleibt, was das Modell bekommt.
+    var displayText: String?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         // imageBase64 (bis zu 7MB) wird bewusst ausgeschlossen – imageID genügt als Proxy.
@@ -77,7 +99,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         lhs.imageDescription == rhs.imageDescription &&
         lhs.frozenImageContext == rhs.frozenImageContext &&
         lhs.isImageContextFrozen == rhs.isImageContextFrozen &&
-        lhs.errorMessage == rhs.errorMessage
+        lhs.errorMessage == rhs.errorMessage &&
+        lhs.quizCard == rhs.quizCard &&
+        lhs.displayText == rhs.displayText
         // frozenImageContext aufnehmen (Audit 2.7): Ohne den Vergleich übersprang SwiftUIs
         // Diffing die Neuberechnung, wenn sich NUR der eingefrorene Bildkontext änderte.
     }
@@ -115,7 +139,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, content, thinking, toolCalls, imageBase64, imageID,
              documentAttachment, timestamp, htmlArtifact, imageDescription,
-             frozenImageContext, isImageContextFrozen
+             frozenImageContext, isImageContextFrozen, quizCard, displayText
     }
 
     /// Custom Decoder nötig, da `isImageContextFrozen` als NICHT-optionales `Bool = false`
@@ -139,6 +163,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         imageDescription = try c.decodeIfPresent(String.self, forKey: .imageDescription)
         frozenImageContext = try c.decodeIfPresent(String.self, forKey: .frozenImageContext)
         isImageContextFrozen = try c.decodeIfPresent(Bool.self, forKey: .isImageContextFrozen) ?? false
+        quizCard = try? c.decodeIfPresent(QuizCard.self, forKey: .quizCard)
+        displayText = try c.decodeIfPresent(String.self, forKey: .displayText)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -156,10 +182,12 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         try c.encodeIfPresent(imageDescription, forKey: .imageDescription)
         try c.encodeIfPresent(frozenImageContext, forKey: .frozenImageContext)
         try c.encode(isImageContextFrozen, forKey: .isImageContextFrozen)
+        try c.encodeIfPresent(quizCard, forKey: .quizCard)
+        try c.encodeIfPresent(displayText, forKey: .displayText)
     }
 }
 
-struct ToolCallInfo: Identifiable, Codable, Equatable {
+nonisolated struct ToolCallInfo: Identifiable, Codable, Equatable, Sendable {
     /// Manche OpenAI-kompatiblen Server (insbesondere bei Ollama) liefern keine Call-ID.
     /// Die App ergänzt dann vor der Tool-Fortsetzung eine stabile, lokale ID.
     var id: String

@@ -27,13 +27,13 @@ struct ScreenshotGalleryView: View {
         VStack(spacing: 0) {
             HStack {
                 Image(systemName: "photo.on.rectangle.angled")
-                    .foregroundColor(.blue)
+                    .foregroundStyle(DS.Ink.accent)
                 Text("Screenshot-Pool")
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -48,10 +48,10 @@ struct ScreenshotGalleryView: View {
                     Spacer()
                     Image(systemName: "photo")
                         .font(.system(size: 40))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Text("Noch keine Screenshots vorhanden.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .padding(.top, 8)
                     Spacer()
                 }
@@ -69,7 +69,7 @@ struct ScreenshotGalleryView: View {
                                 Text(item.session.title)
                                     .font(.caption2)
                                     .lineLimit(1)
-                                    .foregroundColor(.secondary)
+                                    .foregroundStyle(.secondary)
                             }
                             .padding(8)
                             .background(Color.primary.opacity(0.05))
@@ -88,6 +88,6 @@ struct ScreenshotGalleryView: View {
                 }
             }
         }
-        .frame(width: 600, height: 500)
+        .frame(minWidth: 420, idealWidth: 600, maxWidth: 600, minHeight: 340, idealHeight: 480, maxHeight: 500)
     }
 }

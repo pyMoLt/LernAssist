@@ -1,0 +1,15 @@
+{
+  "fill" : "automatic",
+  "groups" : [
+    {
+      "layers" : [
+        { "glass" : true, "image-name" : "3_glass_cap.svg", "name" : "3_glass_cap" },
+        { "image-name" : "2_viewfinder.svg", "name" : "2_viewfinder" },
+        { "image-name" : "1_background.svg", "name" : "1_background" }
+      ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
+      "translucency" : { "enabled" : true, "value" : 0.4 }
+    }
+  ],
+  "supported-platforms" : { "squares" : "shared" }
+}

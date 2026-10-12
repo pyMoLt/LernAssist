@@ -23,6 +23,8 @@ struct PersistedSettings: Codable {
     var keepMultipleImagesInHistory: Bool
     /// Belegbare Tastenkombinationen je Aktion (rawValue-String → Hotkey).
     var hotkeys: [String: Hotkey]
+    /// 2 = Hotkey-Defaults vom 12.10.2026 (⌃⇧ statt ⌘-Kürzeln) sind angewendet.
+    var hotkeyDefaultsVersion: Int = 2
     /// Tool-Registry-Zustände: toolName → isEnabled.
     var toolStates: [String: Bool]
     /// Phase 7C: Hintergrund-Aufgaben
@@ -52,6 +54,14 @@ struct PersistedSettings: Codable {
     var autoCompactSuggestionsEnabled: Bool
     /// Schwellwert (0...1) des geschätzten Kontext-Füllstands, ab dem das Angebot erscheint.
     var autoCompactThreshold: Double
+    /// Zielgröße der /compact-Zusammenfassung in Tokens.
+    var compactSummaryTokens: Int
+    /// So viele letzte Nachrichten werden wörtlich an die Zusammenfassung angehängt.
+    var compactKeepLastMessages: Int
+    /// Websuche/Recherche (Quellen, Reranker, Budgets, Domains).
+    var research: ResearchSettings = ResearchSettings()
+    /// coding_sandbox: Python-Pakete ohne Rückfrage installieren.
+    var autoInstallPythonPackages: Bool = false
     /// Bevorzugte Untertitel-Sprache für den YouTube-Import (BCP-47-Kurzcode, z.B. "de").
     /// Leer = erste verfügbare Spur.
     var youtubeSubtitleLanguage: String
@@ -93,6 +103,8 @@ struct PersistedSettings: Codable {
             showMenuBarIcon: false,
             autoCompactSuggestionsEnabled: true,
             autoCompactThreshold: 0.75,
+            compactSummaryTokens: 6_000,
+            compactKeepLastMessages: 2,
             youtubeSubtitleLanguage: "de",
             youtubeTranscriptCharLimit: 30_000,
             customArchiveFolders: []
@@ -124,6 +136,8 @@ struct PersistedSettings: Codable {
         showMenuBarIcon: Bool = false,
         autoCompactSuggestionsEnabled: Bool = true,
         autoCompactThreshold: Double = 0.75,
+        compactSummaryTokens: Int = 6_000,
+        compactKeepLastMessages: Int = 2,
         youtubeSubtitleLanguage: String = "de",
         youtubeTranscriptCharLimit: Int = 30_000,
         customArchiveFolders: [String] = []
@@ -152,6 +166,8 @@ struct PersistedSettings: Codable {
         self.showMenuBarIcon = showMenuBarIcon
         self.autoCompactSuggestionsEnabled = autoCompactSuggestionsEnabled
         self.autoCompactThreshold = autoCompactThreshold
+        self.compactSummaryTokens = compactSummaryTokens
+        self.compactKeepLastMessages = compactKeepLastMessages
         self.youtubeSubtitleLanguage = youtubeSubtitleLanguage
         self.youtubeTranscriptCharLimit = youtubeTranscriptCharLimit
         self.customArchiveFolders = customArchiveFolders
@@ -160,12 +176,13 @@ struct PersistedSettings: Codable {
     private enum CodingKeys: String, CodingKey {
         case profiles, activeProfileID, fallbackProfileID
         case learningStyle, customPrompts, searchEnabled, searxngURL, maxBrowseCharacters, maxToolRounds
-        case keepMultipleImagesInHistory, hotkeys, toolStates
+        case keepMultipleImagesInHistory, hotkeys, toolStates, hotkeyDefaultsVersion
         case autoLabelingEnabled, autoImageToTextEnabled
         case isSemanticSearchEnabled, imageExtractionDetail, extractImagesFromPDF
         case appTheme, chatFontSize, isMenuBarApp, disableThinkingForBackgroundJobs, showMenuBarIcon
         // Phase H – konfigurierbare Werte der neuen Features:
         case autoCompactSuggestionsEnabled, autoCompactThreshold, youtubeSubtitleLanguage, youtubeTranscriptCharLimit
+        case compactSummaryTokens, compactKeepLastMessages, research, autoInstallPythonPackages
         case customArchiveFolders
         // Legacy (Phase-2-Flachformat):
         case legacyApiEndpoint = "apiEndpoint"
@@ -186,6 +203,10 @@ struct PersistedSettings: Codable {
             uniqueKeysWithValues: Hotkey.defaultMap.map { ($0.key.rawValue, $0.value) }
         )
         hotkeys = try c.decodeIfPresent([String: Hotkey].self, forKey: .hotkeys) ?? defaultHotkeyMap
+        if (try c.decodeIfPresent(Int.self, forKey: .hotkeyDefaultsVersion) ?? 1) < 2 {
+            hotkeys = Hotkey.migratedFromLegacyDefaults(hotkeys)
+        }
+        hotkeyDefaultsVersion = 2
         toolStates = try c.decodeIfPresent([String: Bool].self, forKey: .toolStates) ?? [:]
         autoLabelingEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoLabelingEnabled) ?? true
         autoImageToTextEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoImageToTextEnabled) ?? true
@@ -213,6 +234,10 @@ struct PersistedSettings: Codable {
         // – Bestandsinstallationen ohne diese Schlüssel laufen ohne Migration weiter.
         autoCompactSuggestionsEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoCompactSuggestionsEnabled) ?? true
         autoCompactThreshold = try c.decodeIfPresent(Double.self, forKey: .autoCompactThreshold) ?? 0.75
+        compactSummaryTokens = try c.decodeIfPresent(Int.self, forKey: .compactSummaryTokens) ?? 6_000
+        compactKeepLastMessages = try c.decodeIfPresent(Int.self, forKey: .compactKeepLastMessages) ?? 2
+        research = (try? c.decodeIfPresent(ResearchSettings.self, forKey: .research)) ?? ResearchSettings()
+        autoInstallPythonPackages = try c.decodeIfPresent(Bool.self, forKey: .autoInstallPythonPackages) ?? false
         youtubeSubtitleLanguage = try c.decodeIfPresent(String.self, forKey: .youtubeSubtitleLanguage) ?? "de"
         youtubeTranscriptCharLimit = try c.decodeIfPresent(Int.self, forKey: .youtubeTranscriptCharLimit) ?? 30_000
         customArchiveFolders = try c.decodeIfPresent([String].self, forKey: .customArchiveFolders) ?? []
@@ -246,6 +271,7 @@ struct PersistedSettings: Codable {
         try c.encode(maxToolRounds, forKey: .maxToolRounds)
         try c.encode(keepMultipleImagesInHistory, forKey: .keepMultipleImagesInHistory)
         try c.encode(hotkeys, forKey: .hotkeys)
+        try c.encode(hotkeyDefaultsVersion, forKey: .hotkeyDefaultsVersion)
         try c.encode(toolStates, forKey: .toolStates)
         try c.encode(autoLabelingEnabled, forKey: .autoLabelingEnabled)
         try c.encode(autoImageToTextEnabled, forKey: .autoImageToTextEnabled)
@@ -259,6 +285,10 @@ struct PersistedSettings: Codable {
         try c.encode(showMenuBarIcon, forKey: .showMenuBarIcon)
         try c.encode(autoCompactSuggestionsEnabled, forKey: .autoCompactSuggestionsEnabled)
         try c.encode(autoCompactThreshold, forKey: .autoCompactThreshold)
+        try c.encode(compactSummaryTokens, forKey: .compactSummaryTokens)
+        try c.encode(compactKeepLastMessages, forKey: .compactKeepLastMessages)
+        try c.encode(research, forKey: .research)
+        try c.encode(autoInstallPythonPackages, forKey: .autoInstallPythonPackages)
         try c.encode(youtubeSubtitleLanguage, forKey: .youtubeSubtitleLanguage)
         try c.encode(youtubeTranscriptCharLimit, forKey: .youtubeTranscriptCharLimit)
         try c.encode(customArchiveFolders, forKey: .customArchiveFolders)
@@ -270,6 +300,12 @@ struct PersistedSettings: Codable {
 /// Migriert einmalig aus den alten UserDefaults-Keys, falls noch keine settings.json existiert.
 final class SettingsStore {
     static let shared = SettingsStore()
+
+    /// Zuletzt aus dem bzw. in den Schlüsselbund übertragener Key je Profil. Nur Änderungen
+    /// werden zurückgeschrieben – Profile, deren Key beim Laden NICHT lesbar war, fehlen hier
+    /// und werden erst angefasst, wenn der Nutzer selbst einen neuen Key einträgt.
+    private var persistedKeys: [UUID: String] = [:]
+    private var unreadableKeyProfiles: Set<UUID> = []
 
     func load() -> PersistedSettings {
         var settings: PersistedSettings
@@ -297,7 +333,18 @@ final class SettingsStore {
         // API-Keys aus der Keychain einschleusen (Audit P1): In settings.json stehen nur noch
         // leere Strings; die Profile im Speicher bekommen hier die echten Keys zurück.
         for idx in settings.profiles.indices {
-            settings.profiles[idx].apiKey = KeychainStore.apiKey(forProfileID: settings.profiles[idx].id)
+            let id = settings.profiles[idx].id
+            switch KeychainStore.readAPIKey(forProfileID: id) {
+            case .found(let key):
+                settings.profiles[idx].apiKey = key
+                persistedKeys[id] = key
+            case .notFound:
+                settings.profiles[idx].apiKey = ""
+                persistedKeys[id] = ""
+            case .failed:
+                settings.profiles[idx].apiKey = ""
+                unreadableKeyProfiles.insert(id)
+            }
         }
         return settings
     }
@@ -308,7 +355,20 @@ final class SettingsStore {
         // Die Keys wandern in die Keychain, ins JSON wird nur ein leerer String geschrieben.
         var sanitized = settings
         for idx in sanitized.profiles.indices {
-            KeychainStore.setAPIKey(sanitized.profiles[idx].apiKey, forProfileID: sanitized.profiles[idx].id)
+            let id = sanitized.profiles[idx].id
+            let key = sanitized.profiles[idx].apiKey
+            if unreadableKeyProfiles.contains(id) {
+                // Nicht lesbarer Eintrag: Ein leerer Key im Speicher ist kein Löschwunsch.
+                // Erst ein vom Nutzer eingetragener Key überschreibt den Eintrag.
+                if !key.isEmpty {
+                    KeychainStore.setAPIKey(key, forProfileID: id)
+                    unreadableKeyProfiles.remove(id)
+                    persistedKeys[id] = key
+                }
+            } else if persistedKeys[id] != key {
+                KeychainStore.setAPIKey(key, forProfileID: id)
+                persistedKeys[id] = key
+            }
             sanitized.profiles[idx].apiKey = ""
         }
         do {

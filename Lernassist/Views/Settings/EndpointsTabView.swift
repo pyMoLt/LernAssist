@@ -31,7 +31,7 @@ struct EndpointsTabView: View {
                     if viewModel.isUsingFallback {
                         Label("Aktuell im Fallback-Betrieb", systemImage: "exclamationmark.triangle.fill")
                             .font(.caption2)
-                            .foregroundColor(.orange)
+                            .foregroundStyle(.orange)
                     }
                 }
             }
@@ -44,7 +44,7 @@ struct EndpointsTabView: View {
                             isActive: profile.id == viewModel.activeProfileID,
                             canDelete: viewModel.profiles.count > 1,
                             onDelete: { viewModel.deleteProfile(id: profile.id) },
-                            onPing: { await viewModel.testConnection(profile: profile) }
+                            onPing: { await viewModel.diagnoseConnection(profile: profile) }
                         )
                         if profile.id != viewModel.profiles.last?.id { Divider() }
                     }
@@ -55,7 +55,7 @@ struct EndpointsTabView: View {
                 Label("Profil hinzufügen", systemImage: "plus.circle.fill")
             }
             .buttonStyle(.plain)
-            .foregroundColor(.blue)
+            .foregroundStyle(DS.Ink.accent)
         }
     }
 
@@ -81,9 +81,10 @@ private struct ProfileEditorRow: View {
     let isActive: Bool
     let canDelete: Bool
     let onDelete: () -> Void
-    let onPing: () async -> Bool
+    let onPing: () async -> ConnectionDiagnosis
 
     @State private var pingStatus: String? = nil
+    @State private var pingDetail: String? = nil
     @State private var isPinging: Bool = false
     @State private var showProviderHelp: Bool = false
     @State private var showPresets: Bool = false
@@ -98,7 +99,7 @@ private struct ProfileEditorRow: View {
             HStack {
                 if isActive {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                        .foregroundStyle(.green)
                         .font(.caption)
                 }
                 TextField("Name", text: $profile.name)
@@ -112,7 +113,7 @@ private struct ProfileEditorRow: View {
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                     .help("Profil löschen")
@@ -151,7 +152,7 @@ private struct ProfileEditorRow: View {
                 } label: {
                     Image(systemName: "questionmark.circle")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showProviderHelp, arrowEdge: .trailing) {
@@ -188,7 +189,7 @@ private struct ProfileEditorRow: View {
                     if let url = EndpointManager.chatCompletionsURL(for: profile) {
                         Text("→ \(url.absoluteString)")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -197,7 +198,7 @@ private struct ProfileEditorRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Kontext")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     TextField("auto", value: $profile.contextSizeOverride, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
@@ -272,8 +273,46 @@ private struct ProfileEditorRow: View {
                 .disabled(isPinging)
             }
 
+            // Zeile: Thinking + Timeout (pro Profil)
+            HStack(spacing: 10) {
+                Picker("Thinking", selection: $profile.thinkingMode) {
+                    ForEach(ThinkingMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.caption)
+                .frame(maxWidth: 190)
+                .settingHelp("Denkprozess des Modells für Chat-Antworten. „An“ mit Budget ist für Erklärungen empfehlenswert; „Server-Standard“ sendet nichts.")
+
+                if profile.thinkingMode == .on {
+                    TextField("Budget", value: $profile.thinkingBudget, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                        .frame(width: 70)
+                        .settingHelp("Maximale Denk-Tokens (leer = unbegrenzt). Empfehlung: 2.000–4.000.")
+                    Text("Tokens").font(.caption2).foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("Timeout").font(.caption2).foregroundStyle(.secondary)
+                TextField(profile.isRemote ? "300" : "180", value: $profile.requestTimeout, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .frame(width: 60)
+                    .settingHelp("Sekunden ohne neue Daten, bevor eine Anfrage abbricht. Leer = Standard (lokal 180 s, remote 300 s).")
+                Text("s").font(.caption2).foregroundStyle(.secondary)
+            }
+
             if let err = modelLoadError {
-                Text(err).font(.caption2).foregroundColor(.red)
+                Text(err).font(.caption2).foregroundStyle(.red)
+            }
+            if let pingDetail {
+                Text(pingDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 4)
@@ -303,11 +342,12 @@ private struct ProfileEditorRow: View {
         isPinging = true
         pingStatus = nil
         Task {
-            let success = await onPing()
+            let diagnosis = await onPing()
             await MainActor.run {
                 self.isPinging = false
-                self.pingStatus = success ? "OK ✓" : "Fehler ✗"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self.pingStatus = diagnosis.isOK ? "OK ✓" : "Fehler ✗"
+                self.pingDetail = diagnosis.message
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     if self.pingStatus != nil { self.pingStatus = nil }
                 }
             }
@@ -333,7 +373,7 @@ private struct ProviderHelpPopover: View {
             ScrollView {
                 Text(provider.helpText)
                     .font(.caption)
-                    .foregroundColor(.primary)
+                    .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .multilineTextAlignment(.leading)
@@ -353,7 +393,7 @@ private struct PresetsPopover: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Schnell-Presets")
                 .font(.caption.bold())
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
 
             ForEach(EndpointProfile.presets, id: \.name) { preset in
@@ -362,6 +402,16 @@ private struct PresetsPopover: View {
                     profile.baseURL = preset.baseURL
                     profile.model = preset.model
                     profile.name = preset.name
+                    if preset.provider == .omlx {
+                        // oMLX-Vorlagen bringen empfohlene Qwen-Parameter, Thinking und
+                        // Remote-Kennzeichen mit (Hintergrundmodell bleibt leer = Hauptmodell).
+                        let template = EndpointProfile.looksLikeLoopback(preset.baseURL)
+                            ? EndpointProfile.omlxLocal() : EndpointProfile.omlxRemote()
+                        profile.params = template.params
+                        profile.isRemote = template.isRemote
+                        profile.thinkingMode = template.thinkingMode
+                        profile.thinkingBudget = template.thinkingBudget
+                    }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: preset.provider.systemImage)
@@ -372,7 +422,7 @@ private struct PresetsPopover: View {
                                 .font(.caption.bold())
                             Text(preset.baseURL)
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }

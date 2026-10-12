@@ -12,7 +12,7 @@ import Foundation
 /// - Ollama /api/chat:  eval_count / eval_duration (ns) = TPS; prompt_eval_count
 /// - OpenAI / Groq:     usage.prompt_tokens / completion_tokens; Groq: completion_time für TPS
 /// - MLX:               Standard OpenAI usage-Objekt
-struct ChatMetrics: Equatable {
+nonisolated struct ChatMetrics: Equatable, Sendable {
     var promptTokens: Int = 0
     var completionTokens: Int = 0
     var cachedTokens: Int = 0       // prompt_tokens_details.cached_tokens (llama.cpp)
@@ -32,7 +32,7 @@ struct ChatMetrics: Equatable {
 
 // MARK: - Metriken-Parser
 
-enum MetricsParser {
+nonisolated enum MetricsParser {
 
     /// Versucht Metriken aus einem JSON-String zu lesen. Gibt nil wenn keine verwertbaren Felder.
     static func parse(from jsonStr: String) -> ChatMetrics? {
@@ -58,6 +58,13 @@ enum MetricsParser {
             if let details = usage["prompt_tokens_details"] as? [String: Any],
                let cached = details["cached_tokens"] as? Int {
                 metrics.cachedTokens = cached; hasAny = true
+            }
+            // 1a. oMLX: Server-Timings direkt im usage-Objekt (Sekunden)
+            if let tps = usage["generation_tokens_per_second"] as? Double, tps > 0 {
+                metrics.tokensPerSecond = tps; hasAny = true
+            }
+            if let ttft = usage["time_to_first_token"] as? Double, ttft > 0 {
+                metrics.timeToFirstToken = ttft; hasAny = true
             }
             // 1b. Groq: completion_time + prompt_time in usage → exakte TPS
             if let compTime = usage["completion_time"] as? Double, compTime > 0,

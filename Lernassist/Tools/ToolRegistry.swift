@@ -19,7 +19,8 @@ final class ToolRegistry {
             BrowseURLTool(),
             CalculateTool(),
             CodingTool(),
-            TerminalTool()
+            RecallScreenshotTool(),
+            QuizCardTool()
         ]
     }
 
@@ -31,21 +32,27 @@ final class ToolRegistry {
     var schemas: [[String: Any]] { enabledTools.map { $0.openAISchema } }
 
     /// Prompt-Erweiterung — nur für aktive Tools, mit Few-Shot-Hinweisen.
+    /// Kurze Regeln für den System-Prompt. Die Tool-Beschreibungen stehen bereits im
+    /// `tools`-Schema des Requests – sie hier zu wiederholen kostete ≈ 2,5k Tokens pro Anfrage
+    /// (Audit 2026-10-12). Regeln nur für tatsächlich aktive Tools.
     var systemPromptAddition: String {
-        guard !enabledTools.isEmpty else { return "" }
-        let toolList = enabledTools.map { "- **\($0.name)**: \($0.description)" }.joined(separator: "\n")
-        return """
-
----
-**Verfügbare Tools** (nur nutzen wenn tatsächlich nötig — NICHT für triviale Rechenaufgaben wie 1+2, einfache Definitionen oder allgemeines Wissen):
-\(toolList)
-
-**Tool-Nutzungsregeln:**
-- Nutze Tools bei Unsicherheit, Verifikationsbedarf oder aktuellen Fakten.
-- Zitiere die Quelle in deiner Antwort (z.B. „Laut [Quelle] ...").
-- Löse einfache Aufgaben direkt ohne Tool.
-- Wenn ein Tool ein `<TOOL_ERROR>` zurückgibt, ist das zunächst eine faktische Rückmeldung. Lies die konkrete Ursache: Bei fehlerhaften Argumenten kannst du sie korrigieren oder ein geeignetes anderes Tool wählen; nach ausgeschöpften transienten Versuchen entscheidest du selbst, wie du sinnvoll fortfährst. Erfinde kein Ergebnis.
-"""
+        let names = Set(enabledTools.map(\.name))
+        guard !names.isEmpty else { return "" }
+        var rules = ["Nutze Tools nur, wenn sie wirklich helfen – einfache Fragen beantwortest du direkt."]
+        if names.contains("web_search") {
+            rules.append("Bei Fakten, Zahlen, Leitlinien oder Aktuellem, bei denen du unsicher bist: `web_search`. Zitiere [W#] nur für Belege, die dir `web_search` in diesem Gespräch tatsächlich geliefert hat – ohne Suche keine [W#]-Angaben, und erfinde keine Quellen.")
+        }
+        if names.contains("coding_sandbox") {
+            rules.append("Soll etwas berechnet, ausgewertet, geplottet oder interaktiv/als Simulation gezeigt werden, nutze `coding_sandbox` (Python für Daten/Plots, HTML/JS für Interaktives) statt Code nur als Text auszugeben.")
+        }
+        if names.contains("recall_screenshot") {
+            rules.append("Musst du eine frühere Folie genau ansehen, hole sie mit `recall_screenshot`.")
+        }
+        if names.contains("quiz_card") {
+            rules.append("Zum Abfragen jede Frage einzeln als `quiz_card` stellen (nicht als Text) und dann auf die Antwort warten; nach dem Feedback die nächste Frage wieder als `quiz_card`.")
+        }
+        rules.append("Meldet ein Tool <TOOL_ERROR>, lies die Ursache, korrigiere die Argumente oder fahre ohne Tool fort. Erfinde kein Ergebnis.")
+        return "\n\n---\n**Tools:**\n" + rules.map { "- " + $0 }.joined(separator: "\n")
     }
 
     // MARK: - Tool per Name finden und ausführen

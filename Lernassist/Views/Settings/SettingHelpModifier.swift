@@ -39,7 +39,7 @@ struct SettingHelpModifier: ViewModifier {
             // Optisches Hervorheben, wenn Hilfe-Modus aktiv ist
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(isHovered ? Color.blue : Color.blue.opacity(0.4), lineWidth: 2)
+                    .stroke(isHovered ? DS.Ink.accent : DS.Ink.accent.opacity(0.4), lineWidth: 2)
                     .padding(-4)
                     .opacity(isHelpModeActive ? 1 : 0)
                     .animation(.easeInOut(duration: 0.2), value: isHelpModeActive)
@@ -53,7 +53,7 @@ struct SettingHelpModifier: ViewModifier {
                 ScrollView {
                     Text(helpText)
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.primary)
+                        .foregroundStyle(.primary)
                         .padding(12)
                         .frame(width: 260, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)

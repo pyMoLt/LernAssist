@@ -349,14 +349,17 @@ actor LMStudioModelManager {
     /// Der Localhost-Check bleibt NUR für `.openAICompatible` relevant, da darunter auch echte
     /// Cloud-APIs (OpenAI, Groq, …) laufen können, gegen die LM-Studio-spezifische Endpunkte
     /// (/api/v1/models/load etc.) sinnlos bzw. potenziell schädlich wären.
-    func isLMStudioLocal(profile: EndpointProfile) -> Bool {
+    nonisolated func isLMStudioLocal(profile: EndpointProfile) -> Bool {
         if profile.provider == .lmStudioNative { return true }
         guard profile.provider == .openAICompatible else { return false }
-        let base = profile.baseURL.lowercased()
-        return base.contains("localhost") || base.contains("127.0.0.1")
+        // Nur LM Studios Standardport: Andere lokale OpenAI-kompatible Server (llama.cpp :8080,
+        // früheres oMLX-Preset :8072) bekamen sonst LM-Studio-Lade-Requests.
+        guard let components = URLComponents(string: EndpointManager.normalizedBase(profile.baseURL)),
+              let host = components.host?.lowercased() else { return false }
+        return (host == "localhost" || host == "127.0.0.1") && (components.port ?? 80) == 1234
     }
     
-    func effectiveLMStudioModelId(profile: EndpointProfile, useBackground: Bool) -> String {
+    nonisolated func effectiveLMStudioModelId(profile: EndpointProfile, useBackground: Bool) -> String {
         if useBackground {
             let id = profile.backgroundJobModelLMStudioId.trimmingCharacters(in: .whitespacesAndNewlines)
             let fallback = profile.backgroundJobModel.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -51,15 +51,15 @@ struct DocumentBadgeView: View {
                         
                         Text(doc.progressText)
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     } else if doc.status == .completed {
                         Text("Verarbeitung abgeschlossen")
                             .font(.caption2)
-                            .foregroundColor(.green)
+                            .foregroundStyle(.green)
                     } else if doc.status == .failed {
                         Text("Fehler bei der Verarbeitung")
                             .font(.caption2)
-                            .foregroundColor(.red)
+                            .foregroundStyle(.red)
                     }
                 }
                 
@@ -188,7 +188,7 @@ struct DocumentProcessingPreviewPopover: View {
 
             Text(attachment.progressText)
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
         }
         .padding(16)
         .frame(width: 352)
@@ -212,7 +212,7 @@ struct DocumentPreviewModal: View {
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .font(.title3)
                 }
                 .buttonStyle(.plain)
@@ -227,7 +227,7 @@ struct DocumentPreviewModal: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Extrahierter Inhalt:")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     
                     MarkdownView(markdown: attachment.extractedText)
                         .frame(maxWidth: .infinity, alignment: .leading)

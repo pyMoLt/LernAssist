@@ -29,6 +29,12 @@ protocol AppTool: AnyObject {
 enum ToolArtifact {
     case image(base64: String)
     case html(String)
+    /// Interaktive Abfragekarte im Chat. Nach einer Karte wartet die App auf die Antwort des
+    /// Nutzers, statt das Modell weiterschreiben zu lassen.
+    case quiz(QuizCard)
+    /// Bild NUR für das Modell (z. B. ein erneut abgerufener Screenshot) – wird nach den
+    /// Tool-Ergebnissen als Bildnachricht in den nächsten Request gelegt, nicht neu angezeigt.
+    case modelImage(base64: String, caption: String)
 }
 
 /// Klassifikation eines Tool-Fehlers für den App-seitigen Retry-Layer (Nutzer-Feature):

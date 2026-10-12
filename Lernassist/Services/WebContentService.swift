@@ -1,5 +1,6 @@
 import Foundation
 import WebKit
+import PDFKit
 import os
 
 /// Service zum Abrufen und Bereinigen von Webinhalten.
@@ -28,10 +29,14 @@ class WebContentService {
                           userInfo: [NSLocalizedDescriptionKey: "Auf der Seite wurden keine fertigen Textfelder gefunden."])
         }
 
-        let safeOffset = min(offset, fullText.count)
+        return Self.sliceContent(fullText, offset: offset, maxCharacters: limit)
+    }
+
+    static func sliceContent(_ fullText: String, offset: Int, maxCharacters limit: Int) -> String {
+        let safeOffset = min(max(0, offset), fullText.count)
         let start = fullText.index(fullText.startIndex, offsetBy: safeOffset)
         let available = fullText.count - safeOffset
-        let endOffset = safeOffset + min(limit, available)
+        let endOffset = safeOffset + min(max(1, limit), available)
         let end = fullText.index(fullText.startIndex, offsetBy: endOffset)
         var result = String(fullText[start..<end])
 
@@ -47,6 +52,11 @@ class WebContentService {
     }
 
     private func fetchFullContent(from url: URL) async throws -> String {
+        // Direkte PDF-Links nicht durch WKWebView schicken: dessen DOM liefert keinen
+        // extrahierbaren Dokumenttext und führte bisher in einen Content-Type-Fehler.
+        if url.pathExtension.lowercased() == "pdf" {
+            return try await fetchStaticContent(from: url)
+        }
         do {
             return try await fetchDynamicContent(from: url)
         } catch {
@@ -82,9 +92,22 @@ class WebContentService {
                          userInfo: [NSLocalizedDescriptionKey: "HTTP-Fehler \(http.statusCode)"])
         }
 
+        // Ein Server darf PDF auch ohne .pdf-Endung liefern (z.B. Download-Endpunkte).
+        // PDFKit extrahiert Text seitenweise; der bestehende Offset-Slicer oben ist damit
+        // für PDF und HTML identisch.
+        let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        if contentType.contains("application/pdf") || data.starts(with: Data("%PDF-".utf8)) {
+            guard data.count <= Self.maxPDFBytes else {
+                throw NSError(domain: "WebContentService", code: -6,
+                              userInfo: [NSLocalizedDescriptionKey: "PDF ist größer als 25 MB und wird zum Schutz der App nicht verarbeitet."])
+            }
+            return try await Task.detached(priority: .userInitiated) {
+                try Self.extractPDFText(from: data)
+            }.value
+        }
+
         // Content-Type-Check (Audit T9): Ohne ihn wurden auch Bilder/Binärdateien als
         // (unbrauchbarer) Zeichensalz-"Text" ans Modell gegeben.
-        let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
         let looksTextual = contentType.isEmpty
             || contentType.contains("text")
             || contentType.contains("html")
@@ -101,6 +124,37 @@ class WebContentService {
                          userInfo: [NSLocalizedDescriptionKey: "Inhalt konnte nicht als Text interpretiert werden"])
         }
         return cleanText(stripHTML(html))
+    }
+
+    private static let maxPDFBytes = 25 * 1024 * 1024
+    nonisolated private static let maxPDFCharacters = 2_000_000
+
+    /// Reine Textextraktion für URL-PDFs. Lokale Uploads behalten ihren separaten
+    /// Dokumentprozessor einschließlich optionaler Bildbeschreibung.
+    nonisolated static func extractPDFText(from data: Data) throws -> String {
+        guard let document = PDFDocument(data: data) else {
+            throw NSError(domain: "WebContentService", code: -7,
+                          userInfo: [NSLocalizedDescriptionKey: "PDF konnte nicht gelesen werden."])
+        }
+        var text = "[PDF-Dokument, \(document.pageCount) Seiten]\n\n"
+        let pageLimit = min(document.pageCount, 500)
+        for pageIndex in 0..<pageLimit {
+            try Task.checkCancellation()
+            guard let pageText = document.page(at: pageIndex)?.string,
+                  !pageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let remaining = maxPDFCharacters - text.count
+            guard remaining > 0 else { break }
+            text += "[Seite \(pageIndex + 1)]\n"
+            text += String(pageText.prefix(remaining)) + "\n\n"
+        }
+        if document.pageCount > pageLimit || text.count >= maxPDFCharacters {
+            text += "[Der extrahierte PDF-Text wurde aus Sicherheits- und Kontextgründen begrenzt.]"
+        }
+        guard text.contains("[Seite ") else {
+            throw NSError(domain: "WebContentService", code: -8,
+                          userInfo: [NSLocalizedDescriptionKey: "Das PDF enthält keinen auswählbaren Text; möglicherweise ist es ein Scan."])
+        }
+        return text
     }
 
     /// Entfernt aktive/strukturelle HTML-Blöcke und extrahiert Text mit lesbaren Zeilenumbrüchen.
@@ -332,11 +386,22 @@ private class WebScraper: NSObject, WKNavigationDelegate {
         })();
         """
         
-        webView.evaluateJavaScript(js) { [weak self] result, error in
-            if let text = result as? String {
-                self?.resume(returning: text)
-            } else {
-                self?.resume(throwing: error ?? NSError(domain: "WebScraper", code: -3, userInfo: [NSLocalizedDescriptionKey: "Kein Text extrahiert"]))
+        // callAsyncJavaScript statt evaluateJavaScript: Die async-IIFE liefert ein Promise, auf
+        // das evaluateJavaScript NICHT wartet (WKError 5) – jeder Aufruf fiel dadurch nach dem
+        // Timeout auf den statischen Regex-Pfad zurück (Audit 2026-10-12, Services K-1).
+        // Eigene Content-World: Seitenskripte sehen und verändern unsere Extraktion nicht.
+        let body = "return await " + js.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+        webView.callAsyncJavaScript(body, arguments: [:], in: nil, in: .defaultClient) { [weak self] result in
+            switch result {
+            case .success(let value):
+                if let text = value as? String {
+                    self?.resume(returning: text)
+                } else {
+                    self?.resume(throwing: NSError(domain: "WebScraper", code: -3, userInfo: [NSLocalizedDescriptionKey: "Kein Text extrahiert"]))
+                }
+            case .failure(let error):
+                self?.resume(throwing: error)
             }
         }
     }

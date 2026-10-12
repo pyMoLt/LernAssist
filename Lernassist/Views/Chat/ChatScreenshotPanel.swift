@@ -22,13 +22,13 @@ struct ChatScreenshotPanel: View {
         VStack(spacing: 0) {
             HStack {
                 Image(systemName: "photo.stack")
-                    .foregroundColor(.blue)
+                    .foregroundStyle(DS.Ink.accent)
                 Text("Bilder dieses Chats")
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
             }
@@ -43,10 +43,10 @@ struct ChatScreenshotPanel: View {
                     Spacer()
                     Image(systemName: "photo")
                         .font(.system(size: 40))
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     Text("Noch keine Screenshots in diesem Chat vorhanden.")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .padding(.top, 8)
                     Spacer()
                 }
@@ -65,7 +65,7 @@ struct ChatScreenshotPanel: View {
                 }
             }
         }
-        .frame(width: 500, height: 400)
+        .frame(minWidth: 380, idealWidth: 500, maxWidth: 500, minHeight: 300, idealHeight: 400, maxHeight: 400)
     }
 }
 
@@ -90,7 +90,7 @@ private struct ChatImageCell: View {
                     .frame(width: 8, height: 8)
                 Text(message.imageDescription != nil ? "Beschrieben" : "Noch nicht verarbeitet")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             
             Divider()
@@ -109,7 +109,7 @@ private struct ChatImageCell: View {
             }
             .buttonStyle(.plain)
             .font(.caption)
-            .foregroundColor(.blue)
+            .foregroundStyle(DS.Ink.accent)
         }
         .padding(8)
         .background(Color.primary.opacity(0.05))

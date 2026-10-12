@@ -82,15 +82,35 @@ struct Hotkey: Codable, Equatable {
         // wird zum Fadenkreuz), und Öffnen des Fensters den Screenshot doppelt auslöste. Eigener
         // Default-Key behebt die Kollision; siehe auch HotkeysTabView für Duplikat-Warnung bei
         // manueller Neubelegung.
-        .screenshot:    Hotkey(keyCode: 1,  modifiers: Int(cmdKey) | Int(shiftKey)),  // ⌘⇧S
-        .newChat:       Hotkey(keyCode: 78, modifiers: Int(cmdKey)),                  // ⌘N
-        .toggleSidebar: Hotkey(keyCode: 38, modifiers: Int(cmdKey)),                  // ⌘J
+        //
+        // Globale Hotkeys gelten in ALLEN Apps. ⌘⇧S („Sichern unter“), ⌘N und ⌘J kaperten deshalb
+        // Standard-Kürzel anderer Programme; „Neuer Chat“ lag zudem auf KeyCode 78 (Keypad-Minus)
+        // statt N (Audit 2026-10-12). Neue Defaults nutzen ⌃⇧ – systemweit kaum belegt.
+        .screenshot:    Hotkey(keyCode: 1,  modifiers: Int(controlKey) | Int(shiftKey)), // ⌃⇧S
+        .newChat:       Hotkey(keyCode: 45, modifiers: Int(controlKey) | Int(shiftKey)), // ⌃⇧N
+        .toggleSidebar: Hotkey(keyCode: 38, modifiers: Int(controlKey) | Int(shiftKey)), // ⌃⇧J
         // ⌥⌘E ("Explain"): Liest die aktuelle Textauswahl der AKTIVEN App und fragt das
         // Modell danach – benötigt die Zugriffs-Hilfen-Berechtigung (siehe AppDelegate).
         .explainSelection: Hotkey(keyCode: 14, modifiers: Int(cmdKey) | Int(optionKey)), // ⌘⌥E
     ]
 
     // MARK: - keyCode → lesbarer String
+
+    /// Frühere Defaults, die beim Laden alter Einstellungen auf die neuen umgestellt werden –
+    /// nur wenn der Nutzer sie nie geändert hat (Wert identisch mit dem alten Default).
+    static let legacyDefaultMap: [HotkeyAction: Hotkey] = [
+        .screenshot:    Hotkey(keyCode: 1,  modifiers: Int(cmdKey) | Int(shiftKey)),
+        .newChat:       Hotkey(keyCode: 78, modifiers: Int(cmdKey)),
+        .toggleSidebar: Hotkey(keyCode: 38, modifiers: Int(cmdKey)),
+    ]
+
+    static func migratedFromLegacyDefaults(_ stored: [String: Hotkey]) -> [String: Hotkey] {
+        var result = stored
+        for (action, legacy) in legacyDefaultMap where stored[action.rawValue] == legacy {
+            result[action.rawValue] = defaultMap[action]
+        }
+        return result
+    }
 
     static func keyCodeToString(_ kc: Int) -> String {
         let map: [Int: String] = [

@@ -25,7 +25,7 @@ struct AppearanceTabView: View {
                             Spacer()
                             Text("\(Int(viewModel.chatFontSize * 100))%")
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }
                         HStack(spacing: 10) {

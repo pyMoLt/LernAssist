@@ -74,7 +74,7 @@ struct PermissionOnboardingView: View {
                     .font(.system(.title2, design: .rounded).weight(.semibold))
                 Text("Zwei Berechtigungen schalten die komfortabelsten Funktionen frei. Du kannst sie jetzt oder später einrichten.")
                     .font(.callout)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, DS.Space.m)
             }
@@ -114,9 +114,9 @@ struct PermissionOnboardingView: View {
                     .disabled(!AppPermissions.allGranted)
                 }
                 if !AppPermissions.allGranted {
-                    Text("„Fertig“ wird aktiv, sobald beide Berechtigungen erteilt sind – oder wähle „Später“, dann erscheint dieses Fenster beim nächsten Start erneut.")
+                    Text("„Fertig“ wird aktiv, sobald beide Berechtigungen erteilt sind – oder wähle „Später“, dann meldet sich dieses Fenster in zwei Wochen wieder (jederzeit über die Einstellungen erreichbar).")
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, DS.Space.l)
                 }
@@ -148,7 +148,7 @@ private struct PermissionRow: View {
                 }
                 Text(permission.featureDescription)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -157,7 +157,7 @@ private struct PermissionRow: View {
             if permission.isGranted() {
                 Label("Erteilt", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.medium))
-                    .foregroundColor(.green)
+                    .foregroundStyle(.green)
                     .padding(.vertical, DS.Space.xs)
             } else {
                 Button("Berechtigen…") {
@@ -177,7 +177,7 @@ private struct PermissionRow: View {
             } else {
                 Text("Ausstehend")
                     .font(.caption2.weight(.medium))
-                    .foregroundColor(.orange)
+                    .foregroundStyle(.orange)
                     .padding(.horizontal, DS.Space.xs)
                     .padding(.vertical, DS.Space.xxs)
                     .background(Capsule().fill(Color.orange.opacity(0.12)))

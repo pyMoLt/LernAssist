@@ -21,7 +21,7 @@ struct MetricsBar: View {
                 if let status = viewModel.backgroundJobStatus {
                     Text(status)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .italic()
                 } else {
                     // LM Studio Lade-Status (nur während des Ladens / bei Fehler)
@@ -29,12 +29,12 @@ struct MetricsBar: View {
                     case .loading(let m):
                         Text("Lade \(m.split(separator: "/").last.map(String.init) ?? m)…")
                             .font(.caption2)
-                            .foregroundColor(.orange)
+                            .foregroundStyle(.orange)
                             .italic()
                     case .unreachable:
                         Text("LM Studio nicht erreichbar")
                             .font(.caption2)
-                            .foregroundColor(.red)
+                            .foregroundStyle(.red)
                     case .loaded, .idle:
                         if metrics.totalTokens > 0 || isStreaming {
                             // Tok/s — grün/gelb/orange je nach Speed
@@ -83,11 +83,11 @@ struct MetricsBar: View {
             case .unreachable:
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption2)
-                    .foregroundColor(.red)
+                    .foregroundStyle(.red)
             case .loaded:
                 Image(systemName: "checkmark.circle.fill")
                     .font(.caption2)
-                    .foregroundColor(.green)
+                    .foregroundStyle(.green)
             case .idle:
                 Circle().fill(Color.green).frame(width: 6, height: 6)
             }
@@ -113,7 +113,7 @@ struct MetricsBar: View {
                 if let profile = viewModel.activeProfile {
                     Label(profile.provider.shortLabel, systemImage: profile.provider.systemImage)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.secondary.opacity(0.12))
@@ -188,7 +188,7 @@ struct MetricsBar: View {
 
     private func metricRow(_ label: String, _ value: String, color: Color = .primary) -> some View {
         HStack {
-            Text(label).foregroundColor(.secondary)
+            Text(label).foregroundStyle(.secondary)
             Spacer()
             Text(value).fontWeight(.medium).foregroundColor(color)
         }

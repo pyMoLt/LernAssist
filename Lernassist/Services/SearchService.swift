@@ -3,7 +3,7 @@ import os
 
 // MARK: - Suchergebnis
 
-struct SearchResult {
+struct SearchResult: Sendable {
     let title: String
     let url: String
     let snippet: String
@@ -11,10 +11,91 @@ struct SearchResult {
     let providerScore: Double
 
     init(title: String, url: String, snippet: String, providerScore: Double = 0) {
-        self.title = title
-        self.url = url
-        self.snippet = snippet
+        self.title = String(title.prefix(300))
+        self.url = String(url.prefix(2_048))
+        self.snippet = String(snippet.prefix(600))
         self.providerScore = providerScore
+    }
+}
+
+/// Gemeinsame, flüchtige Begrenzung für alle Chats. Reservierte Startzeiten verhindern,
+/// dass parallel eingehende Modell-Calls gleichzeitig an SearXNG weitergereicht werden.
+actor SearchRequestPacing {
+    private var nextStart: [String: Date] = [:]
+    private var pauses: [String: (until: Date, code: Int)] = [:]
+    private let minimumSpacing: TimeInterval
+    private let jitterRange: ClosedRange<Double>
+
+    init(minimumSpacing: TimeInterval = 1.2, jitterRange: ClosedRange<Double> = 0...0.4) {
+        self.minimumSpacing = minimumSpacing
+        self.jitterRange = jitterRange
+    }
+
+    func waitTurn(for backend: String) async throws {
+        let now = Date()
+        if let pause = pauses[backend], pause.until.timeIntervalSince(now) > 15 {
+            throw SearchService.SearchError.rateLimited(pause.code, pause.until.timeIntervalSince(now))
+        }
+        let start = max(now, nextStart[backend] ?? now, pauses[backend]?.until ?? now)
+        nextStart[backend] = start.addingTimeInterval(minimumSpacing + Double.random(in: jitterRange))
+        let initialWait = start.timeIntervalSinceNow
+        if initialWait > 0 {
+            try await Task.sleep(nanoseconds: UInt64(initialWait * 1_000_000_000))
+        }
+        // Ein 429 kann eintreffen, während dieser Call bereits in der Warteschlange liegt.
+        while let pause = pauses[backend], pause.until > Date() {
+            try Task.checkCancellation()
+            let remaining = pause.until.timeIntervalSinceNow
+            if remaining > 15 { throw SearchService.SearchError.rateLimited(pause.code, remaining) }
+            try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+        try Task.checkCancellation()
+    }
+
+    func pause(_ backend: String, for seconds: TimeInterval, code: Int) {
+        let until = Date().addingTimeInterval(max(0, seconds))
+        if let existing = pauses[backend], existing.until > until { return }
+        pauses[backend] = (until, code)
+    }
+}
+
+/// Nur im RAM, höchstens 100 erfolgreiche Abfragen für maximal drei Minuten. Damit wächst
+/// nach vielen Sessions kein Suchverzeichnis auf Platte und alte Antworten verfallen rasch.
+actor SearchResultCache {
+    private struct Entry {
+        let results: [SearchResult]
+        let expires: Date
+        var lastAccess: Date
+    }
+    private var entries: [String: Entry] = [:]
+    private let lifetime: TimeInterval
+    private let limit: Int
+
+    init(lifetime: TimeInterval = 180, limit: Int = 100) {
+        self.lifetime = lifetime
+        self.limit = limit
+    }
+
+    func get(_ key: String) -> [SearchResult]? {
+        let now = Date()
+        guard var entry = entries[key] else { return nil }
+        guard entry.expires > now else {
+            entries.removeValue(forKey: key)
+            return nil
+        }
+        entry.lastAccess = now
+        entries[key] = entry
+        return entry.results
+    }
+
+    func put(_ results: [SearchResult], for key: String) {
+        let now = Date()
+        entries = entries.filter { $0.value.expires > now }
+        entries[key] = Entry(results: results, expires: now.addingTimeInterval(lifetime), lastAccess: now)
+        if entries.count > limit,
+           let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
+            entries.removeValue(forKey: oldest)
+        }
     }
 }
 
@@ -23,7 +104,7 @@ struct SearchResult {
 /// Websuche-Backend für den Lernassistenten.
 ///
 /// Unterstützte Backends:
-///   • SearXNG  – lokal (Docker), kein Rate-Limit, empfohlen
+///   • SearXNG  – eigene Instanz (Docker); Upstream-Engines können trotzdem begrenzen
 ///   • DuckDuckGo Instant Answers – zero Setup, nur für einfache Faktenfragen
 ///
 /// Schnellstart SearXNG mit Docker:
@@ -33,6 +114,17 @@ struct SearchResult {
 class SearchService {
     static let shared = SearchService()
 
+    private let pacing = SearchRequestPacing()
+    private let cache = SearchResultCache()
+    private let networkSession: URLSession
+
+    private init() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        networkSession = URLSession(configuration: configuration)
+    }
+
     // MARK: - Öffentliche API
 
     /// Führt eine Suche durch.
@@ -41,29 +133,44 @@ class SearchService {
     ///   - baseURL: SearXNG-Basis-URL (z.B. „http://127.0.0.1:8082").
     ///              Bei leerem String wird bewusst DuckDuckGo als einfacher Fallback verwendet.
     /// - Returns: Bis zu 5 Treffer
-    func search(query: String, baseURL: String) async throws -> [SearchResult] {
+    func search(query: String, baseURL: String, limit: Int = 5) async throws -> [SearchResult] {
         // Abbruchpunkt (Audit T8): Bei gecanceltem Tool-Call nicht weiter Requests starten.
         try Task.checkCancellation()
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedQuery = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
         guard !trimmedQuery.isEmpty else {
             AppLog.tools.info("Suchanfrage ist leer, überspringe Suche.")
             return []
         }
 
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let backend = trimmed.isEmpty ? "https://api.duckduckgo.com" : trimmed.lowercased()
+        let key = backend + "|general|auto|\(limit)|" + trimmedQuery
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if let cached = await cache.get(key) { return cached }
+
+        // Die Chat-TaskGroup darf mehrere Aufrufe parallel starten. Der gemeinsame Actor
+        // reserviert für ALLE Chats dieser App getrennte Startzeiten mit positivem Jitter.
+        try await pacing.waitTurn(for: backend)
+        try Task.checkCancellation()
+        if let cached = await cache.get(key) { return cached }
+
         guard !trimmed.isEmpty else {
             // Ein leer konfiguriertes Backend ist eine explizite Entscheidung für den einfachen
             // DDG-Fallback. Bei einer *gesetzten*, aber kaputten SearXNG-Adresse dagegen darf
             // nicht still ein anderer Dienst antworten: Instant Answers sind keine Volltextsuche
             // und lieferten dadurch für „Berlin Wetter“ oder das Trump-Kabinett falsche Treffer.
-            return try await duckduckgo(query: trimmedQuery)
+            let response = try await duckduckgo(query: trimmedQuery, backend: backend)
+            if response.cacheable { await cache.put(response.results, for: key) }
+            return response.results
         }
 
-        let results = try await searxng(query: trimmedQuery, baseURL: trimmed)
-        guard !results.isEmpty else {
+        let response = try await searxng(query: trimmedQuery, baseURL: trimmed, backend: backend, limit: limit)
+        guard !response.results.isEmpty else {
             throw SearchError.noResults
         }
-        return results
+        if response.cacheable { await cache.put(response.results, for: key) }
+        return response.results
     }
 
     /// Formatiert Suchergebnisse als kompakter Markdown-String für das Modell.
@@ -86,7 +193,7 @@ class SearchService {
 
     // MARK: - SearXNG
 
-    private func searxng(query: String, baseURL: String) async throws -> [SearchResult] {
+    private func searxng(query: String, baseURL: String, backend: String, limit: Int) async throws -> (results: [SearchResult], cacheable: Bool) {
         var base = baseURL
         if !base.lowercased().hasPrefix("http") { base = "http://" + base }
         while base.hasSuffix("/") { base = String(base.dropLast()) }
@@ -108,8 +215,13 @@ class SearchService {
         var req = URLRequest(url: url, timeoutInterval: 70)
         req.setValue("LernAssist/1.0", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await networkSession.data(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            if http.statusCode == 429 || http.statusCode == 503 {
+                let delay = Self.retryDelay(from: http, fallback: http.statusCode == 429 ? 5 : 3)
+                await pacing.pause(backend, for: delay, code: http.statusCode)
+                throw SearchError.rateLimited(http.statusCode, delay)
+            }
             throw SearchError.httpError(http.statusCode)
         }
 
@@ -133,14 +245,15 @@ class SearchService {
             else { return nil }
             let snippet = (r["content"] as? String) ?? ""
             let providerScore = (r["score"] as? NSNumber)?.doubleValue ?? 0
-            return SearchResult(title: title, url: urlStr, snippet: snippet, providerScore: providerScore)
+            return SearchResult(title: title, url: urlStr, snippet: snippet,
+                                providerScore: providerScore)
         }
 
         // SearXNG gruppiert Treffer mehrerer Engines nicht immer sauber nach Bedeutung. Vorher
         // wurde sogar VOR dem Parsen auf die ersten fünf Rohobjekte gekürzt. Damit fielen gute
         // Treffer, z.B. Senate.gov oder die konkrete Kabinett-Seite, hinter generischen
         // „Donald Trump – Wikipedia“-Treffern weg. Erst alle Treffer bewerten, dann kürzen.
-        return Self.rankResults(parsed, for: query)
+        return (Self.rankResults(parsed, for: query, limit: limit), Self.mayCache(response))
     }
 
     /// Sortiert SearXNG-Treffer nach Textbezug zur tatsächlichen Anfrage und erst danach nach
@@ -212,7 +325,7 @@ class SearchService {
 
     // MARK: - DuckDuckGo Instant Answers (Fallback, kein API-Key nötig)
 
-    private func duckduckgo(query: String) async throws -> [SearchResult] {
+    private func duckduckgo(query: String, backend: String) async throws -> (results: [SearchResult], cacheable: Bool) {
         try Task.checkCancellation() // Abbruchpunkt (Audit T8)
         var components = URLComponents(string: "https://api.duckduckgo.com/")
         components?.queryItems = [
@@ -229,10 +342,15 @@ class SearchService {
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.setValue("LernAssist/1.0", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await networkSession.data(for: req)
         // HTTP-Status prüfen (Audit T8): DDG rate-limittet mit 403 – vorher wurde die 403-
         // Fehlerseite als "Keine Ergebnisse" geparst statt den klaren Rate-Limit-Fehler zu melden.
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            if http.statusCode == 429 || http.statusCode == 503 || http.statusCode == 403 {
+                let delay = Self.retryDelay(from: http, fallback: 10)
+                await pacing.pause(backend, for: delay, code: http.statusCode)
+                throw SearchError.rateLimited(http.statusCode, delay)
+            }
             throw SearchError.httpError(http.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -265,7 +383,28 @@ class SearchService {
         }
 
         if results.isEmpty { throw SearchError.noResults }
-        return Array(results.prefix(5))
+        return (Array(results.prefix(5)), Self.mayCache(response))
+    }
+
+    /// Retry-After kann Sekunden oder ein HTTP-Datum enthalten (RFC 9110). Der Serverwert
+    /// wird beachtet; die App setzt nur für fehlende/ungültige Angaben einen kurzen Standard.
+    static func retryDelay(from response: HTTPURLResponse, fallback: TimeInterval) -> TimeInterval {
+        guard let value = response.value(forHTTPHeaderField: "Retry-After") else { return fallback }
+        if let seconds = TimeInterval(value), seconds >= 0 { return seconds }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in ["EEE, dd MMM yyyy HH:mm:ss zzz", "EEEE, dd-MMM-yy HH:mm:ss zzz", "EEE MMM d HH:mm:ss yyyy"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) { return max(0, date.timeIntervalSinceNow) }
+        }
+        return fallback
+    }
+
+    private static func mayCache(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse else { return true }
+        let directive = http.value(forHTTPHeaderField: "Cache-Control")?.lowercased() ?? ""
+        return !directive.contains("no-store")
     }
 
     private func parseDDGTopic(_ dict: [String: Any]) -> SearchResult? {
@@ -286,6 +425,7 @@ class SearchService {
     enum SearchError: LocalizedError {
         case invalidURL
         case httpError(Int)
+        case rateLimited(Int, TimeInterval)
         case parseError
         case noResults
 
@@ -293,6 +433,7 @@ class SearchService {
             switch self {
             case .invalidURL:       return "Ungültige Such-URL"
             case .httpError(let c): return "HTTP-Fehler \(c)"
+            case .rateLimited(let code, let delay): return "HTTP \(code): Suche vorübergehend begrenzt; nächste Anfrage frühestens in \(Int(ceil(delay))) Sekunden."
             case .parseError:       return "Antwort konnte nicht verarbeitet werden"
             case .noResults:        return "Keine Ergebnisse gefunden"
             }

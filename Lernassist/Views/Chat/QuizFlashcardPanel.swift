@@ -54,7 +54,7 @@ struct QuizFlashcardPanel: View {
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
             }
             .padding()
@@ -70,7 +70,7 @@ struct QuizFlashcardPanel: View {
                             .font(.headline)
                         Text("Kontext: \(textMessageCount) Nachrichten, \(imageCount) Bilder")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
                     
@@ -113,7 +113,7 @@ struct QuizFlashcardPanel: View {
                 dueReviewView
             }
         }
-        .frame(width: 700, height: 600)
+        .frame(minWidth: 480, idealWidth: 700, maxWidth: 700, minHeight: 380, idealHeight: 540, maxHeight: 600)
         .onAppear {
             // Dokument-Seed (Phase H): Direkt aus einem Dokument geöffnet → passenden Tab
             // wählen und die Generierung sofort anstoßen.
@@ -151,7 +151,7 @@ struct QuizFlashcardPanel: View {
                         .font(.system(size: 40))
                         .foregroundColor(.purple)
                     Text("Starte das interaktive Quiz basierend auf deinem aktuellen Chat.")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                     
                     Button("Quiz starten") {
                         startQuiz()
@@ -201,7 +201,7 @@ struct QuizFlashcardPanel: View {
                     Section("Aktionen") {
                         HStack {
                             Image(systemName: "plus.square.dashed")
-                                .foregroundColor(.blue)
+                                .foregroundStyle(DS.Ink.accent)
                             Text("Neues Set generieren")
                         }
                         .tag(UUID(uuidString: "00000000-0000-0000-0000-000000000000")!) // Magic ID
@@ -212,14 +212,14 @@ struct QuizFlashcardPanel: View {
                             ForEach(sets) { set in
                                 HStack {
                                     Image(systemName: "folder.fill")
-                                        .foregroundColor(.blue)
+                                        .foregroundStyle(DS.Ink.accent)
                                     VStack(alignment: .leading) {
                                         Text(set.title)
                                             .font(.subheadline)
                                             .lineLimit(1)
                                         Text("\(set.cards.count) Karten")
                                             .font(.caption)
-                                            .foregroundColor(.secondary)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
                                 .tag(set.id)
@@ -250,9 +250,9 @@ struct QuizFlashcardPanel: View {
                     VStack(spacing: 16) {
                         Image(systemName: "rectangle.stack")
                             .font(.system(size: 40))
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                         Text("Wähle ein Set aus oder erstelle ein neues.")
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -295,9 +295,9 @@ struct QuizFlashcardPanel: View {
             Spacer()
             Image(systemName: "rectangle.portrait.on.rectangle.portrait.angled")
                 .font(.system(size: 40))
-                .foregroundColor(.blue)
+                .foregroundStyle(DS.Ink.accent)
             Text("Generiere Karteikarten aus dem aktuellen Kontext.")
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
             
             HStack {
                 Text("Anzahl:")
@@ -324,7 +324,7 @@ struct QuizFlashcardPanel: View {
             if let err = flashcardErrorText {
                 Text(err)
                     .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundStyle(.red)
                     .padding(.horizontal)
             }
             Spacer()
@@ -376,7 +376,7 @@ struct QuizFlashcardPanel: View {
                 
                 Text("Klicke auf die Karte zum Umdrehen")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 
                 HStack(spacing: 40) {
                     Button("Vorherige") {
@@ -399,7 +399,7 @@ struct QuizFlashcardPanel: View {
                 }
             } else {
                 Text("Keine Karten geladen.")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
             
             Spacer()
@@ -418,16 +418,16 @@ struct QuizFlashcardPanel: View {
                 Spacer()
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 40))
-                    .foregroundColor(.green)
+                    .foregroundStyle(.green)
                 Text("Keine Karten fällig – alles erledigt! 🎉")
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
                 Spacer()
             } else {
                 let current = due[0]
 
                 Text("\(due.count) Karte\(due.count == 1 ? "" : "n") fällig")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
 
                 Text(current.sessionTitle)
                     .font(.caption2)
@@ -435,7 +435,7 @@ struct QuizFlashcardPanel: View {
                     .padding(.vertical, 3)
                     .background(Color.secondary.opacity(0.12))
                     .cornerRadius(4)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
@@ -483,7 +483,7 @@ struct QuizFlashcardPanel: View {
                 } else {
                     Text("Klicke auf die Karte, um sie umzudrehen und zu bewerten")
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -563,7 +563,9 @@ Anweisungen:
     private func generateFlashcards() {
         let history = buildContextString()
         let prompt = """
-Erstelle \(flashcardCount) Karteikarten aus dem folgenden Kontext.
+Erstelle \(flashcardCount) Karteikarten aus dem folgenden Lerngespräch. Decke die wichtigsten \
+Inhalte des GESAMTEN Gesprächs ab (auch frühe Abschnitte und die Folien/Screenshots), eine \
+Aussage pro Karte, Vorderseite als präzise Frage, Rückseite kurz und korrekt.
 Schwierigkeitsgrad: \(difficulty)
 Zusätzliche Anweisungen: \(customInstructions.isEmpty ? "Keine" : customInstructions)
 
@@ -582,7 +584,15 @@ Formatbeispiel:
         isGeneratingFlashcards = true
         flashcardErrorText = nil // alte Fehlermeldung beim erneuten Versuch zurücksetzen
         Task {
-            guard let result = await viewModel.sendInvisiblePrompt(prompt, context: []) else {
+            let schema: [String: Any] = [
+                "type": "object",
+                "properties": ["cards": ["type": "array", "items": [
+                    "type": "object",
+                    "properties": ["front": ["type": "string"], "back": ["type": "string"]],
+                    "required": ["front", "back"], "additionalProperties": false]]],
+                "required": ["cards"], "additionalProperties": false]
+            guard let result = await viewModel.sendInvisiblePrompt(prompt, context: recentScreenshotContext(),
+                                                                   jsonSchema: ("flashcards", schema)) else {
                 await MainActor.run {
                     flashcardErrorText = "Karteikarten konnten nicht erzeugt werden – Endpunkt nicht erreichbar. Bitte erneut versuchen."
                     self.isGeneratingFlashcards = false
@@ -590,14 +600,22 @@ Formatbeispiel:
                 return
             }
 
-            // Weit ausführlicheres JSON Parsing mit Regex und Reparatur
+            // Strukturierte Ausgabe: {"cards": [...]}. Fallback für Server ohne json_schema:
+            // Array per Regex herauslösen und reparieren.
             var jsonString = result
+            if let data = result.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let cards = object["cards"],
+               let cardsData = try? JSONSerialization.data(withJSONObject: cards),
+               let cardsString = String(data: cardsData, encoding: .utf8) {
+                jsonString = cardsString
+            }
             
             // 1. Extrahiere den Array-Block mit Regex (ignoriert jeglichen Text davor/danach)
             if let regex = try? NSRegularExpression(pattern: "\\[.*\\]", options: [.dotMatchesLineSeparators]),
-               let match = regex.firstMatch(in: result, options: [], range: NSRange(location: 0, length: result.utf16.count)) {
-                if let swiftRange = Range(match.range, in: result) {
-                    jsonString = String(result[swiftRange])
+               let match = regex.firstMatch(in: jsonString, options: [], range: NSRange(location: 0, length: jsonString.utf16.count)) {
+                if let swiftRange = Range(match.range, in: jsonString) {
+                    jsonString = String(jsonString[swiftRange])
                 }
             }
             
@@ -645,9 +663,17 @@ Formatbeispiel:
             return String(seed.text.prefix(12_000))
         }
         guard let session = session else { return "" }
-        return session.messages
-            .filter { $0.role != "system" }
-            .map { "[\($0.role)]: \($0.content.prefix(1000))" }
-            .joined(separator: "\n")
+        // Ganzer Chat statt 1.000 Zeichen je Nachricht; Screenshots als ihre Beschreibung,
+        // bei sehr langen Chats fallen die ältesten Nachrichten zuerst weg.
+        let dialog = session.messages.filter { $0.role == "user" || $0.role == "assistant" }
+        return ChatViewModel.compactionTranscript(of: dialog, characterBudget: 120_000)
+    }
+
+    /// Die letzten zwei Screenshots als Bild – kleine Beschreibungen allein verlieren Details.
+    private func recentScreenshotContext() -> [ChatMessage] {
+        guard studySeed == nil, let session else { return [] }
+        return Array(session.messages.filter { $0.role == "user" && ($0.imageID != nil || $0.imageBase64 != nil) }
+            .suffix(2))
+            .map { ChatMessage(role: "user", content: "[Folie/Screenshot aus dem Chat]", imageBase64: ChatViewModel.imagePayloadBase64(for: $0)) }
     }
 }
