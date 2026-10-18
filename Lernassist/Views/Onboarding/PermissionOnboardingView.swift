@@ -67,9 +67,8 @@ struct PermissionOnboardingView: View {
         VStack(spacing: 0) {
             // Kopf
             VStack(spacing: DS.Space.s) {
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(DS.Ink.accent.gradient)
+                LernAssistBrandIcon(size: 52)
+                    .shadow(color: DS.Accent.indigo.opacity(0.24), radius: 12, y: 4)
                 Text("Willkommen bei LernAssist")
                     .font(.system(.title2, design: .rounded).weight(.semibold))
                 Text("Zwei Berechtigungen schalten die komfortabelsten Funktionen frei. Du kannst sie jetzt oder später einrichten.")
@@ -81,21 +80,17 @@ struct PermissionOnboardingView: View {
             .padding(.top, DS.Space.xl)
             .padding(.bottom, DS.Space.l)
 
-            Divider()
-
             // Berechtigungen – Status im Sekundentakt live neu geprüft, damit das
             // Erteilen in den Systemeinstellungen sofort sichtbar wird.
             TimelineView(.periodic(from: .now, by: 1.0)) { _ in
-                VStack(spacing: DS.Space.l) {
+                VStack(spacing: DS.Space.m) {
                     ForEach(AppPermissions.all) { permission in
                         PermissionRow(permission: permission)
                     }
                 }
-                .padding(.vertical, DS.Space.l)
+                .padding(.vertical, DS.Space.m)
                 .padding(.horizontal, DS.Space.l)
             }
-
-            Divider()
 
             // Fuß
             VStack(spacing: DS.Space.s) {
@@ -103,14 +98,13 @@ struct PermissionOnboardingView: View {
                     Button("Später nachholen") {
                         onClose(false)
                     }
-                    .controlSize(.large)
+                    .buttonStyle(SoftActionButtonStyle())
 
                     Button("Fertig") {
                         completed = true
                         onClose(true)
                     }
-                    .controlSize(.large)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
                     .disabled(!AppPermissions.allGranted)
                 }
                 if !AppPermissions.allGranted {
@@ -125,12 +119,13 @@ struct PermissionOnboardingView: View {
         }
         .frame(width: 500)
         .fixedSize(horizontal: false, vertical: true)
+        .background(DS.Surface.canvas)
     }
 }
 
 // MARK: - PermissionRow
 
-private struct PermissionRow: View {
+struct PermissionRow: View {
     let permission: AppPermission
 
     var body: some View {

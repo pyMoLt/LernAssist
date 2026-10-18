@@ -8,18 +8,43 @@ import os
 extension ChatViewModel {
     // MARK: - Hilfsmethoden
 
-    /// Friert für alle Nachrichten außer `excludedId` (der neuen, gerade hervorgehobenen
-    /// Nachricht) den Bildkontext einmalig ein – siehe `ChatMessage.frozenImageContext`.
-    /// Läuft synchron auf dem Main-Actor, direkt bevor eine neue Anfrage aufgebaut wird.
-    func freezeImageContextForOlderMessages(sessionIdx: Int, excluding excludedId: UUID) {
-        guard !keepMultipleImagesInHistory else { return } // dort werden Bilder ohnehin immer roh mitgeschickt
-        for i in sessions[sessionIdx].messages.indices {
-            let msg = sessions[sessionIdx].messages[i]
-            guard msg.role == "user", msg.id != excludedId, msg.imageBase64 != nil || msg.imageID != nil,
-                  !msg.isImageContextFrozen else { continue }
-            sessions[sessionIdx].messages[i].frozenImageContext = msg.imageDescription
+    /// Wie viel Verlauf (geschätzte Tokens) hinter dem neuesten Screenshot liegen darf, bevor er
+    /// in Text umgewandelt wird.
+    static let imageRetentionTokenCap = 4_000
+
+    /// Bild-Regel für den Verlauf („B mit Deckel“): Der neueste Screenshot geht als Bild mit, bis
+    /// ein neuer Screenshot kommt oder mehr als `imageRetentionTokenCap` Tokens Verlauf hinter ihm
+    /// liegen. Dann wird er einmalig und dauerhaft auf seine Textbeschreibung eingefroren – erst,
+    /// wenn die Beschreibung fertig ist, sonst ginge der Bildinhalt verloren.
+    /// Hintergrund: Jede Umwandlung ändert den Prompt ab dieser Stelle und kostet eine
+    /// Neuberechnung von allem, was dahinter liegt. Der Deckel hält diese Kosten klein, und im
+    /// Kontext steht höchstens ein echtes Bild. Läuft direkt vor dem Aufbau jeder neuen Anfrage.
+    func applyImageRetention(sessionIdx: Int) {
+        guard !keepMultipleImagesInHistory, sessions.indices.contains(sessionIdx) else { return }
+        let messages = sessions[sessionIdx].messages
+        func hasImage(_ msg: ChatMessage) -> Bool {
+            msg.role == "user" && (msg.imageBase64 != nil || msg.imageID != nil)
+        }
+        guard let newest = messages.lastIndex(where: hasImage) else { return }
+        for i in messages.indices where hasImage(messages[i]) && !messages[i].isImageContextFrozen {
+            if i == newest {
+                let behind = messages[(i + 1)...].reduce(0) { $0 + Self.estimatedHistoryTokens(of: $1) }
+                if behind <= Self.imageRetentionTokenCap { continue }
+            }
+            // Ohne automatische Bildbeschreibung gibt es nie eine – dann wie bisher ohne Text.
+            if autoImageToTextEnabled, messages[i].imageDescription == nil { continue }
+            sessions[sessionIdx].messages[i].frozenImageContext = messages[i].imageDescription
             sessions[sessionIdx].messages[i].isImageContextFrozen = true
         }
+    }
+
+    /// Grobe Token-Schätzung einer gespeicherten Nachricht (Text, Thinking, Tool-Ergebnisse).
+    static func estimatedHistoryTokens(of msg: ChatMessage) -> Int {
+        var chars = msg.content.count + (msg.thinking?.count ?? 0)
+        for call in msg.toolCalls ?? [] {
+            chars += call.arguments.count + (call.result?.count ?? 0)
+        }
+        return chars / 4
     }
 
     /// Inline-Think-Tag-Paar, per Unicode-Escapes geschrieben (identisch zu den Tags im
@@ -53,6 +78,8 @@ extension ChatViewModel {
             }
         }
         if let imagesField = message["images"] as? [String] { images += imagesField.count }
+        // Mitgesendetes Thinking (Preserve Thinking) belegt ebenfalls Kontext.
+        if let reasoning = message["reasoning_content"] as? String { chars += reasoning.count }
         // Ollama liefert Bilder als flaches base64-Array statt als content-Teile.
         return chars / 4 + images * 2500 + 16
     }
@@ -64,9 +91,13 @@ extension ChatViewModel {
     /// Folge-Anfrage mit 400 ablehnt). System-Nachricht (Index 0) und die letzte Runde bleiben
     /// immer erhalten. Deterministisch, damit der Prompt-Präfix bei unverändertem Verlauf
     /// stabil bleibt und der serverseitige KV-Cache nicht unnötig invalidiert wird.
+    static let fallbackContextWindow = 32_768
+
     static func trimmedToContextBudget(_ messages: [[String: Any]], contextWindow: Int?, maxTokens: Int?) -> [[String: Any]] {
-        // 75 % des Fensters als Prompt-Budget, der Rest als Reserve für die Antwort.
-        let window = max(contextWindow ?? 8192, 2048)
+        // 75 % des Fensters als Prompt-Budget, der Rest als Reserve für die Antwort. Ohne
+        // bekannte Fenstergröße 32k (oMLX-Standard) statt 8k: Mit 8k schnitt die App bei Profilen
+        // ohne gemeldete Größe schon ab ~7k Tokens bei jeder Anfrage den Verlaufsanfang ab.
+        let window = max(contextWindow ?? Self.fallbackContextWindow, 2048)
         let reserve = min(maxTokens ?? 1024, window / 4)
         let budget = max(window - reserve, window / 2)
 
@@ -97,12 +128,19 @@ extension ChatViewModel {
         let lastUserIndex = messages.lastIndex(where: { ($0["role"] as? String) == "user" }) ?? messages.count - 1
         let protectedStart = max(1, min(lastUserIndex, segments.last?.lowerBound ?? lastUserIndex))
 
-        var remaining = total(messages)
+        // In Blöcken kürzen statt jedes Mal knapp unter das Budget: Würde die Schnittstelle mit
+        // jeder neuen Nachricht ein Stück wandern, wäre der Prompt-Anfang bei jeder Anfrage anders
+        // und der Server müsste alles neu berechnen. So bleibt der Schnitt stehen, bis wieder ein
+        // ganzer Block (30 % des Budgets) dazugekommen ist.
+        let chunk = max(budget * 3 / 10, 1)
+        let overflow = total(messages) - budget
+        let toRemove = ((overflow + chunk - 1) / chunk) * chunk
+        var removed = 0
         var removeUntil = 0
         for segment in segments where segment.upperBound <= protectedStart {
-            if remaining <= budget { break }
+            if removed >= toRemove { break }
             for idx in segment {
-                remaining -= estimatedTokens(of: messages[idx])
+                removed += estimatedTokens(of: messages[idx])
             }
             removeUntil = segment.upperBound
         }

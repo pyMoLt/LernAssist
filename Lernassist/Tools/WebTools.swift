@@ -43,8 +43,10 @@ final class WebSearchTool: AppTool {
 Recherchiert im Web (SearXNG, Wikipedia, Fachdatenbanken) und liefert die relevantesten Textabsätze \
 mit Quellen [W1], [W2] …. Nutze es für Fakten, die du nicht sicher weißt, für Zahlen, Definitionen, \
 Leitlinien und aktuelle Informationen. Formuliere eine kurze, präzise Suchanfrage (3–8 Wörter, \
-Fachbegriffe). Zitiere die Belege in deiner Antwort mit [W#]. Nicht nutzen für einfache Rechnungen \
-oder Dinge, die du sicher weißt.
+Fachbegriffe). Zitiere die Belege in deiner Antwort mit [W#]. Belege können Abbildungen enthalten \
+([B#] mit Beschreibung) – hilft eine zur Erklärung, schreibe [B#] allein in eine Zeile, und zwar dort, wo du über \
+das Gezeigte sprichst (direkt vor oder nach dem Absatz, auf den sich das Bild bezieht); die App zeigt es dort an. \
+Nicht nutzen für einfache Rechnungen oder Dinge, die du sicher weißt.
 """
     let parameters: [String: Any] = [
         "type": "object",
@@ -74,7 +76,8 @@ oder Dinge, die du sicher weißt.
             return .failure("Suche fehlgeschlagen:\n\(detail)", kind: .transient)
         }
         return ToolResult(content: ToolPromptHelpers.externalContent(result.modelText),
-                          source: result.passages.first?.url)
+                          source: result.passages.first?.url,
+                          artifacts: result.images.isEmpty ? [] : [.researchImages(result.images)])
     }
 }
 
@@ -86,22 +89,50 @@ final class BrowseURLTool: AppTool {
     let name = "browse_url"
     let displayName = "URL lesen"
     let description = """
-Liest eine bestimmte Webseite oder ein PDF als bereinigten Text. Mit `focus` (worum es dir geht) \
-bekommst du nur die passenden Absätze – empfohlen bei langen Seiten. Ohne `focus` kommt der Text \
-abschnittsweise; für den nächsten Abschnitt rufe dieselbe URL mit dem genannten `offset` erneut auf. \
-Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu lesen.
+Liest eine bestimmte Webseite oder ein PDF als bereinigten Text. In den meisten Fällen genügt `focus`, \
+um gezielt Informationen aus einem langen Text zu finden. Nur wenn du die Seite wirklich vollständig der \
+Reihe nach lesen musst, nutze `offset`. Fehlen beide Parameter, wird automatisch die aktuelle Frage des Nutzers als `focus` verwendet. \
+Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu lesen. Die Seite kann \
+Abbildungen enthalten ([B#] mit Beschreibung) – hilft eine zur Erklärung, schreibe [B#] allein in eine Zeile, \
+direkt vor oder nach dem Absatz, auf den sich das Bild bezieht.
 """
     let parameters: [String: Any] = [
         "type": "object",
         "properties": [
             "url": ["type": "string", "description": "Vollständige URL (https://…)"],
-            "focus": ["type": "string", "description": "Optional: Wonach du auf der Seite suchst, z. B. „Dosierung bei Niereninsuffizienz“"],
-            "offset": ["type": "integer", "minimum": 0, "description": "Optional: Zeichenoffset für den nächsten Abschnitt (ohne focus)"]
+            "focus": ["type": "string", "description": "Optional: Wonach du auf der Seite suchst (Standard, z. B. „Dosierung bei Niereninsuffizienz“). In den meisten Fällen genügt focus."],
+            "offset": ["type": "integer", "minimum": 0, "description": "Optional: Zeichenoffset für das fortlaufende Lesen der Reihe nach (nur wenn die Seite vollständig gelesen werden muss)"]
         ],
         "required": ["url"]
     ]
     var isEnabled: Bool = true
     var configuration = ResearchToolConfiguration()
+    /// Liefert die aktuelle Frage des Nutzers für den automatischen Fokus-Modus
+    var currentQuestionProvider: ((String?) -> String?)?
+
+    /// Fehlen `focus` und `offset`, liest das Tool im Fokus-Modus mit der Nutzerfrage (siehe
+    /// `automaticFocus`). Ein expliziter `offset` (auch 0) liest immer der Reihe nach.
+    static func resolveFocusAndOffset(arguments: [String: Any], question: String?) -> (focus: String, offset: Int) {
+        let rawFocus = ToolArguments.string(arguments, "focus")
+        let rawOffset = ToolArguments.nonNegativeInt(arguments, "offset")
+        if rawFocus.isEmpty && rawOffset == nil {
+            return (automaticFocus(from: question ?? "") ?? "", 0)
+        }
+        return (rawFocus, rawOffset ?? 0)
+    }
+
+    /// Fokus aus der Nutzerfrage, wenn das Modell weder `focus` noch `offset` angibt. nil heißt
+    /// der Reihe nach lesen: Besteht die Nachricht im Wesentlichen nur aus dem Link oder will der
+    /// Nutzer die ganze Seite bzw. eine Zusammenfassung, ergäben Fokus-Ausschnitte nur Bruchstücke.
+    static func automaticFocus(from question: String) -> String? {
+        let withoutLinks = question.replacingOccurrences(of: #"https?://\S+"#, with: " ", options: .regularExpression)
+        let text = withoutLinks.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = text.split(whereSeparator: { $0.isWhitespace }).filter { $0.contains(where: \.isLetter) }
+        guard words.count >= 4 else { return nil }
+        let wholePage = #"(?i)zusammenfass|fass\w* .*zusammen|ganze[nr]? (seite|artikel|text)|gesamte[nr]? (seite|artikel|text)|vollständig|komplett (lesen|durch)|summar|tl;?dr|was steht (da|dort|auf der seite|in dem artikel)"#
+        if text.range(of: wholePage, options: .regularExpression) != nil { return nil }
+        return String(text.prefix(500))
+    }
 
     var maxBrowseCharacters: Int {
         get { configuration.maxBrowseCharacters }
@@ -113,8 +144,8 @@ Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu 
     func run(arguments: String, sessionID: String?) async -> ToolResult {
         let args = ToolArguments.object(arguments)
         let urlString = ToolArguments.string(args, "url")
-        let focus = ToolArguments.string(args, "focus")
-        let offset = ToolArguments.nonNegativeInt(args, "offset") ?? 0
+        let (focus, offset) = Self.resolveFocusAndOffset(arguments: args,
+                                                         question: currentQuestionProvider?(sessionID))
 
         guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https", url.host?.isEmpty == false else {
@@ -133,6 +164,10 @@ Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu 
         }
 
         let limit = max(500, min(maxBrowseCharacters, 100_000))
+        // Abbildungen der Seite (höchstens 3), zur Frage bzw. zum Fokus gerankt.
+        let images = await pageImages(of: document, query: focus.isEmpty ? (currentQuestionProvider?(sessionID) ?? document.title) : focus)
+        let imageText = ResearchImages.modelText(for: images)
+        let imageArtifacts: [ToolArtifact] = images.isEmpty ? [] : [.researchImages(images)]
         let header = [document.title.isEmpty ? nil : "Titel: \(document.title)",
                       "URL: \(document.url)",
                       document.published.map { "Datum: \($0.prefix(10))" }].compactMap { $0 }.joined(separator: "\n")
@@ -143,7 +178,7 @@ Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu 
             var scores = zip(PassageRanker.bm25(documents: pieces.map(PassageRanker.tokens), query: queryTokens), pieces)
                 .map { $0 * PassageRanker.proseQuality($1) }
             if configuration.settings.rerankerMode == .auto, let reranker = configuration.reranker, !pieces.isEmpty {
-                let window = Array(pieces.indices.sorted { scores[$0] > scores[$1] }.prefix(60))
+                let window = Array(pieces.indices.sorted { scores[$0] > scores[$1] }.prefix(max(1, configuration.settings.rerankerWindow)))
                 if let rerank = try? await reranker.scores(query: focus, documents: window.map { pieces[$0] }) {
                     var combined = Array(repeating: -1.0, count: pieces.count)
                     for (position, index) in window.enumerated() { combined[index] = rerank[position] * PassageRanker.proseQuality(pieces[index]) }
@@ -161,11 +196,23 @@ Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu 
             let body = chosen.isEmpty
                 ? "Zu „\(focus)“ steht auf dieser Seite nichts Passendes. Erster Abschnitt:\n\n" + String(document.text.prefix(min(limit, 2_000)))
                 : chosen.map(\.1).joined(separator: "\n\n[…]\n\n")
-            return ToolResult(content: ToolPromptHelpers.externalContent(header + "\n\n" + body), source: document.url)
+            return ToolResult(content: ToolPromptHelpers.externalContent(header + "\n\n" + body + imageText),
+                              source: document.url, artifacts: imageArtifacts)
         }
 
         let slice = WebContentService.sliceContent(document.text, offset: offset, maxCharacters: limit)
-        return ToolResult(content: ToolPromptHelpers.externalContent(header + "\n\n" + slice), source: document.url)
+        return ToolResult(content: ToolPromptHelpers.externalContent(header + "\n\n" + slice + imageText),
+                          source: document.url, artifacts: imageArtifacts)
+    }
+
+    private func pageImages(of document: ExtractedDocument, query: String) async -> [ResearchImageRef] {
+        let settings = configuration.settings
+        guard settings.imagesEnabled, !document.images.isEmpty else { return [] }
+        let picked = await ResearchImages.rank(document.images.map { (image: $0, pageTitle: document.title) }, query: query,
+                                               reranker: settings.rerankerMode == .auto ? configuration.reranker : nil,
+                                               limit: ResearchImages.maxPerPage + 2)
+        guard !picked.isEmpty else { return [] }
+        return await ResearchImages.downloadAll(picked, limit: ResearchImages.maxPerPage)
     }
 
     /// Abruf mit Cache. Bei zu wenig Text (JavaScript-Seiten) wird die Seite in einem unsichtbaren
@@ -205,6 +252,14 @@ Nutze es für Links des Nutzers oder um einen Beleg aus der Websuche genauer zu 
 
 /// Kurzlebiger Seiten-Cache für browse_url (Abschnitte/Fokus ohne erneuten Abruf).
 actor DocumentCache {
+    /// Standard-Lebensdauer (Einstellungen → Tools → Erweitert). Vom Main-Thread gesetzt,
+    /// im Actor gelesen – daher hinter einem Lock.
+    nonisolated static var defaultDuration: TimeInterval {
+        get { durationLock.lock(); defer { durationLock.unlock() }; return storedDuration }
+        set { durationLock.lock(); storedDuration = newValue; durationLock.unlock() }
+    }
+    private static let durationLock = NSLock()
+    nonisolated(unsafe) private static var storedDuration: TimeInterval = 600
     private var entries: [String: (document: ExtractedDocument, expires: Date)] = [:]
 
     func get(_ key: String) -> ExtractedDocument? {
@@ -212,9 +267,10 @@ actor DocumentCache {
         return entry.document
     }
 
-    func put(_ document: ExtractedDocument, for key: String) {
+    func put(_ document: ExtractedDocument, for key: String, duration: TimeInterval? = nil) {
+        let ttl = duration ?? Self.defaultDuration
         entries = entries.filter { $0.value.expires > Date() }
         if entries.count > 30, let oldest = entries.min(by: { $0.value.expires < $1.value.expires })?.key { entries[oldest] = nil }
-        entries[key] = (document, Date().addingTimeInterval(600))
+        entries[key] = (document, Date().addingTimeInterval(ttl))
     }
 }

@@ -20,9 +20,10 @@ struct ToolActivityView: View {
         let p = presentation
         VStack(alignment: .leading, spacing: DS.Space.s) {
             header(p)
+                .zIndex(1)
             if isExpanded {
                 details(p)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
         }
         .onChange(of: call.result != nil) { _, finished in
@@ -76,6 +77,8 @@ struct ToolActivityView: View {
     private func statusIcon(_ p: ToolCallPresentation) -> some View {
         if p.isRunning {
             ProgressView().controlSize(.mini)
+        } else if p.isLimitReached {
+            Image(systemName: "info.circle.fill").font(.caption).foregroundStyle(.secondary)
         } else if p.isError {
             Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
                 .symbolEffect(.bounce, value: p.isError)
@@ -87,6 +90,7 @@ struct ToolActivityView: View {
 
     private func collapsedSummary(_ p: ToolCallPresentation) -> String? {
         guard !p.isRunning else { return nil }
+        if p.isLimitReached { return "Limit erreicht" }
         switch call.name {
         case "web_search":
             let count = p.sources.count
@@ -190,6 +194,9 @@ struct CodeEditorView: View {
     let language: String
     let isStreaming: Bool
 
+    /// Zeilenhöhe von 11,5-pt-Monospace (für die inhaltsabhängige Höhe).
+    private static let lineHeight: CGFloat = 14.2
+
     var body: some View {
         let lines = max(1, code.components(separatedBy: "\n").count)
         ScrollViewReader { proxy in
@@ -197,6 +204,7 @@ struct CodeEditorView: View {
                 HStack(alignment: .top, spacing: 12) {
                     Text((1...lines).map(String.init).joined(separator: "\n"))
                         .font(.system(size: 11.5, design: .monospaced))
+                        .lineSpacing(0)
                         .foregroundStyle(CodeHighlighter.Palette.gutter)
                         .multilineTextAlignment(.trailing)
                     Text(CodeHighlighter.highlight(code + (isStreaming ? "▍" : ""), language: language))
@@ -208,7 +216,8 @@ struct CodeEditorView: View {
                 .padding(10)
                 Color.clear.frame(height: 1).id("end")
             }
-            .frame(maxHeight: 280)
+            // Kurzer Code ohne Leerraum, langer Code scrollt (Mausrad geht am Ende an den Chat).
+            .frame(height: min(CGFloat(lines) * Self.lineHeight + 22, 300))
             .background(CodeHighlighter.Palette.background)
             .onChange(of: code.count) { _, _ in
                 if isStreaming { proxy.scrollTo("end", anchor: .bottom) }
@@ -271,13 +280,14 @@ struct TerminalView: View {
     }
 
     private func outputText(_ text: String, failed: Bool) -> some View {
-        ScrollView {
+        let lines = text.components(separatedBy: "\n").count
+        return ScrollView {
             Text(Self.colorizedOutput(text, failed: failed))
                 .font(.system(size: 11, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxHeight: 200)
+        .frame(height: min(CGFloat(lines) * 13.8 + 6, 220))
     }
 
     /// Traceback-/Error-Zeilen rot, Rest normal.

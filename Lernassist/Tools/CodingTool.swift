@@ -6,14 +6,17 @@ final class CodingTool: AppTool {
     let name = "coding_sandbox"
     let displayName = "Coding & Interactive Sandbox"
     let description = """
-Führt Code aus und zeigt das Ergebnis direkt im Chat. language "python" (Python 3.12 mit numpy, \
-pandas, scipy, sympy, matplotlib, seaborn, statsmodels, networkx, openpyxl): Berechnungen, \
-Datenauswertung (angehängte Dateien liegen im Arbeitsordner), Plots (Bilder erscheinen automatisch). \
-Fehlt ein Paket, nenne es in `install_packages`. language "html": interaktive Erklärungen, Simulationen und Animationen als EINE \
-selbstständige HTML-Datei mit inline JS/CSS, SVG oder Canvas (keine externen Skripte/CDNs). \
-Nutze HTML für alles Interaktive, Python für Daten und statische Grafiken. Keine GUI-Fenster \
-(tkinter, pygame) und kein Netzwerkzugriff. Bei Fehlern bekommst du Traceback und betroffene \
-Codezeilen – sende dann eine korrigierte Vollversion.
+Führt Code aus und zeigt das Ergebnis direkt im Chat – für Datenauswertung, Berechnungen, Grafiken \
+und interaktive Darstellungen. language "python" (Python 3.12 mit numpy, pandas, scipy, sympy, matplotlib, \
+seaborn, statsmodels, networkx, openpyxl, requests): Berechnungen, Datenauswertung (angehängte Dateien liegen im \
+Arbeitsordner), Plots (Bilder erscheinen automatisch). Fehlt ein Paket, nenne es in `install_packages`. \
+language "html": interaktive Erklärungen, Simulationen und Animationen als EINE selbstständige HTML-Datei \
+mit inline JS/CSS, SVG oder Canvas (keine externen Skripte/CDNs). Keine GUI-Fenster (tkinter, pygame). \
+Python darf Daten aus dem Internet laden, nur über https (ganz normal mit requests, urllib oder \
+pd.read_csv("https://…")). Neue Domains bestätigt der Nutzer automatisch per Dialog – du musst nichts \
+weiter tun. Erlaubt sind Datenformate wie CSV, JSON, Excel und PDF; wird eine Verbindung abgelehnt, steht \
+der Grund in der Fehlermeldung (\"LernAssist: …\"). Bei Fehlern bekommst du Traceback und betroffene Codezeilen – sende dann eine \
+korrigierte Vollversion.
 """
     let parameters: [String: Any] = [
         "type": "object",
@@ -36,7 +39,7 @@ Codezeilen – sende dann eine korrigierte Vollversion.
         "required": ["code", "language"]
     ]
     
-    // Standard an (Nutzer, 12.10.2026): Visualisierungen und Datenauswertung sind ausdrücklich
+    // Standard an (Entscheidung vom 12.10.2026): Visualisierungen und Datenauswertung sind ausdrücklich
     // gewünscht. Python läuft in der Sandbox (kein Netz, keine Home-Lesezugriffe).
     var isEnabled: Bool = true
 
@@ -58,7 +61,8 @@ Codezeilen – sende dann eine korrigierte Vollversion.
         }
         
         if language.lowercased() == "html" {
-            if let externalResource = Self.blockedExternalResource(in: code) {
+            let cleanCode = Self.sanitizeHTMLCode(code)
+            if let externalResource = Self.blockedExternalResource(in: cleanCode) {
                 return .failure("Die HTML-Ausgabe enthält eine externe Ressource (\(externalResource)). Diese Chat-Ansicht blockiert externe Skripte/Styles/Ressourcen. Verwende eine vollständig selbstständige HTML-Datei mit inline-JavaScript, inline-CSS, SVG oder Canvas.")
             }
             // Wird von ChatViewModel direkt als eigene, sandboxed gerenderte Chat-Nachricht
@@ -67,10 +71,17 @@ Codezeilen – sende dann eine korrigierte Vollversion.
             // erschien (nie tatsächlich gerendert wurde).
             return ToolResult(
                 content: "Interaktive HTML-Ausgabe wurde direkt im Chat angezeigt.\n\n" + Self.explainReminder,
-                artifacts: [.html(code)]
+                artifacts: [.html(cleanCode)]
             )
         }
         
+        // Ohne eingerichtete Umgebung gibt es nur kryptische Sandbox-Fehler (execvp …). Klar melden,
+        // damit das Modell nicht auf Umwege (ASCII-Grafik, HTML) ausweicht und der Nutzer weiß, was zu tun ist.
+        let legacyPython = AppStorageLocation.root.appendingPathComponent("venv/bin/python3").path
+        guard PythonEnvironmentInstaller.isReady || FileManager.default.isExecutableFile(atPath: legacyPython) else {
+            return .failure("Die Python-Umgebung ist auf diesem Mac noch nicht eingerichtet (Einstellungen → Tools → Python-Sandbox → „Neu einrichten“). Führe in dieser Antwort keinen Python-Code aus und sage dem Nutzer kurz, dass die Einrichtung nötig ist.")
+        }
+
         var setupLog = ""
         
         // Pakete installieren (Nur für Python)
@@ -86,10 +97,14 @@ Codezeilen – sende dann eine korrigierte Vollversion.
             }
         }
         
-        // Code ausführen
+        return await runPython(code: code, sessionID: sessionID, setupLog: setupLog)
+    }
+
+    private func runPython(code: String, sessionID: String?, setupLog: String) async -> ToolResult {
         do {
             let inputFiles = dataFilesProvider(sessionID)
-            let result = try await CodingEnvironment.shared.runPythonScript(code: code, sessionID: sessionID, inputFiles: inputFiles)
+            let result = try await CodingEnvironment.shared.runPythonScript(
+                code: code, sessionID: sessionID, inputFiles: inputFiles)
 
             var finalOutput = ""
             if !setupLog.isEmpty {
@@ -104,10 +119,15 @@ Codezeilen – sende dann eine korrigierte Vollversion.
             if result.timedOut {
                 finalOutput += "\n\nExit Code: \(result.exitCode)"
                 finalOutput += "\nDas Skript wurde wegen des Zeitlimits beendet – prüfe Endlosschleifen oder blockierende Aufrufe und sende eine korrigierte Vollversion."
+            } else if result.exitCode == 71, result.output.contains("sandbox-exec") {
+                return .failure("Die Python-Sandbox konnte den Interpreter nicht starten (\(result.output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))). Das ist ein Problem der App-Umgebung, nicht deines Codes – wiederhole den Aufruf nicht, sondern sage dem Nutzer, dass die Python-Umgebung neu eingerichtet werden sollte (Einstellungen → Tools).")
             } else if result.exitCode != 0 {
                 finalOutput += "\n\nExit Code: \(result.exitCode)"
                 if let context = Self.errorContext(output: result.output, code: code) {
                     finalOutput += "\n\n--- BETROFFENE CODEZEILEN ---\n" + context
+                }
+                if !CodingEnvironment.shared.limits.internetEnabled, Self.looksLikeNetworkAttempt(result.output) {
+                    finalOutput += "\nInternet für Python ist in den Einstellungen ausgeschaltet. Arbeite ohne Online-Daten oder nutze web_search."
                 }
                 finalOutput += "\nKorrigiere den Fehler und sende eine vollständige, korrigierte Version an coding_sandbox."
             }
@@ -134,6 +154,31 @@ Codezeilen – sende dann eine korrigierte Vollversion.
         }
     }
 
+    /// Hat der Code versucht, selbst ins Netz zu gehen (requests, urllib, socket)?
+    static func looksLikeNetworkAttempt(_ output: String) -> Bool {
+        let markers = ["ConnectionError", "NewConnectionError", "urlopen error", "getaddrinfo", "gaierror",
+                       "Max retries exceeded", "Network is unreachable", "nodename nor servname",
+                       "socket.error", "Failed to establish a new connection", "PermissionError: [Errno 1]"]
+        return markers.contains { output.contains($0) }
+    }
+
+    /// Bereinigt HTML-Code von Code-Block-Markern (```html ... ```), falls ein Modell
+    /// das HTML in Markdown-Fences verpackt hat.
+    static func sanitizeHTMLCode(_ rawCode: String) -> String {
+        var code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code.hasPrefix("```") {
+            let lines = code.components(separatedBy: "\n")
+            if lines.count >= 2 {
+                let startIdx = 1
+                let endIdx = lines.last?.trimmingCharacters(in: .whitespaces) == "```" ? lines.count - 1 : lines.count
+                if startIdx < endIdx {
+                    code = lines[startIdx..<endIdx].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+        return code
+    }
+
     /// Zeilen rund um die letzte Traceback-Stelle im Skript (Zeilennummern bezogen auf den Code
     /// des Modells, ohne den App-Vorspann). Ersetzt das frühere Nachlesen per run_command.
     static func errorContext(output: String, code: String, radius: Int = 2) -> String? {
@@ -142,7 +187,8 @@ Codezeilen – sende dann eine korrigierte Vollversion.
         let matches = regex.matches(in: output, range: NSRange(output.startIndex..., in: output))
         guard let last = matches.last, let range = Range(last.range(at: 1), in: output),
               let scriptLine = Int(output[range]) else { return nil }
-        let codeLines = code.components(separatedBy: "\n")
+        let cleanCode = CodingEnvironment.sanitizePythonCode(code)
+        let codeLines = cleanCode.components(separatedBy: "\n")
         let line = scriptLine - CodingEnvironment.preludeLineCount
         guard line >= 1, line <= codeLines.count else { return nil }
         let lower = max(1, line - radius), upper = min(codeLines.count, line + radius)

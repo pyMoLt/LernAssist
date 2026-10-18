@@ -8,6 +8,8 @@ nonisolated struct ExtractedDocument: Equatable, Sendable {
     var published: String?
     /// Absätze/Überschriften/Listenpunkte/Tabellenzeilen in Lesereihenfolge.
     var blocks: [String]
+    /// Abbildungen aus dem Hauptinhalt (Kandidaten; gefiltert wird in `ResearchImages`).
+    var images: [PageImage] = []
 
     var text: String { blocks.joined(separator: "\n\n") }
     var characterCount: Int { blocks.reduce(0) { $0 + $1.count } }
@@ -40,7 +42,7 @@ nonisolated enum ContentExtractor {
 
     private static let removedTags = [
         "script", "style", "noscript", "svg", "canvas", "iframe", "object", "embed",
-        "form", "button", "input", "select", "textarea", "video", "audio", "picture", "map",
+        "form", "button", "input", "select", "textarea", "video", "audio", "map",
     ]
 
     /// HTML5-Elemente, die libxml2s HTML4-Tidy verwirft (Inhalt bleibt, Tag verschwindet). Sie werden
@@ -89,6 +91,7 @@ nonisolated enum ContentExtractor {
         removeBoilerplateContainers(in: root)
 
         let container = bestContainer(in: root) ?? root
+        let images = pageImages(in: container, pageURL: url)
         var blocks: [String] = []
         collectBlocks(from: container, into: &blocks)
         blocks = dedupeAdjacent(blocks.filter { $0.count >= 2 })
@@ -99,7 +102,60 @@ nonisolated enum ContentExtractor {
             collectBlocks(from: root, into: &all)
             if all.reduce(0, { $0 + $1.count }) > blocks.reduce(0, { $0 + $1.count }) { blocks = dedupeAdjacent(all) }
         }
-        return ExtractedDocument(title: String(title.prefix(300)), url: url, published: published, blocks: blocks)
+        return ExtractedDocument(title: String(title.prefix(300)), url: url, published: published, blocks: blocks, images: images)
+    }
+
+    /// Bilder im Hauptinhalt mit Bildunterschrift (figure/figcaption, Wikipedia-thumbcaption) oder Alt-Text.
+    static func pageImages(in container: XMLElement, pageURL: String) -> [PageImage] {
+        let base = URL(string: pageURL)
+        var result: [PageImage] = []
+        var seen = Set<String>()
+        for case let img as XMLElement in (try? container.nodes(forXPath: ".//*[local-name()='img']")) ?? [] {
+            func attr(_ name: String) -> String? {
+                img.attribute(forName: name)?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            // Größte Fassung aus srcset, sonst src bzw. Lazy-Load-Attribute.
+            let candidates = [bestSource(srcset: attr("srcset")), attr("data-src"), attr("src")].compactMap { $0 }
+            guard let raw = candidates.first(where: { !$0.isEmpty && !$0.hasPrefix("data:") }),
+                  let resolved = URL(string: raw.hasPrefix("//") ? "https:" + raw : raw, relativeTo: base)?.absoluteURL,
+                  resolved.scheme?.lowercased() == "https", seen.insert(resolved.absoluteString).inserted else { continue }
+            let alt = clean(attr("alt") ?? "")
+            let caption = figureCaption(of: img)
+            result.append(PageImage(url: resolved.absoluteString, pageURL: pageURL, caption: caption, alt: alt,
+                                    width: attr("width").flatMap { Int($0) }, height: attr("height").flatMap { Int($0) }))
+            if result.count >= 30 { break }
+        }
+        return result
+    }
+
+    /// „a.jpg 1x, b.jpg 2x“ bzw. „… 640w“ → die größte Fassung.
+    static func bestSource(srcset: String?) -> String? {
+        guard let srcset, !srcset.isEmpty else { return nil }
+        let entries = srcset.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).split(separator: " ") }
+        let scored = entries.compactMap { parts -> (String, Double)? in
+            guard let url = parts.first else { return nil }
+            let descriptor = parts.count > 1 ? String(parts[1]) : "1x"
+            let value = Double(descriptor.dropLast()) ?? 1
+            return (String(url), descriptor.hasSuffix("w") ? value / 1000 : value)
+        }
+        return scored.max(by: { $0.1 < $1.1 })?.0
+    }
+
+    /// Bildunterschrift aus dem umgebenden figure bzw. Wikipedias thumbcaption.
+    private static func figureCaption(of img: XMLElement) -> String {
+        var node: XMLNode? = img.parent
+        var depth = 0
+        while let current = node as? XMLElement, depth < 5 {
+            let marker = current.attribute(forName: "data-la")?.stringValue
+            let cls = current.attribute(forName: "class")?.stringValue ?? ""
+            if marker == "figure" || cls.contains("thumb") || cls.contains("figure") {
+                let captions = (try? current.nodes(forXPath: ".//*[@data-la='figcaption' or contains(@class,'caption')]")) ?? []
+                if let text = captions.first?.stringValue.map(clean), !text.isEmpty { return String(text.prefix(300)) }
+            }
+            node = current.parent
+            depth += 1
+        }
+        return ""
     }
 
     private static func removeBoilerplateContainers(in root: XMLElement) {

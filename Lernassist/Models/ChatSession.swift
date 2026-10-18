@@ -2,23 +2,36 @@ import Foundation
 
 struct Flashcard: Identifiable, Codable, Equatable {
     var id = UUID()
-    let front: String
-    let back: String
-    /// Nächster Fälligkeitszeitpunkt (vereinfachtes SM-2-System). Frisch generierte Karten sind
-    /// sofort fällig (Default = jetzt).
+    var front: String
+    var back: String
+    /// Nächster Fälligkeitszeitpunkt. Frisch erstellte Karten sind sofort fällig.
     var dueDate: Date = Date()
     var intervalDays: Double = 0
+    /// Altfeld aus dem SM-2-Scheduler, nur noch für die Übernahme alter Karten.
     var easeFactor: Double = 2.5
     var repetitionCount: Int = 0
     var lastReviewedAt: Date? = nil
+    /// FSRS: Stabilität in Tagen (nil = neue Karte bzw. alte SM-2-Karte vor der Übernahme).
+    var stability: Double? = nil
+    /// FSRS: Schwierigkeit 1–10.
+    var difficulty: Double? = nil
+    /// Wie oft die Karte nach dem Lernen wieder vergessen wurde.
+    var lapses: Int = 0
+    /// Antwort, aus der die Karte entstand („Als Karte merken“).
+    var sourceMessageId: UUID? = nil
+    /// Abdeckkarte: Bild (ImageStore-ID) und verdeckter Bereich (x, y, Breite, Höhe; 0…1).
+    var imageID: UUID? = nil
+    var occlusion: [Double]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, front, back, dueDate, intervalDays, easeFactor, repetitionCount, lastReviewedAt
+        case stability, difficulty, lapses, sourceMessageId, imageID, occlusion
     }
 
     init(id: UUID = UUID(), front: String, back: String, dueDate: Date = Date(),
          intervalDays: Double = 0, easeFactor: Double = 2.5, repetitionCount: Int = 0,
-         lastReviewedAt: Date? = nil) {
+         lastReviewedAt: Date? = nil, sourceMessageId: UUID? = nil,
+         imageID: UUID? = nil, occlusion: [Double]? = nil) {
         self.id = id
         self.front = front
         self.back = back
@@ -27,14 +40,13 @@ struct Flashcard: Identifiable, Codable, Equatable {
         self.easeFactor = easeFactor
         self.repetitionCount = repetitionCount
         self.lastReviewedAt = lastReviewedAt
+        self.sourceMessageId = sourceMessageId
+        self.imageID = imageID
+        self.occlusion = occlusion
     }
 
-    /// Custom Decoder nötig: dueDate/intervalDays/easeFactor/repetitionCount sind NICHT-optionale
-    /// Felder mit Default-Wert – Swifts synthetisierter Decoder wendet Defaults NICHT auf fehlende
-    /// JSON-Keys an (das gilt nur für echte Optionals), sondern wirft einen Decoding-Error. Ohne
-    /// diesen Custom-Decoder wären ALLE vor Einführung von Spaced Repetition gespeicherten
-    /// Karteikarten beim nächsten Laden verworfen worden (SessionStore verwirft Decode-Fehler
-    /// pro Session lautlos über try?).
+    /// Custom Decoder: fehlende Felder (ältere Karten) bekommen Standardwerte, statt dass die
+    /// ganze Session beim Laden verworfen wird.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -45,6 +57,12 @@ struct Flashcard: Identifiable, Codable, Equatable {
         easeFactor = try c.decodeIfPresent(Double.self, forKey: .easeFactor) ?? 2.5
         repetitionCount = try c.decodeIfPresent(Int.self, forKey: .repetitionCount) ?? 0
         lastReviewedAt = try c.decodeIfPresent(Date.self, forKey: .lastReviewedAt)
+        stability = try c.decodeIfPresent(Double.self, forKey: .stability)
+        difficulty = try c.decodeIfPresent(Double.self, forKey: .difficulty)
+        lapses = try c.decodeIfPresent(Int.self, forKey: .lapses) ?? 0
+        sourceMessageId = try c.decodeIfPresent(UUID.self, forKey: .sourceMessageId)
+        imageID = try c.decodeIfPresent(UUID.self, forKey: .imageID)
+        occlusion = try c.decodeIfPresent([Double].self, forKey: .occlusion)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -57,10 +75,16 @@ struct Flashcard: Identifiable, Codable, Equatable {
         try c.encode(easeFactor, forKey: .easeFactor)
         try c.encode(repetitionCount, forKey: .repetitionCount)
         try c.encodeIfPresent(lastReviewedAt, forKey: .lastReviewedAt)
+        try c.encodeIfPresent(stability, forKey: .stability)
+        try c.encodeIfPresent(difficulty, forKey: .difficulty)
+        if lapses > 0 { try c.encode(lapses, forKey: .lapses) }
+        try c.encodeIfPresent(sourceMessageId, forKey: .sourceMessageId)
+        try c.encodeIfPresent(imageID, forKey: .imageID)
+        try c.encodeIfPresent(occlusion, forKey: .occlusion)
     }
 }
 
-// MARK: - Spaced Repetition (vereinfachtes SM-2)
+// MARK: - Spaced Repetition (FSRS, siehe FSRS.swift)
 
 enum FlashcardRating: String, CaseIterable, Identifiable {
     case again, hard, good, easy
@@ -86,39 +110,47 @@ enum FlashcardRating: String, CaseIterable, Identifiable {
 }
 
 extension Flashcard {
-    /// Obergrenze fürs Intervall (~10 Jahre) und den Ease-Faktor. Ohne diese Deckelung würde
-    /// wiederholtes "Einfach"-Bewerten derselben Karte `intervalDays` unbegrenzt multiplikativ
-    /// wachsen lassen – irgendwann passt der Wert nicht mehr in einen Int, und
-    /// `Int(intervalDays.rounded())` würde beim Umwandeln abstürzen (Swift-Trap bei
-    /// Double→Int-Konvertierung außerhalb des darstellbaren Bereichs). Reale SRS-Systeme
-    /// (Anki, SM-2) deckeln aus genau diesem Grund beide Werte.
-    private static let maxIntervalDays: Double = 3650
-    private static let maxEaseFactor: Double = 5.0
+    /// Ist die Karte schon einmal gelernt worden?
+    var isNew: Bool { stability == nil && repetitionCount == 0 }
 
-    /// Aktualisiert Intervall/Ease-Faktor/Fälligkeitsdatum nach einer Nutzer-Bewertung. Bewusst ein
-    /// vereinfachtes SM-2 (kein volles Anki-Modell) – reicht für den Zweck, ist aber leicht
-    /// nachvollziehbar und wartbar.
-    mutating func applyReview(_ rating: FlashcardRating, now: Date = Date()) {
+    /// Plant die nächste Wiederholung nach FSRS-5. Alte SM-2-Karten werden beim ersten Review
+    /// übernommen: bisheriges Intervall ≈ Stabilität, Ease-Faktor → Schwierigkeit.
+    mutating func applyReview(_ rating: FlashcardRating, now: Date = Date(), scheduler: FSRS = FSRS(), againDelayMinutes: Int = 10) {
+        let grade = rating.grade
+        let elapsed = lastReviewedAt.map { now.timeIntervalSince($0) / 86_400 } ?? 0
+
+        if stability == nil, repetitionCount > 0 {
+            stability = max(0.5, intervalDays)
+            // Ease 1,3 (schwer) … 3,0 (leicht) → Schwierigkeit 10 … 1
+            difficulty = min(10, max(1, 10 - (easeFactor - 1.3) / 1.7 * 9))
+        }
+
+        if let s = stability, let d = difficulty {
+            let r = scheduler.retrievability(elapsedDays: elapsed, stability: s)
+            if elapsed < 1 {
+                stability = scheduler.shortTermStability(s: s, grade: grade)
+            } else if grade == 1 {
+                stability = scheduler.stabilityAfterForgetting(s: s, d: d, r: r)
+            } else {
+                stability = scheduler.stabilityAfterSuccess(s: s, d: d, r: r, grade: grade)
+            }
+            difficulty = scheduler.nextDifficulty(d, grade: grade)
+        } else {
+            stability = scheduler.initialStability(grade)
+            difficulty = scheduler.initialDifficulty(grade)
+        }
+
         lastReviewedAt = now
-        switch rating {
-        case .again:
+        if grade == 1 {
+            if repetitionCount > 0 { lapses += 1 }
             repetitionCount = 0
             intervalDays = 0
-            dueDate = Calendar.current.date(byAdding: .minute, value: 10, to: now) ?? now
-        case .hard:
-            easeFactor = max(1.3, easeFactor - 0.15)
+            // Vergessen: nach N Minuten in derselben Sitzung noch einmal.
+            dueDate = now.addingTimeInterval(Double(max(1, againDelayMinutes) * 60))
+        } else {
             repetitionCount += 1
-            intervalDays = repetitionCount <= 1 ? 1 : min(Self.maxIntervalDays, max(1, intervalDays * 1.2))
-            dueDate = Calendar.current.date(byAdding: .day, value: max(1, Int(intervalDays.rounded())), to: now) ?? now
-        case .good:
-            repetitionCount += 1
-            intervalDays = repetitionCount <= 1 ? 1 : min(Self.maxIntervalDays, intervalDays * easeFactor)
-            dueDate = Calendar.current.date(byAdding: .day, value: max(1, Int(intervalDays.rounded())), to: now) ?? now
-        case .easy:
-            easeFactor = min(Self.maxEaseFactor, easeFactor + 0.15)
-            repetitionCount += 1
-            intervalDays = repetitionCount <= 1 ? 3 : min(Self.maxIntervalDays, intervalDays * easeFactor * 1.3)
-            dueDate = Calendar.current.date(byAdding: .day, value: max(1, Int(intervalDays.rounded())), to: now) ?? now
+            intervalDays = scheduler.interval(stability: stability ?? 1)
+            dueDate = Calendar.current.date(byAdding: .day, value: Int(intervalDays), to: now) ?? now
         }
     }
 }
@@ -142,6 +174,12 @@ struct ChatSession: Identifiable, Codable {
     /// weiterhin sauber dekodiert werden (Swifts synthetisierter Decodable-Init ignoriert
     /// Default-Werte bei fehlendem Schlüssel, behandelt fehlende Optionals aber als nil).
     var isPinned: Bool?
+    /// Fach-Etikett (z. B. „Physiologie“, „Algorithmen“) – von der KI vergeben oder selbst gesetzt.
+    var subject: String?
+    /// Titel und Fach wurden nach einigen Nachrichten noch einmal überprüft (Fokus kann wandern).
+    var titleRefined: Bool?
+    /// Fach wurde von Hand gesetzt – die KI überschreibt es dann nicht mehr.
+    var subjectSetByUser: Bool?
 
     // Gibt das Datum der letzten Aktivität zurück (die letzte Nachricht oder das Erstelldatum)
     var lastActivityDate: Date {

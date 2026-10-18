@@ -17,6 +17,7 @@ DerivedData/
 
 # Kompilierte App-Bundles (jederzeit neu baubar)
 *.app
+backups/
 
 # Swift Package Manager
 .build/

@@ -54,6 +54,8 @@ nonisolated struct WebFetcher: Sendable {
 
     func fetch(_ url: URL, accept: String = "text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5") async throws -> FetchedPage {
         try await Self.validate(url)
+        // Höflicher Abstand pro Host (Fach-APIs, Volltexte) – siehe HostPacing.
+        if let host = url.host { try await HostPacing.shared.waitTurn(host: host) }
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
@@ -76,7 +78,13 @@ nonisolated struct WebFetcher: Sendable {
         defer { try? FileManager.default.removeItem(at: fileURL) }
         if let error = guardDelegate.error { throw error }
         guard let http = response as? HTTPURLResponse else { throw WebFetchError.invalidURL }
-        guard (200...299).contains(http.statusCode) else { throw WebFetchError.httpStatus(http.statusCode) }
+        guard (200...299).contains(http.statusCode) else {
+            if http.statusCode == 429 || http.statusCode == 503, let host = url.host {
+                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(TimeInterval.init) ?? 30
+                await HostPacing.shared.pause(host: host, seconds: retry)
+            }
+            throw WebFetchError.httpStatus(http.statusCode)
+        }
 
         let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
         let truncated = size > maxBytes

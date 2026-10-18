@@ -51,6 +51,27 @@ extension ChatViewModel {
         )
         settings.research = research
         settings.autoInstallPythonPackages = autoInstallPythonPackages
+        settings.autoArchiveDays = autoArchiveDays
+        settings.preserveThinking = preserveThinking
+        settings.quizDifficulty = quizDifficulty
+        settings.flashcardDifficulty = flashcardDifficulty
+        settings.pythonDownloadMaxMB = pythonDownloadMaxMB
+        settings.downloadAllowedDomains = downloadAllowedDomains
+        settings.pythonInternetEnabled = pythonInternetEnabled
+        settings.pythonMaxDownloadsPerRun = pythonMaxDownloadsPerRun
+        settings.pythonDownloadTypes = pythonDownloadTypes
+        settings.flashcardRetention = flashcardRetention
+        settings.setupCompleted = setupCompleted
+        settings.pythonSandboxTimeout = pythonSandboxTimeout
+        settings.pythonMaxOutputCharacters = pythonMaxOutputCharacters
+        settings.pythonMaxScriptVersions = pythonMaxScriptVersions
+        settings.pythonPlotDpi = pythonPlotDpi
+        settings.documentCacheDuration = documentCacheDuration
+        settings.flashcardAgainDelayMinutes = flashcardAgainDelayMinutes
+        settings.flashcardCardsPerResponse = flashcardCardsPerResponse
+        settings.titleRefinementTurns = titleRefinementTurns
+        settings.documentImageBudget = documentImageBudget
+        settings.inlineExplainRadius = inlineExplainRadius
         return settings
     }
 
@@ -70,7 +91,7 @@ extension ChatViewModel {
         searchEnabled = s.searchEnabled
         searxngURL = s.searxngURL
         maxBrowseCharacters = s.maxBrowseCharacters
-        maxToolRounds = min(max(s.maxToolRounds, 1), 12)
+        maxToolRounds = min(max(s.maxToolRounds, 1), 25)
         keepMultipleImagesInHistory = s.keepMultipleImagesInHistory
         // Hotkeys: gespeicherte Werte, mit Default-Fallback je fehlender Aktion
         var loaded: [HotkeyAction: Hotkey] = Dictionary(
@@ -114,6 +135,34 @@ extension ChatViewModel {
         youtubeTranscriptCharLimit = s.youtubeTranscriptCharLimit
         customArchiveFolders = s.customArchiveFolders
         showMenuBarIcon = s.showMenuBarIcon
+        autoArchiveDays = s.autoArchiveDays
+        preserveThinking = s.preserveThinking
+        quizDifficulty = s.quizDifficulty
+        flashcardDifficulty = s.flashcardDifficulty
+        pythonDownloadMaxMB = s.pythonDownloadMaxMB
+        downloadAllowedDomains = s.downloadAllowedDomains
+        pythonInternetEnabled = s.pythonInternetEnabled
+        pythonMaxDownloadsPerRun = s.pythonMaxDownloadsPerRun
+        pythonDownloadTypes = s.pythonDownloadTypes
+        ToolRegistry.shared.quizDifficulty = s.quizDifficulty
+        flashcardRetention = s.flashcardRetention
+        setupCompleted = s.setupCompleted
+        pythonSandboxTimeout = s.pythonSandboxTimeout
+        pythonMaxOutputCharacters = s.pythonMaxOutputCharacters
+        pythonMaxScriptVersions = s.pythonMaxScriptVersions
+        pythonPlotDpi = s.pythonPlotDpi
+        documentCacheDuration = s.documentCacheDuration
+        flashcardAgainDelayMinutes = s.flashcardAgainDelayMinutes
+        flashcardCardsPerResponse = s.flashcardCardsPerResponse
+        titleRefinementTurns = s.titleRefinementTurns
+        documentImageBudget = s.documentImageBudget
+        inlineExplainRadius = s.inlineExplainRadius
+        CodingEnvironment.shared.limits = CodingEnvironment.Limits(
+            maxScriptVersions: s.pythonMaxScriptVersions, maxOutputCharacters: s.pythonMaxOutputCharacters,
+            sandboxTimeout: s.pythonSandboxTimeout, plotDpi: s.pythonPlotDpi,
+            internetEnabled: s.pythonInternetEnabled, downloadMaxMB: s.pythonDownloadMaxMB,
+            maxDownloadsPerRun: s.pythonMaxDownloadsPerRun, downloadTypes: s.pythonDownloadTypes)
+        DocumentCache.defaultDuration = s.documentCacheDuration
 
         if hotkeysMigrated { saveSettings() }
     }
@@ -126,8 +175,8 @@ extension ChatViewModel {
     /// App-weit statt pro View gesetzt, damit es automatisch auch für die WKWebViews
     /// (Markdown-Rendering, HTML-Tool-Artefakte) greift – deren CSS `prefers-color-scheme`
     /// richtet sich nach der effektiven NSAppearance des Fensters, nicht nach SwiftUI-State.
-    func applyAppTheme() {
-        switch appTheme {
+    func applyAppTheme(_ theme: String? = nil) {
+        switch theme ?? appTheme {
         case "Light": NSApp.appearance = NSAppearance(named: .aqua)
         case "Dark":  NSApp.appearance = NSAppearance(named: .darkAqua)
         default:      NSApp.appearance = nil // System folgen
@@ -145,24 +194,42 @@ extension ChatViewModel {
     /// Setzt NICHTS, wenn bereits ein `contextSizeOverride` vorhanden ist (manuell gesetzter Wert
     /// hat Vorrang) oder der Server die Kontextgröße nicht meldet.
     func refreshContextWindowForActiveProfile() {
-        guard let profile = activeProfile, profile.contextSizeOverride == nil else { return }
+        guard let profile = activeProfile else { return }
         let profileId = profile.id
         Task { [weak self] in
             var models = (try? await EndpointManager.fetchProviderModels(for: profile)) ?? []
             if profile.provider == .omlx, !models.contains(where: { $0.id == profile.model && $0.contextWindow != nil }) {
-                models += await EndpointDiagnostics.omlxStatus(profile)
+                let extra = await EndpointDiagnostics.omlxStatus(profile)
+                for m in extra where !models.contains(where: { $0.id == m.id }) {
+                    models.append(m)
+                }
             }
-            guard let match = models.first(where: { $0.id == profile.model && $0.contextWindow != nil }),
-                  let ctx = match.contextWindow else { return }
+            let fetchedModels = models
             await MainActor.run {
-                guard let self,
-                      let idx = self.profiles.firstIndex(where: { $0.id == profileId }),
-                      self.profiles[idx].contextSizeOverride == nil // in der Zwischenzeit nicht manuell überschrieben
+                guard let self else { return }
+                if !fetchedModels.isEmpty {
+                    self.cachedModelsByProfile[profileId] = fetchedModels.map { (id: $0.id, contextWindow: $0.contextWindow) }
+                }
+                guard let idx = self.profiles.firstIndex(where: { $0.id == profileId }),
+                      self.profiles[idx].contextSizeOverride == nil,
+                      let match = fetchedModels.first(where: { $0.id == profile.model && $0.contextWindow != nil }),
+                      let ctx = match.contextWindow
                 else { return }
                 self.profiles[idx].contextSizeOverride = ctx
                 self.saveSettings()
             }
         }
+    }
+
+    @discardableResult
+    func loadModelsForProfile(_ profile: EndpointProfile) async -> [(id: String, contextWindow: Int?)] {
+        let models = (try? await EndpointManager.fetchModels(for: profile)) ?? []
+        await MainActor.run {
+            if !models.isEmpty {
+                self.cachedModelsByProfile[profile.id] = models
+            }
+        }
+        return models
     }
 
     // MARK: - Endpunkt-Profile: CRUD
@@ -187,7 +254,7 @@ extension ChatViewModel {
             case .ok:
                 return "✓ SearXNG erreichbar – JSON-Suche funktioniert."
             case .nothingListening:
-                return "✗ Auf dieser Adresse/Port lauscht nichts (Verbindung verweigert). Prüfe mit „docker ps“ das Port-Mapping deines Containers. Für den Docker-Mac ist es hier http://127.0.0.1:8082. Von einem anderen Mac muss die Tailscale-Adresse des Docker-Macs mit :8082 eingetragen werden – localhost zeigt dort nur auf den eigenen Mac."
+                return "✗ Auf dieser Adresse/Port lauscht nichts (Verbindung verweigert). Prüfe mit „docker ps“ das Port-Mapping deines Containers. Auf dem Rechner, auf dem der Container läuft, ist es http://127.0.0.1:8082. Von einem anderen Gerät aus muss der Hostname oder die IP dieses Rechners mit :8082 eingetragen werden (z. B. über ein VPN wie Tailscale) – localhost zeigt dort nur auf das eigene Gerät."
             case .timeout:
                 return "✗ Adresse spricht an, antwortet aber nicht innerhalb von 8 s. Läuft der Container wirklich (docker ps) und ist er healthy?"
             case .httpStatus(let code) where code == 403 || code == 410:
@@ -240,8 +307,15 @@ extension ChatViewModel {
     }
 
     /// Verbindungstest mit verständlicher Meldung (Server aus / Key fehlt / Modell unbekannt …).
+    /// Lädt bei erreichbarem Server zugleich die verfügbaren Modelle in `cachedModelsByProfile`.
     func diagnoseConnection(profile: EndpointProfile) async -> ConnectionDiagnosis {
-        await EndpointDiagnostics.diagnose(profile)
+        let diag = await EndpointDiagnostics.diagnose(profile)
+        if let models = try? await EndpointManager.fetchModels(for: profile), !models.isEmpty {
+            await MainActor.run {
+                self.cachedModelsByProfile[profile.id] = models
+            }
+        }
+        return diag
     }
 
     func addProfile(_ profile: EndpointProfile, makeActive: Bool = true) {
@@ -264,6 +338,62 @@ extension ChatViewModel {
         hotkeys[action] = hotkey
         saveSettings()
         NotificationCenter.default.post(name: .hotkeySettingsChanged, object: nil)
+    }
+
+
+    // MARK: - Standardwerte wiederherstellen
+
+    /// Setzt nur technische Parameter (Grenzwerte, Timeouts, Budgets) auf die Standardwerte.
+    /// Bleibt UNVERÄNDERT: Endpunkte und Profile samt Modell und Sampling-Werten, API-Keys,
+    /// eigene Prompts, Lernstil, Darstellung, Hotkeys, Ein/Aus-Schalter, Tool-Auswahl sowie die
+    /// Recherche-Quellen, Domainlisten, Sprachen und die Kontakt-E-Mail.
+    func resetToDefaults() {
+        let d = PersistedSettings.defaults
+        maxBrowseCharacters = d.maxBrowseCharacters
+        maxToolRounds = d.maxToolRounds
+        autoCompactThreshold = d.autoCompactThreshold
+        compactSummaryTokens = d.compactSummaryTokens
+        compactKeepLastMessages = d.compactKeepLastMessages
+        youtubeTranscriptCharLimit = d.youtubeTranscriptCharLimit
+        flashcardRetention = d.flashcardRetention
+        pythonSandboxTimeout = d.pythonSandboxTimeout
+        pythonMaxOutputCharacters = d.pythonMaxOutputCharacters
+        pythonMaxScriptVersions = d.pythonMaxScriptVersions
+        pythonPlotDpi = d.pythonPlotDpi
+        pythonDownloadMaxMB = d.pythonDownloadMaxMB
+        pythonMaxDownloadsPerRun = d.pythonMaxDownloadsPerRun
+        documentCacheDuration = d.documentCacheDuration
+        flashcardAgainDelayMinutes = d.flashcardAgainDelayMinutes
+        flashcardCardsPerResponse = d.flashcardCardsPerResponse
+        titleRefinementTurns = d.titleRefinementTurns
+        documentImageBudget = d.documentImageBudget
+        inlineExplainRadius = d.inlineExplainRadius
+        research = Self.researchWithDefaultLimits(research)
+
+        syncToolRegistry()
+        syncResearchConfiguration()
+        saveSettings()
+    }
+
+    /// Recherche: nur Mengen, Budgets und Timeouts zurück – Quellen, Reranker-Auswahl, Sprachen,
+    /// Domainlisten und Kontakt-E-Mail bleiben.
+    static func researchWithDefaultLimits(_ current: ResearchSettings) -> ResearchSettings {
+        let d = ResearchSettings()
+        var r = current
+        r.resultsPerSource = d.resultsPerSource
+        r.fullTextPages = d.fullTextPages
+        r.fetchTimeout = d.fetchTimeout
+        r.maxDownloadMB = d.maxDownloadMB
+        r.passageChars = d.passageChars
+        r.maxPassages = d.maxPassages
+        r.maxPassagesPerSource = d.maxPassagesPerSource
+        r.tokenBudget = d.tokenBudget
+        r.rerankerTimeout = d.rerankerTimeout
+        r.rerankerWindow = d.rerankerWindow
+        r.exaMinWebResults = d.exaMinWebResults
+        r.exaResults = d.exaResults
+        r.cacheMinutes = d.cacheMinutes
+        return r
     }
 
     var activeSession: ChatSession? {

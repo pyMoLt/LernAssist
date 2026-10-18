@@ -105,7 +105,8 @@ enum LearningStyle: String, CaseIterable {
             Ergänze jede Tabelle mit EINEM kurzen einordnenden Satz. Bei mathematischen \
             Inhalten nutze LaTeX ($...$/$$...$$). Fließtext nur, wo eine Struktur \
             künstlich wäre. Abläufe, Kaskaden und Zusammenhänge zeichnest du als \
-            Mermaid-Diagramm (```mermaid-Codeblock, z. B. flowchart TD).
+            Mermaid-Diagramm (```mermaid-Codeblock, z. B. flowchart TD). Knotentexte \
+            stehen immer in Anführungszeichen: A["Thrombin (IIa)"]; Zeilenumbruch mit <br>; keine festen Farben (classDef/style).
             """
         }
     }

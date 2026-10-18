@@ -21,7 +21,7 @@ class DocumentProcessor: ObservableObject {
 
     /// Budget pro Dokument (Audit T6): Ein 200-Seiten-PDF hätte sonst bis zu 200 einzelne
     /// Vision-Requests und ebenso viele Base64-Anhänge ausgelöst.
-    private static let maxDescribedImages = 12
+    nonisolated private static let maxDescribedImages = 12
 
     /// Verarbeitet ein einzelnes Dokument und aktualisiert die UI asynchron über das ChatViewModel
     func processDocument(url: URL, documentId: UUID, viewModel: ChatViewModel, detailLevel: String) {
@@ -38,7 +38,8 @@ class DocumentProcessor: ObservableObject {
                     // processPDF läuft bewusst off-main und darf nicht auf ViewModel-State zugreifen.
                     let (text, images) = try await self.processPDF(
                         url: url, documentId: documentId, viewModel: viewModel,
-                        detailLevel: detailLevel, extractImages: viewModel.extractImagesFromPDF
+                        detailLevel: detailLevel, extractImages: viewModel.extractImagesFromPDF,
+                        imageBudget: viewModel.documentImageBudget
                     )
                     extractedText = text
                     extractedImages = images
@@ -111,7 +112,7 @@ class DocumentProcessor: ObservableObject {
     /// PDF-Verarbeitung. `nonisolated`, damit PDFKit-Decoding und Textextraktion OFF-Main laufen
     /// (Audit T6): Unter der MainActor-Default-Isolation dieses Projekts fror die UI bei großen
     /// PDFs für die volle Dauer der Verarbeitung ein. UI-Updates laufen über MainActor.run.
-    nonisolated private func processPDF(url: URL, documentId: UUID, viewModel: ChatViewModel, detailLevel: String, extractImages: Bool) async throws -> (String, [String]) {
+    nonisolated private func processPDF(url: URL, documentId: UUID, viewModel: ChatViewModel, detailLevel: String, extractImages: Bool, imageBudget: Int? = nil) async throws -> (String, [String]) {
         // Vorher: Ein Ladefehler kehrte als Fehler-STRING im extrahierten Text zurück und der
         // Status lief auf .completed (Audit T6) – der Nutzer sah ein "fertiges" Dokument, dessen
         // ganzer Inhalt "FEHLER BEIM LADEN DES PDFS" war. Jetzt: throw → Status .failed.
@@ -126,7 +127,8 @@ class DocumentProcessor: ObservableObject {
         var images: [String] = []
         // Audit H9: Bild-Budget gilt pro DOKUMENT, nicht pro Seite – der Caller zieht die je
         // Seite verbrauchten Beschreibungen vom Gesamtbudget ab.
-        var remainingImageBudget = Self.maxDescribedImages
+        let totalImageBudget = imageBudget ?? Self.maxDescribedImages
+        var remainingImageBudget = totalImageBudget
         var pagesWithSkippedImages: [Int] = []
 
         // Komponierte Fortschritts-Skala (Audit T6): Eine einzige monoton steigende Kurve über
@@ -174,7 +176,7 @@ class DocumentProcessor: ObservableObject {
 
         // Audit H9: Transparenz über durch das Dokument-Budget nicht mehr beschriebene Bilder.
         if !pagesWithSkippedImages.isEmpty {
-            fullText += "\n[Das Bild-Budget von \(Self.maxDescribedImages) Beschreibungen pro Dokument war ab Seite \(pagesWithSkippedImages.first!) erschöpft – Bilder auf \(pagesWithSkippedImages.count) weiteren Seiten wurden aus Kontext-/Kostengründen nicht mehr beschrieben.]\n"
+            fullText += "\n[Das Bild-Budget von \(totalImageBudget) Beschreibungen pro Dokument war ab Seite \(pagesWithSkippedImages.first!) erschöpft – Bilder auf \(pagesWithSkippedImages.count) weiteren Seiten wurden aus Kontext-/Kostengründen nicht mehr beschrieben.]\n"
         }
 
         return (fullText, images)
@@ -191,9 +193,12 @@ class DocumentProcessor: ObservableObject {
     /// Off-main NSAttributedString-Import (Audit T6): Der Office-Importer ist synchron und kann
     /// bei großen Dateien Sekunden dauern.
     nonisolated private static func officeAttributedString(from url: URL) async -> NSAttributedString? {
-        await Task.detached(priority: .userInitiated) {
-            try? NSAttributedString(url: url, options: [:], documentAttributes: nil)
-        }.value
+        // NSAttributedString ist nicht Sendable – über eine Box aus dem Hintergrund-Task holen
+        // (der String wird danach nur noch gelesen).
+        final class Box: @unchecked Sendable { let value: NSAttributedString?; init(_ v: NSAttributedString?) { value = v } }
+        return await Task.detached(priority: .userInitiated) {
+            Box(try? NSAttributedString(url: url, options: [:], documentAttributes: nil))
+        }.value.value
     }
 
     /// Fallback für die älteren Binärformate .doc/.ppt sowie .rtf (keine ZIP-Container, daher nicht
@@ -421,7 +426,7 @@ class DocumentProcessor: ObservableObject {
 }
 
 // MARK: - PDF Image Extractor Helper
-private class PDFPageImageExtractor {
+nonisolated private class PDFPageImageExtractor {
     var images: [NSImage] = []
     
     func extractImages(from page: CGPDFPage) -> [NSImage] {

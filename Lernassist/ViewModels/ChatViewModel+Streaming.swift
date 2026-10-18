@@ -7,6 +7,8 @@ import os
 // Antwort-Start, Streaming über LLMClient, Fallback/Retry und Payload-Nachrichten.
 extension ChatViewModel {
     func beginResponse(inSession idx: Int, profile: EndpointProfile) {
+        // Bild-Regel VOR dem Platzhalter anwenden (siehe applyImageRetention).
+        applyImageRetention(sessionIdx: idx)
         let assistantMsgId = UUID()
         sessions[idx].messages.append(ChatMessage(id: assistantMsgId, role: "assistant", content: ""))
         // Neue logische Antwort-Runde → neue Stream-Generation (Audit H2/H3).
@@ -33,12 +35,11 @@ extension ChatViewModel {
         let datePrompt = "\n[System: Das aktuelle Datum ist \(dateString). Berücksichtige dies bei zeitlichen Einordnungen. Antworte immer in der Sprache des Nutzers (meist Deutsch) und mische keine anderen Sprachen oder Schriftzeichen (z. B. Chinesisch) ein.]\n"
         
         let systemContent = prompt(for: learningStyle) + datePrompt + ToolRegistry.shared.systemPromptAddition
-        // Hervorgehobene User-Nachricht (Bild-Kontext) = die letzte vor dem Platzhalter.
-        let highlightedUserMsgId = sessions[idx].messages.dropLast().last(where: { $0.role == "user" })?.id ?? UUID()
 
         var messages: [[String: Any]] = [["role": "system", "content": systemContent]]
         // Screenshots fortlaufend nummerieren ([Screenshot #N]) – Bezugspunkt für recall_screenshot.
         let screenshotNumbers = Self.screenshotNumbers(in: sessions[idx].messages)
+        let recalledScreenshot = screenshotLookup(in: sessions[idx].messages)
         for msg in sessions[idx].messages.dropLast() {
             if msg.role == "document" {
                 if let attachment = msg.documentAttachment, attachment.status == .completed {
@@ -63,8 +64,9 @@ extension ChatViewModel {
                 // Kontext – sonst antwortet das Modell auf fragmentierte Halbsätze.
                 continue
             } else {
-                messages.append(contentsOf: apiMessages(for: msg, highlightedUserMsgId: highlightedUserMsgId, provider: profile.provider,
-                                                        screenshotNumber: screenshotNumbers[msg.id]))
+                messages.append(contentsOf: apiMessages(for: msg, provider: profile.provider,
+                                                        screenshotNumber: screenshotNumbers[msg.id],
+                                                        recalledScreenshot: recalledScreenshot))
             }
         }
 
@@ -162,9 +164,9 @@ extension ChatViewModel {
     }
 
     func startStream(profile: EndpointProfile, url: URL, messages: [[String: Any]],
-                             targetMsgId: UUID, sessionId: UUID,
-                             isFallbackAttempt: Bool = false, autoRetryCount: Int = 0,
-                             generation: UUID? = nil) {
+                     targetMsgId: UUID, sessionId: UUID,
+                     isFallbackAttempt: Bool = false, autoRetryCount: Int = 0,
+                     generation: UUID? = nil) {
         // Audit H2: Ein verspätet eintreffender Stream-Start (Retry nach Nutzer-Abbruch,
         // Fallback nach Sekunden dauerndem LM-Studio-Modellladen) gehört zu einer alten
         // Generation und darf weder den aktuellen Stream killen noch einen neuen starten.
@@ -191,12 +193,6 @@ extension ChatViewModel {
             }
         }
 
-        // Client-Timer und Metriken für die neue Antwort-Runde zurücksetzen – sonst zeigte
-        // die MetricsBar bis zum ersten Metrik-Chunk die Werte der vorigen Antwort.
-        streamStartTime = Date()
-        firstTokenTime = nil
-        currentMetrics = .empty
-
         // Kontext-Budget vor dem Serialisieren anwenden.
         let effectiveMessages = Self.trimmedToContextBudget(
             messages,
@@ -204,7 +200,25 @@ extension ChatViewModel {
             maxTokens: profile.params.maxTokens
         )
 
-        // Tool-Schemas aus der Registry (nur aktive Tools, stabile Reihenfolge für KV-Cache)
+        // Client-Timer und Live-Telemetrie für die neue Antwort-Runde initialisieren:
+        // Prompt-Größe vorab schätzen, damit die Prefill-Phase sofort live verfolgt werden kann.
+        let prevContextSize = currentMetrics.contextWindowSize
+        let estimatedPromptTokens = Self.estimatePayloadTokens(effectiveMessages)
+        streamStartTime = Date()
+        firstTokenTime = nil
+        streamedCharCount = 0
+        lastSampleCharCount = 0
+        telemetrySilentTicks = 0
+        rollingTokenSamples.removeAll()
+        var initialMetrics = ChatMetrics.empty
+        initialMetrics.contextWindowSize = prevContextSize
+        initialMetrics.promptTokens = estimatedPromptTokens
+        initialMetrics.isPrefilling = true
+        initialMetrics.prefillElapsed = 0
+        currentMetrics = initialMetrics
+
+        // Tool-Schemas aus der Registry (nur aktive Tools, stabile Reihenfolge für KV-Cache).
+        // Bewusst in JEDER Runde gleich, auch nach dem Tool-Limit – siehe toolFinalRoundNotice.
         let builder = ChatRequestBuilder(profile: profile)
         let payload = builder.payload(messages: effectiveMessages, purpose: .chat, stream: true,
                                       tools: ToolRegistry.shared.schemas)
@@ -213,6 +227,7 @@ extension ChatViewModel {
             request = try builder.urlRequest(payload: payload, stream: true)
         } catch {
             AppLog.chat.error("Request-Aufbau fehlgeschlagen: \(error.localizedDescription)")
+            currentMetrics.isPrefilling = false
             // Audit M1: Auch dieser Fehlerpfad hinterlässt sonst eine leere Bubble ohne
             // Fehlermeldung und feuert die nächste Queue-Nachricht gegen denselben Endpunkt.
             failCurrentExchange(sessionId: sessionId, targetMsgId: targetMsgId,
@@ -226,16 +241,25 @@ extension ChatViewModel {
             self.updateTimer?.cancel()
             self.updateTimer = nil
             self.flushBuffers(sessionId: sessionId, targetMsgId: targetMsgId)
+            self.currentMetrics.isPrefilling = false
 
             // Client-seitige Gesamt-TPS berechnen wenn kein server-seitiger Wert vorhanden
             if let start = self.streamStartTime {
                 let elapsed = Date().timeIntervalSince(start)
                 self.currentMetrics.totalDuration = elapsed
+                let decodeElapsed = self.firstTokenTime.map { Date().timeIntervalSince($0) } ?? elapsed
                 if self.currentMetrics.tokensPerSecond == nil,
                    self.currentMetrics.completionTokens > 0,
-                   elapsed > 0.1 {
-                    self.currentMetrics.tokensPerSecond = Double(self.currentMetrics.completionTokens) / elapsed
+                   decodeElapsed > 0.05 {
+                    let tps = Double(self.currentMetrics.completionTokens) / decodeElapsed
+                    self.currentMetrics.tokensPerSecond = tps
+                    self.currentMetrics.appendTPSSample(tps)
                 }
+            }
+            if self.currentMetrics.prefillTokensPerSecond == nil,
+               self.currentMetrics.promptTokens > 0,
+               let ttft = self.currentMetrics.timeToFirstToken, ttft > 0.005 {
+                self.currentMetrics.prefillTokensPerSecond = Double(self.currentMetrics.promptTokens) / ttft
             }
 
             guard let sIdx = self.sessions.firstIndex(where: { s in
@@ -354,6 +378,7 @@ extension ChatViewModel {
             if isUsingFallback {
                 errorMsg += " (Antwort lief über das Fallback-Profil.)"
             }
+            self.currentMetrics.isPrefilling = false
             self.sessions[sIdx].messages[mIdx].errorMessage = errorMsg
             self.isStreaming = false
         }
@@ -373,13 +398,107 @@ extension ChatViewModel {
             }
         }
         
-        // Performance-Timer: Aktualisiere das UI alle 200ms (5Hz)
-        // Das gibt der Benutzeroberfläche massiv viel Zeit für Scroll-Events und Input
+        // Performance-Timer: Aktualisiere das UI und den Live-Telemetrie-Graphen alle 200ms (5Hz)
         updateTimer = Timer.publish(every: 0.2, on: .main, in: .common)
             .autoconnect()
             .sink { [weak self] _ in
-                self?.flushBuffers(sessionId: sessionId, targetMsgId: targetMsgId)
+                guard let self else { return }
+                self.flushBuffers(sessionId: sessionId, targetMsgId: targetMsgId)
+                self.tickLiveTelemetry()
             }
+    }
+
+    private func recordFirstTokenIfNeeded() {
+        guard firstTokenTime == nil else { return }
+        let now = Date()
+        firstTokenTime = now
+        currentMetrics.isPrefilling = false
+        if let start = streamStartTime {
+            let ttft = max(0.01, now.timeIntervalSince(start))
+            currentMetrics.timeToFirstToken = ttft
+            if currentMetrics.promptTokens > 0 {
+                currentMetrics.prefillTokensPerSecond = Double(currentMetrics.promptTokens) / ttft
+            }
+        }
+    }
+
+    private func tickLiveTelemetry() {
+        guard isStreaming else { return }
+        let now = Date()
+        if firstTokenTime == nil {
+            currentMetrics.isPrefilling = true
+            if let start = streamStartTime {
+                currentMetrics.prefillElapsed = now.timeIntervalSince(start)
+            }
+        } else if let first = firstTokenTime {
+            currentMetrics.isPrefilling = false
+            let estTokens = max(1, Int(round(Double(streamedCharCount) / 3.8)))
+            if currentMetrics.completionTokens < estTokens {
+                currentMetrics.completionTokens = estTokens
+            }
+
+            // Stille Phasen (Server puffert z. B. einen Tool-Aufruf): Anzeige halten statt absinken.
+            let newChars = streamedCharCount - lastSampleCharCount
+            lastSampleCharCount = streamedCharCount
+            if newChars <= 0 {
+                telemetrySilentTicks += 1
+                return
+            }
+            if telemetrySilentTicks >= 3 {
+                // Der nach der Pause am Stück eintreffende Block ist keine Generierungsrate:
+                // Messfenster ab hier neu beginnen.
+                telemetrySilentTicks = 0
+                rollingTokenSamples = [(time: now, charCount: streamedCharCount)]
+                return
+            }
+            telemetrySilentTicks = 0
+
+            // Neues Sample im Rolling-Window-Puffer ablegen
+            rollingTokenSamples.append((time: now, charCount: streamedCharCount))
+            // Gleitendes Zeitfenster: auf 3.5 bis 4 Sekunden normieren
+            let windowDuration: TimeInterval = 3.5
+            let windowCutoff = now.addingTimeInterval(-windowDuration)
+            rollingTokenSamples.removeAll(where: { $0.time < windowCutoff })
+
+            let decodeElapsed = max(0.05, now.timeIntervalSince(first))
+            let overallAvgTps = Double(max(1, currentMetrics.completionTokens)) / decodeElapsed
+
+            let currentTps: Double
+            if let oldest = rollingTokenSamples.first, now.timeIntervalSince(oldest.time) >= 0.4 {
+                let dt = max(0.2, now.timeIntervalSince(oldest.time))
+                let dTokens = Double(max(0, streamedCharCount - oldest.charCount)) / 3.8
+                let windowTps = dTokens / dt
+                // In der Anfangsphase (< 3.5s) sanfter Übergang vom Gesamtmittel zum Fensterwert
+                if decodeElapsed < windowDuration {
+                    let weight = min(1.0, decodeElapsed / windowDuration)
+                    currentTps = weight * windowTps + (1.0 - weight) * overallAvgTps
+                } else {
+                    currentTps = windowTps
+                }
+            } else {
+                currentTps = overallAvgTps
+            }
+
+            if currentTps.isFinite && currentTps > 0 {
+                currentMetrics.tokensPerSecond = currentTps
+                currentMetrics.appendTPSSample(currentTps)
+            }
+        }
+    }
+
+    static func estimatePayloadTokens(_ messages: [[String: Any]]) -> Int {
+        var chars = 0
+        for m in messages {
+            if let s = m["content"] as? String {
+                chars += s.count
+            } else if let parts = m["content"] as? [[String: Any]] {
+                for p in parts {
+                    if let t = p["text"] as? String { chars += t.count }
+                    else if p["image_url"] != nil { chars += 1100 }
+                }
+            }
+        }
+        return max(24, Int(round(Double(chars) / 3.8)))
     }
     
     /// Wendet ein einzelnes Stream-Ereignis an (läuft auf main). Content/Thinking landen im
@@ -389,20 +508,38 @@ extension ChatViewModel {
               sessions[sIdx].messages.contains(where: { $0.id == targetMsgId }) else { return }
         switch event {
         case .content(let chunk):
+            recordFirstTokenIfNeeded()
             contentBuffer += chunk
-            if firstTokenTime == nil {
-                firstTokenTime = Date()
-                if let start = streamStartTime {
-                    currentMetrics.timeToFirstToken = Date().timeIntervalSince(start)
-                }
-            }
+            streamedCharCount += chunk.count
         case .thinking(let chunk):
+            recordFirstTokenIfNeeded()
             thinkingBuffer += chunk
+            streamedCharCount += chunk.count
         case .toolCall(let info):
+            recordFirstTokenIfNeeded()
+            streamedCharCount += info.arguments.count
             updateSessionToolCall(sessionId: sessionId, messageId: targetMsgId, tool: info)
         case .metrics(let metrics):
             var merged = metrics
+            merged.isPrefilling = currentMetrics.isPrefilling
+            merged.prefillElapsed = currentMetrics.prefillElapsed
             if merged.timeToFirstToken == nil { merged.timeToFirstToken = currentMetrics.timeToFirstToken }
+            if merged.contextWindowSize == nil { merged.contextWindowSize = currentMetrics.contextWindowSize }
+            if merged.promptTokens == 0 { merged.promptTokens = currentMetrics.promptTokens }
+            if merged.completionTokens == 0 { merged.completionTokens = currentMetrics.completionTokens }
+            if merged.prefillTokensPerSecond == nil {
+                if merged.promptTokens > 0, let ttft = merged.timeToFirstToken, ttft > 0.005 {
+                    merged.prefillTokensPerSecond = Double(merged.promptTokens) / ttft
+                } else {
+                    merged.prefillTokensPerSecond = currentMetrics.prefillTokensPerSecond
+                }
+            }
+            merged.tpsHistory = currentMetrics.tpsHistory
+            if let tps = merged.tokensPerSecond {
+                merged.appendTPSSample(tps)
+            } else {
+                merged.tokensPerSecond = currentMetrics.tokensPerSecond
+            }
             currentMetrics = merged
         case .done:
             break
@@ -509,7 +646,13 @@ extension ChatViewModel {
         return data.base64EncodedString()
     }
 
-    /// Wandelt eine ChatMessage in ein oder mehrere API-Payload-Dicts um.
+    /// Inhalt der tool-Nachricht: Ergebnis, in der letzten erlaubten Runde mit Abschluss-Hinweis.
+    static func toolMessageContent(_ call: ToolCallInfo) -> String {
+        let trimmed = (call.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = trimmed.isEmpty ? "Fehler: Das Tool hat kein Ergebnis geliefert." : trimmed
+        return call.limitNote == .finalRound ? content + "\n\n" + toolFinalRoundNotice : content
+    }
+
     /// Nummer jedes Nutzer-Screenshots im Chat (1-basiert, in Reihenfolge).
     static func screenshotNumbers(in messages: [ChatMessage]) -> [UUID: Int] {
         var numbers: [UUID: Int] = [:]
@@ -519,13 +662,28 @@ extension ChatViewModel {
         return numbers
     }
 
+    /// Preserve Thinking: Das unveränderte Thinking früherer Antworten geht als eigenes Feld
+    /// `reasoning_content` mit. Die Chat-Vorlage des Modells (oMLX/Qwen 3.6: `preserve_thinking`)
+    /// entscheidet, ob sie es im Verlauf behält; Vorlagen ohne die Funktion ignorieren das Feld.
+    /// Nebeneffekt: Der Prompt entspricht genau dem, was der Server im KV-Cache hat.
+    func attachReasoning(of msg: ChatMessage, to entry: inout [String: Any]) {
+        guard preserveThinking, let thinking = msg.thinking,
+              !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        entry["reasoning_content"] = thinking
+    }
+
+    /// Wandelt eine ChatMessage in ein oder mehrere API-Payload-Dicts um. Einzige Stelle, an der
+    /// Verlauf UND laufende Tool-Runden gebaut werden – jede Abweichung zwischen beiden würde den
+    /// Prefix-Cache des Servers an dieser Stelle brechen.
+    /// Bilder: Ein Screenshot geht als Bild mit, bis die Bild-Regel ihn einfriert
+    /// (`applyImageRetention`); danach dauerhaft als Textbeschreibung.
     func apiMessages(for msg: ChatMessage,
-                              highlightedUserMsgId: UUID,
-                              provider: EndpointProvider,
-                              screenshotNumber: Int? = nil) -> [[String: Any]] {
+                     provider: EndpointProvider,
+                     screenshotNumber: Int? = nil,
+                     recalledScreenshot: ((Int) -> String?)? = nil) -> [[String: Any]] {
         switch msg.role {
         case "user":
-            let attachImage = msg.id == highlightedUserMsgId || keepMultipleImagesInHistory
+            let attachImage = !msg.isImageContextFrozen || keepMultipleImagesInHistory
             let tag = screenshotNumber.map { "[Screenshot #\($0)]" } ?? "[Screenshot]"
             if attachImage, let b64 = Self.imagePayloadBase64(for: msg) {
                 let text = msg.content.isEmpty ? "Beschreibe diesen Screenshot." : msg.content
@@ -560,22 +718,26 @@ extension ChatViewModel {
                 let text: String
                 if !msg.content.isEmpty {
                     text = msg.content
-                } else if let thinking = msg.thinking, !thinking.isEmpty {
+                } else if !preserveThinking, let thinking = msg.thinking, !thinking.isEmpty {
                     text = Self.thinkingOnlyContent(thinking)
                 } else {
                     text = "" // Mit tool_calls ist ein leerer String bei OpenAI erlaubt
                 }
-                
-                var result: [[String: Any]] = [
-                    ["role": "assistant",
-                     "content": text,
-                     "tool_calls": tcArr]
-                ]
+
+                var assistant: [String: Any] = ["role": "assistant", "content": text, "tool_calls": tcArr]
+                attachReasoning(of: msg, to: &assistant)
+                var result: [[String: Any]] = [assistant]
                 for tc in normalizedCalls {
-                    let toolResult = (tc.result ?? "").isEmpty ? "Fehler: Kein Ergebnis." : tc.result!
                     result.append(["role": "tool",
                                    "tool_call_id": tc.id,
-                                   "content": toolResult])
+                                   "content": Self.toolMessageContent(tc)])
+                }
+                // Erneut abgerufene Screenshots folgen als Bildnachricht auf die Tool-Ergebnisse.
+                for tc in normalizedCalls {
+                    guard let number = tc.recalledScreenshot,
+                          let b64 = recalledScreenshot?(number) else { continue }
+                    result.append(EndpointManager.userImageMessage(text: "[Screenshot #\(number), erneut abgerufen]",
+                                                                   base64: b64, provider: provider))
                 }
                 return result
             }
@@ -589,12 +751,14 @@ extension ChatViewModel {
             let text: String
             if !msg.content.isEmpty {
                 text = msg.content
-            } else if let thinking = msg.thinking, !thinking.isEmpty {
+            } else if !preserveThinking, let thinking = msg.thinking, !thinking.isEmpty {
                 text = Self.thinkingOnlyContent(thinking)
             } else {
                 text = " " // Fallback um HTTP 400 Bad Request bei leerem Content zu vermeiden
             }
-            return [["role": "assistant", "content": text]]
+            var assistant: [String: Any] = ["role": "assistant", "content": text]
+            attachReasoning(of: msg, to: &assistant)
+            return [assistant]
 
         default:
             return [["role": msg.role, "content": msg.content]]

@@ -24,10 +24,22 @@ struct ChatView: View {
             SidebarView(viewModel: viewModel)
                 .navigationSplitViewColumnWidth(min: 205, ideal: 235, max: 300)
         } detail: {
-            // ── Detail ─────────────────────────────────────────────
+            // ── Detail (Durchgehendes Flowing Canvas) ──────────────
             VStack(spacing: 0) {
                 headerBar
                 messageList
+                    .overlay(alignment: .bottom) {
+                        if let notice = viewModel.flashcardNotice {
+                            FlashcardNoticeView(notice: notice,
+                                                onShow: { viewModel.flashcardNotice = nil; quizPanelSeed = nil; isShowingQuizPanel = true },
+                                                onUndo: { viewModel.undoFlashcardNotice(notice) },
+                                                onDismiss: { if viewModel.flashcardNotice?.id == notice.id { viewModel.flashcardNotice = nil } })
+                                .padding(.bottom, DS.Space.s)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                                .id(notice.id)
+                        }
+                    }
+                    .animation(.snappy(duration: 0.25), value: viewModel.flashcardNotice)
                 InputArea(
                     viewModel: viewModel,
                     inputText: $inputText,
@@ -41,6 +53,7 @@ struct ChatView: View {
                     }
                 )
             }
+            .background(DS.Surface.canvas)
         }
         .frame(minWidth: 400, minHeight: 400)
         .onReceive(NotificationCenter.default.publisher(for: .externalScreenshotCaptured)) { note in
@@ -62,265 +75,282 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .studyDocumentRequested)) { note in
             if let text = note.userInfo?["text"] as? String,
                let mode = note.userInfo?["mode"] as? String {
-                quizPanelSeed = (text: text, mode: mode)
-                isShowingQuizPanel = true
+                if mode == "flashcards" {
+                    quizPanelSeed = (text: text, mode: mode)
+                    isShowingQuizPanel = true
+                } else {
+                    // Abfragen läuft im Chat (Quizkarten), nicht mehr in einem eigenen Panel.
+                    viewModel.sendMessage(
+                        text: "Frag mich zu diesem Dokument ab: Stelle nacheinander 5 Fragen, jede als `quiz_card`, warte jeweils auf meine Antwort und gib kurzes Feedback.\n\nDokumentauszug:\n" + String(text.prefix(8_000)),
+                        displayText: "/quiz 5 (Dokument)")
+                }
             }
         }
         .sheet(isPresented: $isShowingQuizPanel) {
-            QuizFlashcardPanel(viewModel: viewModel, studySeed: quizPanelSeed)
+            FlashcardsPanel(viewModel: viewModel, documentSeed: quizPanelSeed?.text)
         }
         .sheet(isPresented: $isShowingChatScreenshots) {
             ChatScreenshotPanel(viewModel: viewModel)
         }
     }
 
-    // MARK: Header (Phase G: Liquid-Glass-Design)
+    // MARK: Header (Zweistufig: Volle Breite für den Titel oben, darunter Lernmodus & Live-Telemetrie)
 
     private var headerBar: some View {
-        HStack(spacing: DS.Space.s) {
-            Image(systemName: "graduationcap.fill")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(DS.Ink.accent.gradient)
-                .padding(.leading, DS.Space.m)
-            headerTitleBlock
-                .layoutPriority(1)
-            Spacer(minLength: DS.Space.s)
-            // Breite reicht nicht? Erst Beschriftungen weg (nur Symbole), dann die Metriken.
-            // Vorher wurden die Chips bei 800 px mit Seitenleiste zu senkrechten Schläuchen gequetscht.
-            ViewThatFits(in: .horizontal) {
-                headerGlassControls(compact: false)
-                headerGlassControls(compact: true)
-                headerGlassControls(compact: true, showMetrics: false)
+        VStack(alignment: .leading, spacing: 5) {
+            // 1. Obere Zeile: Feinerer Chat-Titel über die gesamte Fensterbreite (kein frühes Abschneiden!)
+            HStack(spacing: 7) {
+                LernAssistBrandIcon(size: 20)
+                Text(viewModel.activeSession?.title ?? "LernAssist")
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(DS.Ink.primary.opacity(0.9))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.trailing, DS.Space.m)
+
+            // 2. Untere Zeile: Links Lernmodus-Pill, rechts Live-Telemetrie-Kapsel & Aktionen
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DS.Space.s) {
+                    learningModeMenu(shortLabel: false)
+                    Spacer(minLength: DS.Space.xs)
+                    headerControls(compact: false)
+                }
+                HStack(spacing: DS.Space.xs) {
+                    learningModeMenu(shortLabel: true)
+                    Spacer(minLength: DS.Space.xs)
+                    headerControls(compact: true)
+                }
+                // Schmal: Telemetrie nur als Zahlen (Prefill · Decode), ganz schmal ohne.
+                HStack(spacing: DS.Space.xs) {
+                    learningModeMenu(shortLabel: true)
+                    Spacer(minLength: DS.Space.xs)
+                    headerControls(compact: true, metrics: .compact)
+                }
+                HStack(spacing: DS.Space.xs) {
+                    learningModeMenu(shortLabel: true)
+                    Spacer(minLength: DS.Space.xs)
+                    headerControls(compact: true, metrics: .hidden)
+                }
+            }
         }
-        .frame(minHeight: 54)
-        .padding(.top, DS.Space.xxs)
-        // Einziger bewusstes Drag-Areal des Panels. Die Buttons im Header liegen darüber und
-        // bleiben normal bedienbar; leere Header-Fläche verschiebt das Fenster per AppKit.
+        .padding(.horizontal, DS.Space.l)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
         .background(WindowDragHandle())
-        // Header liegt auf dem Vibrancy-Fenster – KEINE opake Hintergrundfarbe mehr, sonst
-        // würde der behindWindow-Blend der Panel-Fläche zerstört (Phase G).
     }
 
-    /// Titel + Lernmodus-Schnell-Picker (Phase H): aktueller Modus unter dem Titel, ein Klick
-    /// öffnet alle Modi – schneller Wechsel ohne Umweg über die Einstellungen.
-    private var headerTitleBlock: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(viewModel.activeSession?.title ?? "LernAssist")
-                .font(.system(.headline, design: .rounded))
-                .lineLimit(1)
-            learningModeMenu
+    private var learningModeColor: Color {
+        switch viewModel.learningStyle {
+        case .beginner: return DS.Accent.emerald
+        case .detailed: return DS.Accent.brand
+        case .exam:     return DS.Accent.amber
+        case .socratic: return DS.Accent.rose
+        case .tutor:    return DS.Accent.blue
+        case .compact:  return DS.Accent.cyan
+        case .visual:   return DS.Accent.cyan
         }
     }
 
-    private var learningModeMenu: some View {
-        Menu {
+    private func learningModeMenu(shortLabel: Bool = false) -> some View {
+        let fullText = viewModel.learningStyle.rawValue
+        let shortText = fullText.components(separatedBy: " ").first ?? fullText
+        return Menu {
             ForEach(LearningStyle.allCases, id: \.self) { style in
                 Button {
                     viewModel.learningStyle = style
                     viewModel.saveSettings()
                 } label: {
-                    Label(style.rawValue, systemImage: style.symbol)
+                    if style == viewModel.learningStyle {
+                        Label(style.rawValue, systemImage: "checkmark")
+                    } else {
+                        Label(style.rawValue, systemImage: style.symbol)
+                    }
                 }
-                .disabled(style == viewModel.learningStyle)
             }
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: viewModel.learningStyle.symbol)
-                Text(viewModel.learningStyle.rawValue)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+            GlassChip {
+                HStack(spacing: 5) {
+                    Image(systemName: viewModel.learningStyle.symbol)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(learningModeColor)
+                    Text(shortLabel ? shortText : fullText)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
-        .menuIndicator(.hidden)
-        .menuStyle(.borderlessButton)
+        .buttonStyle(.plain)
         .fixedSize()
         .help("Lernmodus wechseln (wirkt auf die nächste Anfrage)")
+        .accessibilityLabel("Lernmodus: \(viewModel.learningStyle.rawValue)")
     }
 
-    /// Rechte Steuerseite: alle Glas-Elemente in EINEM Container – nur so sampeln verwandte
-    /// Glass-Flächen konsistent (Kernregel der Liquid-Glass-Designsprache: Glass kann kein
-    /// anderes Glass sampeln).
-    private func headerGlassControls(compact: Bool, showMetrics: Bool = true) -> some View {
-        GlassEffectContainer {
-            HStack(spacing: DS.Space.s) {
-                headerGlassChips(compact: compact, showMetrics: showMetrics)
-                headerIconButtons
-            }
-            .fixedSize()
+    enum MetricsMode { case full, compact, hidden }
+
+    private func headerControls(compact: Bool, metrics: MetricsMode = .full) -> some View {
+        HStack(spacing: DS.Space.s) {
+            headerChips(compact: compact, metrics: metrics)
+            headerActionCluster
         }
+        .fixedSize()
     }
 
     @ViewBuilder
-    private func headerGlassChips(compact: Bool, showMetrics: Bool) -> some View {
-        // Auto-Kompakt-Angebot (Phase H): nur sichtbar, wenn der Chat lang wird.
+    private func headerChips(compact: Bool, metrics: MetricsMode) -> some View {
         if viewModel.shouldSuggestCompaction {
             Button {
                 viewModel.compactChat()
             } label: {
-                Label("Zusammenfassen", systemImage: "sparkles")
-                    .labelStyle(AdaptiveLabelStyle(compact: compact))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
+                GlassChip {
+                    Label("Zusammenfassen", systemImage: "sparkles")
+                        .labelStyle(AdaptiveLabelStyle(compact: compact))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(DS.Accent.amber)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                }
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular, in: Capsule())
             .help("Der Chat füllt das Kontextfenster – hier zusammenfassen und als neuen Chat weiterführen")
         }
 
-        if showMetrics {
-            MetricsBar(viewModel: viewModel)
+        if metrics != .hidden {
+            MetricsBar(viewModel: viewModel, telemetry: viewModel.telemetry, compact: metrics == .compact)
         }
 
-        // Bilder dieses Chats
         if let session = viewModel.activeSession,
            session.messages.contains(where: { $0.imageID != nil }) {
             Button(action: { isShowingChatScreenshots = true }) {
-                Label("Bilder", systemImage: "photo.stack")
-                    .labelStyle(AdaptiveLabelStyle(compact: compact))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
+                GlassChip {
+                    Label("Bilder", systemImage: "photo.stack")
+                        .labelStyle(AdaptiveLabelStyle(compact: compact))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(DS.Accent.cyan)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                }
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular, in: Capsule())
             .help("Zeigt alle Screenshots dieses Chats")
         }
 
         headerQuizChip(compact: compact)
-
-        // Teilen (Safari-Stil, Phase H): ganzer Chat als Markdown über das System-Share-Menü.
-        // Lazy (Perf-Audit K2): Der Markdown-String entsteht erst beim Klick, nicht pro Render.
-        if viewModel.activeSession != nil, !(viewModel.activeSession?.messages.isEmpty ?? true) {
-            GlassShareButton(
-                provideItem: { [weak viewModel = viewModel] in
-                    guard let viewModel, let session = viewModel.activeSession else { return "" }
-                    return viewModel.chatMarkdown(for: session)
-                },
-                help: "Chat als Markdown teilen (Mail, Notizen, AirDrop …)"
-            )
-        }
     }
 
-    /// Quiz-/Karteikarten-Chip mit Fällig-Badge (bleibt auch bei kurzen Chats sichtbar, wenn
-    /// global Karteikarten fällig sind).
+    /// Karteikarten-Chip mit Fällig-Badge.
     @ViewBuilder
     private func headerQuizChip(compact: Bool) -> some View {
-        if let session = viewModel.activeSession,
-           (session.messages.count >= 2 || viewModel.dueFlashcardsCount > 0),
-           !viewModel.isStreaming {
+        if viewModel.activeSession != nil, !viewModel.isStreaming {
             Button(action: { isShowingQuizPanel = true; quizPanelSeed = nil }) {
-                HStack(spacing: DS.Space.xxs) {
-                    Label("Quiz", systemImage: "checkmark.circle.badge.questionmark")
-                        .labelStyle(AdaptiveLabelStyle(compact: compact))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.primary)
-                    if viewModel.dueFlashcardsCount > 0 {
-                        Text("\(min(viewModel.dueFlashcardsCount, 99))")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.red))
+                GlassChip {
+                    HStack(spacing: 4) {
+                        Image(systemName: "rectangle.on.rectangle.angled")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(DS.Ink.accent)
+                        if !compact {
+                            Text("Karten")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(.primary)
+                        }
+                        if viewModel.dueFlashcardsCount > 0 {
+                            Text("\(min(viewModel.dueFlashcardsCount, 99))")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(DS.Ink.accent))
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
                 }
-                .padding(.horizontal, DS.Space.s)
-                .padding(.vertical, DS.Space.xs)
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular, in: Capsule())
             .help(viewModel.dueFlashcardsCount > 0
-                  ? "Öffnet das Quiz- & Karteikarten-Panel — \(viewModel.dueFlashcardsCount) Karte(n) fällig"
-                  : "Öffnet das Quiz- & Karteikarten-Panel für die besprochenen Themen")
+                  ? "Karteikarten – \(viewModel.dueFlashcardsCount) fällig"
+                  : "Karteikarten ansehen, anlegen und wiederholen")
+            .accessibilityLabel(viewModel.dueFlashcardsCount > 0 ? "Karteikarten, \(viewModel.dueFlashcardsCount) fällig" : "Karteikarten")
         }
     }
 
-    @ViewBuilder
-    private var headerIconButtons: some View {
-        GlassIconButton(systemImage: "sidebar.left", help: "Sidebar ein-/ausblenden") {
-            NotificationCenter.default.post(name: .toggleSidebar, object: nil)
-        }
-        GlassIconButton(systemImage: "slider.horizontal.3", help: "Einstellungen öffnen") {
-            SettingsWindowController.shared.show(viewModel: viewModel, tab: nil)
+    /// Gebündelte Action-Kapsel rechts im Header (statt einzelner schwarz umrandeter Kreise).
+    private var headerActionCluster: some View {
+        GlassChip {
+            HStack(spacing: 2) {
+                if viewModel.activeSession != nil, !(viewModel.activeSession?.messages.isEmpty ?? true) {
+                    GlassShareButton(
+                        provideItem: { [weak viewModel = viewModel] in
+                            guard let viewModel, let session = viewModel.activeSession else { return "" }
+                            return viewModel.chatMarkdown(for: session)
+                        },
+                        help: "Chat als Markdown teilen (Mail, Notizen, AirDrop …)"
+                    )
+                }
+
+                GlassIconButton(systemImage: "sidebar.left", help: "Sidebar ein-/ausblenden") {
+                    NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+                }
+
+                GlassIconButton(systemImage: "slider.horizontal.3", help: "Einstellungen öffnen") {
+                    SettingsWindowController.shared.show(viewModel: viewModel, tab: nil)
+                }
+            }
+            .padding(.horizontal, 3)
+            .padding(.vertical, 2)
         }
     }
 
     // MARK: Nachrichtenliste
 
-    // true wenn der User ABSICHTLICH nach oben gescrollt hat (via LiveScroll-Event).
-    // Wird via ScrollBottomDetector.onUserScroll gesetzt – unterscheidet echten
-    // User-Scroll von programmatischen proxy.scrollTo-Aufrufen.
     @State private var userScrolledUp = false
 
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // VStack statt LazyVStack: Hält alle WKWebView-Instanzen am Leben.
-                // LazyVStack crasht auf macOS bei asynchronen Höhen-Updates von NSViewRepresentables (EXC_BREAKPOINT).
-                // Der WebViewPool wird für die existierenden WebViews beim Dismanteln trotzdem verwendet!
-                VStack(alignment: .leading, spacing: 28) {
+                VStack(alignment: .leading, spacing: 26) {
+                    Color.clear.frame(height: 0).id("top")
                     if let session = viewModel.activeSession {
                         let messagesToShow = session.messages.filter { $0.role != "tool" }
 
                         if messagesToShow.isEmpty {
                             emptyChatState
                         } else {
-                            ForEach(Array(messagesToShow.enumerated()), id: \.element.id) { idx, message in
-                            // MessageRow als eigenes Struct: Entlastet den Type-Checker, der
-                            // den kompletten Inline-Body (viele bedingte Closures) nicht mehr
-                            // in angemessener Zeit prüfen konnte.
-                            MessageRow(
-                                viewModel: viewModel,
-                                message: message,
-                                messages: messagesToShow,
-                                isLast: idx == messagesToShow.indices.last,
-                                prevMessage: idx > 0 ? messagesToShow[idx - 1] : nil,
-                                isStreaming: viewModel.isStreaming,
-                                fontScale: viewModel.chatFontSize,
-                                userScrolledUp: $userScrolledUp,
-                                onEditFromUserMessage: { msg in
-                                    userScrolledUp = false
-                                    if let text = viewModel.branchFromUserMessageForEditing(id: msg.id) {
-                                        inputText = text
-                                    }
-                                },
-                                onRetryFailed: { msg in
-                                    userScrolledUp = false
-                                    viewModel.retryFailedExchange(assistantMessageId: msg.id)
-                                },
-                                onRollbackFailed: { msg in
-                                    userScrolledUp = false
-                                    if let text = viewModel.rollbackFailedExchange(assistantMessageId: msg.id) {
-                                        inputText = text
-                                    }
+                            let items = ChatRowItem.items(from: messagesToShow)
+                            ForEach(items) { item in
+                                switch item {
+                                case .turn(let turn):
+                                    AssistantTurnRow(
+                                        messages: turn,
+                                        isRunning: viewModel.isStreaming && item.id == items.last?.id,
+                                        row: { message, isLastInTurn in
+                                            messageRow(message, isLast: isLastInTurn && item.id == items.last?.id,
+                                                       prevMessage: nil, embedded: true)
+                                        }
+                                    )
+                                    .id(item.id)
+                                case .single(let message):
+                                    messageRow(message, isLast: item.id == items.last?.id,
+                                               prevMessage: nil, embedded: false)
                                 }
-                            )
                             }
                         }
+                    } else {
+                        emptyChatState
                     }
-                    // Scroll-Anker
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.vertical, 12)
-                // Auch im Vollbild bleibt der Dialog eine zusammenhängende Spalte:
-                // Nutzer-Bubbles rechts und Assistenten-Inhalte links innerhalb derselben
-                // lesbaren Breite, statt an entgegengesetzten Fensterrändern zu kleben.
+
+                .padding(.vertical, 16)
                 .frame(maxWidth: 1100)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 20)
-                // ScrollBottomDetector als Background des VStack – INNERHALB des ScrollView.
-                // Nur so liegt _ScrollDetectorView im Document View des NSScrollView und
-                // kann via superview-Traversal den NSScrollView finden.
-                // Als .background() auf dem ScrollView selbst wäre es ein Geschwister-View
-                // des NSScrollView → attachToScrollView() würde ihn nie finden.
+                .padding(.horizontal, 22)
                 .background(ScrollBottomDetector(
                     onScrolled: {
                         userScrolledUp = true
@@ -330,30 +360,57 @@ struct ChatView: View {
                     }
                 ))
             }
-            // Phase G: Nachrichten-Fläche als Material – Chat-Text bleibt lesbar, das
-            // Vibrancy-Fenster dahinter schimmert dezent durch (Glass-Regel: Steuerflächen
-            // aus Glass, Content auf ruhiger, leicht transluzenter Fläche).
-            .background(.thinMaterial)
+            // Sanftes Ein-/Ausblenden oben und unten am Übergang zu Header und Composer
+            .mask(
+                VStack(spacing: 0) {
+                    LinearGradient(
+                        colors: [.clear, .black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 12)
+                    Color.black
+                    LinearGradient(
+                        colors: [.black, .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 14)
+                }
+            )
             .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
                 withAnimation {
                     columnVisibility = (columnVisibility == .all) ? .detailOnly : .all
                 }
             }
-            // Auto-Scroll nur wenn User NICHT nach oben gescrollt hat
-            .onChange(of: viewModel.activeSession?.messages.last?.content) { _ in
+            .onChange(of: viewModel.activeSession?.messages.last?.content) { _, _ in
                 if !userScrolledUp { debouncedScrollToBottom(proxy: proxy) }
             }
-            .onChange(of: viewModel.activeSession?.messages.last?.thinking) { _ in
+            .onChange(of: viewModel.activeSession?.messages.last?.thinking) { _, _ in
                 if !userScrolledUp { debouncedScrollToBottom(proxy: proxy) }
             }
-            .onChange(of: viewModel.activeSession?.messages.count) { _ in
-                if !userScrolledUp { debouncedScrollToBottom(proxy: proxy) }
+            .onChange(of: viewModel.activeSession?.messages.count) { _, _ in
+                // Eigene neue Nachricht (auch über Slash-Befehle, Quizkarten, Startkarten):
+                // immer ans Ende springen, selbst wenn vorher hochgescrollt war.
+                if viewModel.activeSession?.messages.last?.role == "user" {
+                    userScrolledUp = false
+                    scrollToBottom(proxy: proxy, animated: true)
+                } else if !userScrolledUp {
+                    debouncedScrollToBottom(proxy: proxy)
+                }
             }
-            .onChange(of: viewModel.isStreaming) { streaming in
-                // Streaming beendet → nur scrollen wenn User NICHT hochgescrollt hat.
-                // userScrolledUp wird hier NICHT zurückgesetzt – nur send() darf das.
-                // (Fix: Tool-Call-Zyklen triggerten diesen Handler mehrfach und
-                //  zogen den User jedes Mal ans Ende zurück.)
+            .onChange(of: viewModel.activeSessionId) { _, _ in
+                // Chatwechsel: Scrollposition des vorherigen Chats nicht übernehmen.
+                userScrolledUp = false
+                DispatchQueue.main.async {
+                    if viewModel.activeSession?.messages.isEmpty ?? true {
+                        proxy.scrollTo("top", anchor: .top)
+                    } else {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: viewModel.isStreaming) { _, streaming in
                 if !streaming && !userScrolledUp {
                     scrollToBottom(proxy: proxy, animated: true)
                 }
@@ -361,72 +418,63 @@ struct ChatView: View {
         }
     }
 
-    /// Ruhiger Startzustand statt einer leeren Chat-Fläche. Die Vorschläge setzen nur den
-    /// Eingabetext; gesendet wird weiterhin ausschließlich durch die übliche Senden-Aktion.
+    /// Ruhiger, moderner Startzustand mit dem neuen LernAssist-App-Icon und farblich akzentuierten Startkarten.
     private var emptyChatState: some View {
-        VStack(spacing: DS.Space.l) {
+        VStack(spacing: DS.Space.l + 4) {
             ZStack {
                 Circle()
-                    .fill(DS.Ink.accent.opacity(0.12))
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 28, weight: .semibold))
-                    .foregroundStyle(DS.Ink.accent.gradient)
-            }
-            .frame(width: 68, height: 68)
+                    .fill(
+                        RadialGradient(
+                            colors: [DS.Accent.brand.opacity(0.18), Color.clear],
+                            center: .center,
+                            startRadius: 4,
+                            endRadius: 52
+                        )
+                    )
+                    .frame(width: 96, height: 96)
 
-            VStack(spacing: DS.Space.xs) {
+                LernAssistBrandIcon(size: 62)
+            }
+
+            VStack(spacing: DS.Space.xs + 2) {
                 Text("Womit möchtest du lernen?")
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .font(.system(size: 21, weight: .semibold, design: .rounded))
                 Text("Stelle eine Frage, füge einen Screenshot hinzu oder wähle einen Startpunkt.")
-                    .font(.callout)
+                    .font(.system(size: 13.5, design: .rounded))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
 
-            Grid(horizontalSpacing: DS.Space.s, verticalSpacing: DS.Space.s) {
+            Grid(horizontalSpacing: DS.Space.m, verticalSpacing: DS.Space.m) {
                 GridRow {
-                    welcomePrompt("Screenshot aufnehmen", icon: "camera.viewfinder", action: captureAndSend)
-                    welcomePrompt("Einfach erklären", icon: "text.book.closed", text: "Erkläre mir dieses Thema einfach und mit einem Beispiel:")
-                    welcomePrompt("Lernplan erstellen", icon: "calendar.badge.plus", text: "Erstelle mir einen kurzen Lernplan für:")
+                    welcomePrompt("Screenshot", subtitle: "Bereich erklären lassen", icon: "camera.viewfinder", tint: DS.Accent.brand, action: captureAndSend)
+                    welcomePrompt("Einfach erklären", subtitle: "Mit Alltagsbeispiel", icon: "text.book.closed.fill", tint: DS.Accent.emerald, text: "Erkläre mir dieses Thema einfach und mit einem Beispiel:")
+                    welcomePrompt("Lernplan erstellen", subtitle: "Strukturierte Schritte", icon: "calendar.badge.plus", tint: DS.Accent.blue, text: "Erstelle mir einen kurzen Lernplan für:")
                 }
                 GridRow {
-                    welcomePrompt("Mich abfragen", icon: "checkmark.circle", text: "/quiz ")
-                    welcomePrompt("Diagramm", icon: "chart.xyaxis.line", text: "/diagram ")
-                    welcomePrompt("Zusammenfassen", icon: "list.bullet.rectangle", text: "/summary ")
+                    welcomePrompt("Mich abfragen", subtitle: "Interaktives Quiz", icon: "checkmark.seal.fill", tint: DS.Accent.rose, text: "/quiz ")
+                    welcomePrompt("Diagramm", subtitle: "Ablauf visualisieren", icon: "chart.xyaxis.line", tint: DS.Accent.cyan, text: "/diagram ")
+                    welcomePrompt("Zusammenfassen", subtitle: "Kernaussagen kompakt", icon: "list.bullet.rectangle.portrait.fill", tint: DS.Accent.amber, text: "/summary ")
                 }
             }
         }
-        .padding(DS.Space.xxl)
-        .frame(maxWidth: 610)
-        .frame(maxWidth: .infinity, minHeight: 330)
+        .padding(.vertical, DS.Space.xxl)
+        .padding(.horizontal, DS.Space.l)
+        .frame(maxWidth: 640)
+        .frame(maxWidth: .infinity, minHeight: 350)
     }
 
-    private func welcomePrompt(_ title: String, icon: String, text: String = "", action: (() -> Void)? = nil) -> some View {
-        Button {
+    private func welcomePrompt(
+        _ title: String,
+        subtitle: String,
+        icon: String,
+        tint: Color,
+        text: String = "",
+        action: (() -> Void)? = nil
+    ) -> some View {
+        WelcomeCardButton(title: title, subtitle: subtitle, icon: icon, tint: tint) {
             if let action { action() } else { inputText = text }
-        } label: {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(DS.Ink.accent)
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(maxWidth: .infinity, minHeight: 66, alignment: .leading)
-            .padding(DS.Space.m)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                    .fill(DS.Surface.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                    .stroke(DS.Ink.hairline.opacity(0.55), lineWidth: 0.5)
-            )
         }
-        .buttonStyle(.plain)
-        .help("Setzt eine Vorlage ins Eingabefeld")
     }
 
     // Rate-limiting für automatisches Scrollen (max alle 100ms)
@@ -449,6 +497,36 @@ struct ChatView: View {
         } else {
             proxy.scrollTo("bottom", anchor: .bottom)
         }
+    }
+
+    /// Eine Nachrichtenzeile mit allen Aktionen (Bearbeiten, Retry, Rollback).
+    private func messageRow(_ message: ChatMessage, isLast: Bool, prevMessage: ChatMessage?, embedded: Bool) -> some View {
+        MessageRow(
+            viewModel: viewModel,
+            message: message,
+            isLast: isLast,
+            prevMessage: prevMessage,
+            isStreaming: viewModel.isStreaming,
+            embedded: embedded,
+            fontScale: viewModel.chatFontSize,
+            userScrolledUp: $userScrolledUp,
+            onEditFromUserMessage: { msg in
+                userScrolledUp = false
+                if let text = viewModel.branchFromUserMessageForEditing(id: msg.id) {
+                    inputText = text
+                }
+            },
+            onRetryFailed: { msg in
+                userScrolledUp = false
+                viewModel.retryFailedExchange(assistantMessageId: msg.id)
+            },
+            onRollbackFailed: { msg in
+                userScrolledUp = false
+                if let text = viewModel.rollbackFailedExchange(assistantMessageId: msg.id) {
+                    inputText = text
+                }
+            }
+        )
     }
 
     // MARK: Aktionen
@@ -526,11 +604,11 @@ struct ChatView: View {
 private struct MessageRow: View {
     let viewModel: ChatViewModel
     let message: ChatMessage
-    /// Allen Rows dieselbe Array-Instanz statt pro Row einer O(n)-Prefix-Kopie (Audit U4).
-    let messages: [ChatMessage]
     let isLast: Bool
     let prevMessage: ChatMessage?
     let isStreaming: Bool
+    /// Teil eines Antwort-Blocks: Bubble zeigt nur Ergebnisse (siehe AssistantTurnRow).
+    var embedded: Bool = false
     let fontScale: Double
     @Binding var userScrolledUp: Bool
     // Fehler-UX (Phase Retry): Aktionen, die den Chat-Zustand + das Eingabefeld der ChatView brauchen.
@@ -564,6 +642,7 @@ private struct MessageRow: View {
                     chatViewModel: viewModel,
                     isStreaming: isStreaming && isLast,
                     isContinuation: isContinuation,
+                    embedded: embedded,
                     fontScale: fontScale,
                     onExplainDifferently: message.role == "assistant" ? {
                         userScrolledUp = false
@@ -630,6 +709,149 @@ struct AdaptiveLabelStyle: LabelStyle {
             configuration.icon
         } else {
             HStack(spacing: 4) { configuration.icon; configuration.title }
+        }
+    }
+}
+
+// MARK: - WelcomeCardButton (Farbig akzentuierte Schnellstart-Karte)
+
+private struct WelcomeCardButton: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let tint: Color
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tint.opacity(isHovered ? 0.20 : 0.13))
+                    .frame(width: 28, height: 28)
+                    .overlay(
+                        Image(systemName: icon)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(tint)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Text(subtitle)
+                        .font(.system(size: 11, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+            .padding(DS.Space.m)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                    .fill(isHovered ? tint.opacity(0.05) : DS.Surface.card)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                    .stroke(isHovered ? tint.opacity(0.28) : DS.Ink.hairline, lineWidth: 0.75)
+            )
+            .shadow(color: .black.opacity(isHovered ? 0.05 : 0.025), radius: isHovered ? 8 : 5, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Setzt eine Vorlage ins Eingabefeld")
+        .accessibilityLabel("\(title): \(subtitle)")
+    }
+}
+
+
+
+// MARK: - Antwort-Blöcke
+
+/// Zeile der Nachrichtenliste: einzelne Nachricht (Nutzer, System, Dokument) oder eine komplette
+/// Antwort des Modells aus mehreren aufeinanderfolgenden Assistenten-Nachrichten.
+enum ChatRowItem: Identifiable {
+    case single(ChatMessage)
+    case turn([ChatMessage])
+
+    var id: UUID {
+        switch self {
+        case .single(let message): return message.id
+        case .turn(let messages): return messages[0].id
+        }
+    }
+
+    static func items(from messages: [ChatMessage]) -> [ChatRowItem] {
+        var items: [ChatRowItem] = []
+        var turn: [ChatMessage] = []
+        for message in messages {
+            if message.role == "assistant" {
+                turn.append(message)
+            } else {
+                if !turn.isEmpty { items.append(.turn(turn)); turn = [] }
+                items.append(.single(message))
+            }
+        }
+        if !turn.isEmpty { items.append(.turn(turn)) }
+        return items
+    }
+}
+
+/// Eine Antwort: Avatar, darüber die Arbeitsschritte, darunter die Ergebnisse (Plot, Simulation,
+/// Quizkarte, Antworttext) – ohne die frühere Überlappung per negativem Abstand.
+private struct AssistantTurnRow<Row: View>: View {
+    let messages: [ChatMessage]
+    let isRunning: Bool
+    let row: (ChatMessage, Bool) -> Row
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.Space.m) {
+            LernAssistBrandIcon(size: 30)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                WorkStepsView(messages: messages, isRunning: isRunning)
+                    .equatable()
+                ForEach(messages) { message in
+                    row(message, message.id == messages.last?.id)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+
+// MARK: - Hinweis nach „Als Karte merken“
+
+private struct FlashcardNoticeView: View {
+    let notice: FlashcardNotice
+    let onShow: () -> Void
+    let onUndo: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            Image(systemName: notice.isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(notice.isError ? Color.orange : DS.Accent.emerald)
+            Text(notice.text)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+            if !notice.isError {
+                Divider().frame(height: 12)
+                Button("Ansehen", action: onShow).buttonStyle(.plain).foregroundStyle(DS.Ink.accent)
+                Button("Rückgängig", action: onUndo).buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        .padding(.horizontal, DS.Space.m)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(DS.Surface.pill).shadow(color: .black.opacity(0.12), radius: 10, y: 3))
+        .overlay(Capsule().stroke(DS.Ink.hairline, lineWidth: 0.75))
+        .task {
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            onDismiss()
         }
     }
 }

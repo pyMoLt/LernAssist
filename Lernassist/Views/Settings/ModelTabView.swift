@@ -5,7 +5,6 @@ import SwiftUI
 
 struct ModelTabView: View {
     @ObservedObject var viewModel: ChatViewModel
-    @State private var availableModels: [(id: String, contextWindow: Int?)] = []
     @State private var isLoadingModels = false
     @State private var loadError: String?
 
@@ -13,180 +12,126 @@ struct ModelTabView: View {
         viewModel.profiles.firstIndex(where: { $0.id == viewModel.activeProfileID })
     }
 
+    private var cachedModels: [(id: String, contextWindow: Int?)] {
+        guard let idx = activeIndex else { return [] }
+        return viewModel.cachedModelsByProfile[viewModel.profiles[idx].id] ?? []
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
             if let idx = activeIndex {
-                settingsSection(icon: "cpu", title: "Modell (\(viewModel.profiles[idx].name))") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        labeledField("Modellname") {
-                            HStack {
-                                TextField("local-model", text: $viewModel.profiles[idx].model)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.body, design: .monospaced))
-                                Button {
-                                    loadModels(for: viewModel.profiles[idx])
-                                } label: {
-                                    if isLoadingModels {
-                                        ProgressView().controlSize(.small)
-                                    } else {
-                                        Image(systemName: "arrow.clockwise")
-                                    }
+                let profile = viewModel.profiles[idx]
+
+                settingsSection(
+                    icon: "cpu.fill",
+                    title: "Haupt-Modell (\(profile.name))",
+                    tint: DS.Accent.indigo,
+                    trailing: {
+                        Button {
+                            loadModels(for: profile)
+                        } label: {
+                            HStack(spacing: 4) {
+                                if isLoadingModels {
+                                    ProgressView().controlSize(.mini).scaleEffect(0.75)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11, weight: .semibold))
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(isLoadingModels)
+                                Text("Modelle abrufen")
                             }
-                            .settingHelp("Modell-Liste vom Server laden (GET /v1/models bzw. /api/v0/models, je nach Endpunkt-Einstellung). Kontextfenster-Größe wird seit Kurzem auch automatisch beim Start/Profilwechsel abgefragt.")
                         }
-                        labeledField("Kontext-Fenster (Override)") {
-                            TextField("Auto / 8192", value: $viewModel.profiles[idx].contextSizeOverride, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .settingHelp("Erzwingt ein spezifisches Kontextfenster (Token-Limit) für die UI-Anzeige.\n• Ideal: Leer lassen (Auto)\n• Wenn voll: Trage hier die exakte Größe (z.B. 8192 oder 16384) deines lokalen Modells ein.")
-                        }
-                        if !availableModels.isEmpty {
-                            Menu("Verfügbare Modelle (\(availableModels.count))") {
-                                ForEach(availableModels, id: \.id) { m in
-                                    Button(m.id) {
+                        .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo))
+                        .disabled(isLoadingModels)
+                    }
+                ) {
+                    VStack(alignment: .leading, spacing: DS.Space.m) {
+                        HStack(alignment: .top, spacing: DS.Space.m) {
+                            labeledField("Aktives Chat-Modell") {
+                                modelInputWithDropdown(
+                                    text: $viewModel.profiles[idx].model,
+                                    placeholder: "local-model",
+                                    models: cachedModels,
+                                    onPick: { m in
                                         viewModel.profiles[idx].model = m.id
                                         if let cw = m.contextWindow {
                                             viewModel.profiles[idx].contextSizeOverride = cw
                                         }
                                     }
-                                }
+                                )
+                                .settingHelp("Modell-Liste vom Server laden (GET /v1/models bzw. /api/v0/models). Sobald ein Server gepingt wurde, steht das Ausklapp-Menü direkt bereit.")
                             }
-                            .font(.caption2)
-                        }
-                        if let loadError {
-                            Text(loadError).font(.caption2).foregroundStyle(.red)
+                            .frame(maxWidth: .infinity)
+
+                            labeledField("Kontext-Fenster (Tokens)") {
+                                TextField("Auto / 32768", value: $viewModel.profiles[idx].contextSizeOverride, format: .number)
+                                    .modifier(SettingsFieldStyle(monospaced: true))
+                                    .settingHelp("Erzwingt ein spezifisches Kontextfenster (Token-Limit) für die UI-Anzeige.\n• Ideal: Leer lassen (Auto)\n• Wenn voll: Exakte Größe (z.B. 8192 oder 32768) eintragen.")
+                            }
+                            .frame(width: 170)
                         }
 
+                        if let loadError {
+                            Label(loadError, systemImage: "exclamationmark.circle.fill")
+                                .font(.caption2)
+                                .foregroundStyle(DS.Accent.rose)
+                        }
                     }
                 }
 
-                settingsSection(icon: "hare", title: "Hintergrund-Job-Modell (optional)") {
-                    labeledField("Modell für Titel / Bild-Beschreibung / Zusammenfassung") {
-                        HStack {
-                            TextField("Leer = Chat-Modell verwenden", text: $viewModel.profiles[idx].backgroundJobModel)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                            if !availableModels.isEmpty {
-                                Menu {
-                                    Button("Chat-Modell verwenden (Standard)") {
-                                        viewModel.profiles[idx].backgroundJobModel = ""
-                                    }
-                                    Divider()
-                                    ForEach(availableModels, id: \.id) { m in
-                                        Button(m.id) {
-                                            viewModel.profiles[idx].backgroundJobModel = m.id
-                                        }
-                                    }
-                                } label: {
-                                    Image(systemName: "chevron.down.circle")
+                settingsSection(icon: "hare.fill", title: "Hintergrund-Job-Modell (optional)", tint: DS.Accent.emerald) {
+                    VStack(alignment: .leading, spacing: DS.Space.s) {
+                        Text("Optional ein schnelles Zweitmodell für automatische Chat-Titel, Bild-Beschreibungen und Zusammenfassungen. Leer lassen, um das Haupt-Modell zu nutzen.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        labeledField("Modell für Hintergrund-Aufgaben") {
+                            modelInputWithDropdown(
+                                text: $viewModel.profiles[idx].backgroundJobModel,
+                                placeholder: "Leer = Haupt-Modell verwenden",
+                                models: cachedModels,
+                                emptyOptionLabel: "Haupt-Modell verwenden (Standard)",
+                                onPick: { m in
+                                    viewModel.profiles[idx].backgroundJobModel = m.id
                                 }
-                                .menuStyle(.borderlessButton)
-                                .menuIndicator(.hidden) // sonst überlagert macOS' eigener Pfeil das Icon
-                                .frame(width: 22)
-                            }
-                            Button {
-                                loadModels(for: viewModel.profiles[idx])
-                            } label: {
-                                if isLoadingModels {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isLoadingModels)
+                            )
+                            .settingHelp("Spart Zeit bei Hintergrund-Jobs. Quiz und Karteikarten nutzen weiterhin immer das Haupt-Modell.")
                         }
-                        .settingHelp("Optional ein kleineres/schnelleres Modell NUR für Titel-Generierung, Bild-Beschreibung und Zusammenfassungen, um Zeit (und ggf. RAM ggü. dem großen Chat-Modell, da der Server bei Bedarf zwischen geladenen Modellen wechselt) zu sparen. Leer lassen, um immer das Chat-Modell zu nutzen. Quiz und Karteikarten nutzen bewusst weiterhin immer das volle Chat-Modell – dort zählt die inhaltliche Qualität mehr als Geschwindigkeit. Liste über \"Modelle laden\" oben befüllen.")
                     }
                 }
 
                 // LM Studio-spezifische Felder: nur bei lokalem LM Studio-Endpunkt
-                if viewModel.profiles[idx].provider == .lmStudioNative ||
-                   (viewModel.profiles[idx].provider == .openAICompatible &&
-                    (viewModel.profiles[idx].baseURL.contains("localhost") || viewModel.profiles[idx].baseURL.contains("127.0.0.1"))) {
-                    settingsSection(icon: "arrow.up.arrow.down.circle", title: "LM Studio Automatisches Laden/Entladen") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Wenn ein Modell nicht geladen ist, lädt LernAssist es automatisch über die LM Studio API.\n• Haupt-Modell: bleibt geladen, solange du dieses Profil/Modell aktiv nutzt (kein Idle-Entladen – das würde sonst zwischen zwei Nachrichten den Server-Cache verwerfen und die nächste Antwort verlangsamen). Wird erst beim Wechsel auf ein anderes Modell/Profil freigegeben.\n• Hintergrund-Modell: wird nur für die Dauer eines einzelnen Hintergrund-Jobs geladen und nach 3 Sekunden Leerlauf automatisch wieder entladen.")
+                if profile.provider == .lmStudioNative ||
+                   (profile.provider == .openAICompatible &&
+                    (profile.baseURL.contains("localhost") || profile.baseURL.contains("127.0.0.1"))) {
+                    settingsSection(icon: "arrow.up.arrow.down.circle.fill", title: "LM Studio Auto-Load / Unload", tint: DS.Accent.cyan) {
+                        VStack(alignment: .leading, spacing: DS.Space.m) {
+                            Text("Lädt Modelle bei Bedarf automatisch über die LM Studio API nach. Das Haupt-Modell bleibt aktiv im Speicher; ein separates Hintergrund-Modell wird nach 3 Sekunden Leerlauf wieder entladen.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            labeledField("Modell-ID (Haupt-Modell)") {
-                                HStack {
-                                    TextField("z.B. bartowski/Qwen2.5-7B-Instruct-GGUF (Leer = Modellname oben)", text: $viewModel.profiles[idx].lmStudioModelId)
-                                        .textFieldStyle(.roundedBorder)
-                                        .font(.system(.caption, design: .monospaced))
-                                    if !availableModels.isEmpty {
-                                        Menu {
-                                            Button("Automatisch (aus Modellname-Feld)") {
-                                                viewModel.profiles[idx].lmStudioModelId = ""
-                                            }
-                                            Divider()
-                                            ForEach(availableModels, id: \.id) { m in
-                                                Button(m.id) {
-                                                    viewModel.profiles[idx].lmStudioModelId = m.id
-                                                }
-                                            }
-                                        } label: {
-                                            Image(systemName: "chevron.down.circle")
-                                        }
-                                        .menuStyle(.borderlessButton)
-                                        .menuIndicator(.hidden)
-                                        .frame(width: 22)
+                            labeledField("LM Studio Modell-ID (Haupt-Modell)") {
+                                modelInputWithDropdown(
+                                    text: $viewModel.profiles[idx].lmStudioModelId,
+                                    placeholder: "Leer = Modellname oben verwenden",
+                                    models: cachedModels,
+                                    emptyOptionLabel: "Automatisch (Modellname oben)",
+                                    onPick: { m in
+                                        viewModel.profiles[idx].lmStudioModelId = m.id
                                     }
-                                    Button {
-                                        loadModels(for: viewModel.profiles[idx])
-                                    } label: {
-                                        if isLoadingModels {
-                                            ProgressView().controlSize(.small)
-                                        } else {
-                                            Image(systemName: "arrow.clockwise")
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(isLoadingModels)
-                                }
-                                .settingHelp("Der exakte Bezeichner des Modells in LM Studio (z.B. \"bartowski/Qwen2.5-7B-Instruct-GGUF\"). Wird für den POST /api/v1/models/load-Aufruf genutzt. Leer lassen = Modellname-Feld oben wird direkt verwendet.")
+                                )
                             }
 
                             if !viewModel.profiles[idx].backgroundJobModel.isEmpty {
-                                labeledField("Modell-ID (Hintergrund-Modell)") {
-                                    HStack {
-                                        TextField("z.B. lmstudio-community/Qwen2.5-0.5B-Instruct (Leer = Modellname oben)", text: $viewModel.profiles[idx].backgroundJobModelLMStudioId)
-                                            .textFieldStyle(.roundedBorder)
-                                            .font(.system(.caption, design: .monospaced))
-                                        if !availableModels.isEmpty {
-                                            Menu {
-                                                Button("Automatisch (aus Hintergrund-Modellname)") {
-                                                    viewModel.profiles[idx].backgroundJobModelLMStudioId = ""
-                                                }
-                                                Divider()
-                                                ForEach(availableModels, id: \.id) { m in
-                                                    Button(m.id) {
-                                                        viewModel.profiles[idx].backgroundJobModelLMStudioId = m.id
-                                                    }
-                                                }
-                                            } label: {
-                                                Image(systemName: "chevron.down.circle")
-                                            }
-                                            .menuStyle(.borderlessButton)
-                                            .menuIndicator(.hidden)
-                                            .frame(width: 22)
+                                labeledField("LM Studio Modell-ID (Hintergrund-Modell)") {
+                                    modelInputWithDropdown(
+                                        text: $viewModel.profiles[idx].backgroundJobModelLMStudioId,
+                                        placeholder: "Leer = Hintergrund-Modellname oben",
+                                        models: cachedModels,
+                                        emptyOptionLabel: "Automatisch (Hintergrund-Modellname)",
+                                        onPick: { m in
+                                            viewModel.profiles[idx].backgroundJobModelLMStudioId = m.id
                                         }
-                                        Button {
-                                            loadModels(for: viewModel.profiles[idx])
-                                        } label: {
-                                            if isLoadingModels {
-                                                ProgressView().controlSize(.small)
-                                            } else {
-                                                Image(systemName: "arrow.clockwise")
-                                            }
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(isLoadingModels)
-                                    }
-                                    .settingHelp("Wie oben, aber für das Hintergrundmodell. Wird beim automatischen Laden/Entladen des kleinen Hilfsmodells verwendet.")
+                                    )
                                 }
                             }
                         }
@@ -196,51 +141,184 @@ struct ModelTabView: View {
                 settingsSection(
                     icon: "slider.horizontal.3",
                     title: "Generierungs-Parameter",
+                    tint: DS.Accent.amber,
                     trailing: {
                         if viewModel.profiles[idx].params != .empty {
-                            Button("Auf Standard zurücksetzen") {
+                            Button("Zurücksetzen") {
                                 viewModel.profiles[idx].params = .empty
                             }
-                            .buttonStyle(.plain)
-                            .font(.caption2)
-                            .foregroundStyle(DS.Ink.accent)
+                            .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.amber))
                         } else {
                             EmptyView()
                         }
                     }
                 ) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        labeledField("Temperature", isModified: viewModel.profiles[idx].params.temperature != nil) {
-                            HStack {
-                                Slider(value: Binding(get: { viewModel.profiles[idx].params.temperature ?? 0.7 }, set: { viewModel.profiles[idx].params.temperature = $0 }), in: 0...2, step: 0.05)
+                    VStack(alignment: .leading, spacing: DS.Space.m) {
+                        labeledField("Temperature (Kreativität vs. Präzision)", isModified: viewModel.profiles[idx].params.temperature != nil) {
+                            HStack(spacing: DS.Space.m) {
+                                Slider(
+                                    value: Binding(
+                                        get: { viewModel.profiles[idx].params.temperature ?? 0.7 },
+                                        set: { viewModel.profiles[idx].params.temperature = $0 }
+                                    ),
+                                    in: 0...2,
+                                    step: 0.05
+                                )
+                                .tint(DS.Accent.indigo)
+
                                 Text(String(format: "%.2f", viewModel.profiles[idx].params.temperature ?? 0.7))
-                                    .font(.caption.monospacedDigit())
-                                    .frame(width: 30, alignment: .trailing)
+                                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                    .foregroundStyle(DS.Accent.indigo)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Surface.control))
                             }
-                            .settingHelp("Bestimmt die Kreativität/Zufälligkeit.\n• Ideal für Code/Logik: 0.0 - 0.3\n• Ideal für Chat/Kreativ: 0.7 - 0.9")
+                            .settingHelp("Bestimmt die Kreativität/Zufälligkeit.\n• Ideal für Code/Logik: 0.0 - 0.3\n• Ideal für Erklärungen: 0.6 - 0.8")
                         }
-                        optionalDoubleField("Top P", value: $viewModel.profiles[idx].params.topP, placeholder: "z.B. 0.9")
-                        optionalIntField("Top K", value: $viewModel.profiles[idx].params.topK, placeholder: "z.B. 40")
-                        optionalIntField("Max Tokens", value: $viewModel.profiles[idx].params.maxTokens, placeholder: "z.B. 2048")
-                        optionalDoubleField("Presence Penalty", value: $viewModel.profiles[idx].params.presencePenalty, placeholder: "z.B. 0.0")
-                        optionalDoubleField("Frequency Penalty", value: $viewModel.profiles[idx].params.frequencyPenalty, placeholder: "z.B. 0.0")
-                        optionalIntField("Seed", value: $viewModel.profiles[idx].params.seed, placeholder: "zufällig")
+
+                        SettingsHairline()
+
+                        // Sauberes 2-Spalten-Raster für alle numerischen Parameter (gleiche Breite & Höhe)
+                        HStack(alignment: .top, spacing: DS.Space.m) {
+                            optionalDoubleField("Top P", value: $viewModel.profiles[idx].params.topP, placeholder: "Server-Standard (z.B. 0.9)")
+                            optionalIntField("Top K", value: $viewModel.profiles[idx].params.topK, placeholder: "Server-Standard (z.B. 40)")
+                        }
+
+                        HStack(alignment: .top, spacing: DS.Space.m) {
+                            optionalIntField("Max Tokens", value: $viewModel.profiles[idx].params.maxTokens, placeholder: "Unbegrenzt / Auto")
+                            optionalIntField("Seed", value: $viewModel.profiles[idx].params.seed, placeholder: "Zufällig")
+                        }
+
+                        HStack(alignment: .top, spacing: DS.Space.m) {
+                            optionalDoubleField("Presence Penalty", value: $viewModel.profiles[idx].params.presencePenalty, placeholder: "0.0")
+                            optionalDoubleField("Frequency Penalty", value: $viewModel.profiles[idx].params.frequencyPenalty, placeholder: "0.0")
+                        }
                     }
-                    .settingHelp("Diese Parameter steuern die Textgenerierung. Leer lassen nutzt den Server-Default.\n• Top P: Häufig 0.9. Steuert Vokabular.\n• Top K: Häufig 40. Begrenzt Wortwahl auf Top-K.\n• Max Tokens: Ideal 2048 - 4096. Begrenzt die Antwortlänge.")
+                    .settingHelp("Diese Parameter steuern die Textgenerierung. Leer lassen nutzt den Server-Default.")
                 }
             } else {
                 Text("Kein aktives Profil ausgewählt – lege eines im Tab „Endpunkte“ an.")
                     .foregroundStyle(.secondary)
             }
 
-            settingsSection(icon: "photo.on.rectangle", title: "Bilder im Verlauf") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle("Alle Screenshots im Chat erneut mitschicken", isOn: $viewModel.keepMultipleImagesInHistory)
+            settingsSection(icon: "brain.head.profile", title: "Gedankengang (Thinking)", tint: DS.Accent.indigo) {
+                SettingsRow(
+                    title: "Gedankengang an das Modell zurückgeben",
+                    subtitle: "Preserve Thinking: Das Thinking früherer Antworten geht unverändert mit. Hilft bei Folgefragen und Tool-Runden und nutzt den Cache des Servers.",
+                    icon: "arrow.uturn.backward.circle",
+                    tint: DS.Accent.indigo,
+                    help: "Sendet das Thinking früherer Antworten als „reasoning_content“ mit. Ob es im Verlauf bleibt, entscheidet die Chat-Vorlage des Modells (Qwen 3.6 über oMLX: ja). Modelle ohne diese Funktion ignorieren das Feld. Kostet etwas mehr Kontext; die Anzeige in der App ist davon unabhängig."
+                ) {
+                    Toggle("", isOn: $viewModel.preserveThinking)
                         .toggleStyle(.switch)
-                        .settingHelp("Standardmäßig wird nur der neueste Screenshot mitgeschickt (spart Tokens/Kontext). Aktivieren, um Rückfragen zu älteren Screenshots im selben Chat zu ermöglichen.")
+                        .labelsHidden()
+                }
+            }
+
+            settingsSection(icon: "photo.on.rectangle.angled", title: "Multimodaler Bild-Verlauf", tint: DS.Accent.blue) {
+                SettingsRow(
+                    title: "Alle Screenshots im Chat erneut mitschicken",
+                    subtitle: "Standardmäßig wird nur der neueste Screenshot gesendet, um Prompt-Tokens zu sparen.",
+                    icon: "photo.stack",
+                    tint: DS.Accent.blue
+                ) {
+                    Toggle("", isOn: $viewModel.keepMultipleImagesInHistory)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .settingHelp("Aktivieren, um Rückfragen zu älteren Screenshots im selben Chat zu ermöglichen.")
+                }
+            }
+
+            SettingsDisclosureSection(
+                title: "Erweitert (Modell & KI)",
+                subtitle: "Automatisches Nachschärfen von Chat-Titeln anhand des Verlaufs",
+                icon: "slider.horizontal.3",
+                tint: DS.Accent.indigo
+            ) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Chat-Titel nachschärfen",
+                        subtitle: "Aktualisiert Titel und Fachgebiet automatisch, sobald mehr Kontext vorliegt.",
+                        icon: "character.textbox",
+                        tint: DS.Accent.indigo,
+                        help: "Nach wie vielen Nutzerfragen der Chat-Titel und das Fachgebiet anhand des bisherigen Dialogs präzisiert werden (2–10, Standard 3)."
+                    ) {
+                        stepperBadge("nach \(viewModel.titleRefinementTurns) Fragen", value: $viewModel.titleRefinementTurns, range: 2...10, step: 1)
+                    }
                 }
             }
         }
+        .task(id: viewModel.activeProfileID) {
+            if let idx = activeIndex, cachedModels.isEmpty {
+                _ = await viewModel.loadModelsForProfile(viewModel.profiles[idx])
+            }
+        }
+    }
+
+    // MARK: - Modell-Feld mit integriertem Dropdown
+
+    private func modelInputWithDropdown(
+        text: Binding<String>,
+        placeholder: String,
+        models: [(id: String, contextWindow: Int?)],
+        emptyOptionLabel: String? = nil,
+        onPick: @escaping ((id: String, contextWindow: Int?)) -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            TextField(placeholder, text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, design: .monospaced))
+
+            if !models.isEmpty {
+                Menu {
+                    if let emptyOptionLabel {
+                        Button(emptyOptionLabel) {
+                            text.wrappedValue = ""
+                        }
+                        Divider()
+                    }
+                    Section("Vom Server gemeldete Modelle (\(models.count))") {
+                        ForEach(models, id: \.id) { m in
+                            Button {
+                                onPick(m)
+                            } label: {
+                                HStack {
+                                    if text.wrappedValue == m.id {
+                                        Image(systemName: "checkmark")
+                                    }
+                                    if let cw = m.contextWindow {
+                                        Text("\(m.id)  (\(cw / 1024)k ctx)")
+                                    } else {
+                                        Text(m.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("\(models.count)")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    .foregroundStyle(DS.Accent.indigo)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(DS.Accent.indigo.opacity(0.14)))
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .help("Modell aus Server-Liste auswählen")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .frame(minHeight: 30)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
+                .fill(DS.Surface.control)
+        )
     }
 
     // MARK: - Modell-Liste laden
@@ -249,17 +327,11 @@ struct ModelTabView: View {
         isLoadingModels = true
         loadError = nil
         Task {
-            do {
-                let models = try await EndpointManager.fetchModels(for: profile)
-                await MainActor.run {
-                    availableModels = models
-                    isLoadingModels = false
-                    if models.isEmpty { loadError = "Server hat keine Modelle gemeldet." }
-                }
-            } catch {
-                await MainActor.run {
-                    loadError = "Konnte Modelle nicht laden: \(error.localizedDescription)"
-                    isLoadingModels = false
+            let models = await viewModel.loadModelsForProfile(profile)
+            await MainActor.run {
+                isLoadingModels = false
+                if models.isEmpty {
+                    loadError = "Server hat keine Modelle gemeldet."
                 }
             }
         }
@@ -276,9 +348,9 @@ struct ModelTabView: View {
                     value.wrappedValue = trimmed.isEmpty ? nil : Double(trimmed)
                 }
             ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.caption, design: .monospaced))
+            .modifier(SettingsFieldStyle(monospaced: true))
         }
+        .frame(maxWidth: .infinity)
     }
 
     private func optionalIntField(_ label: String, value: Binding<Int?>, placeholder: String) -> some View {
@@ -290,8 +362,8 @@ struct ModelTabView: View {
                     value.wrappedValue = trimmed.isEmpty ? nil : Int(trimmed)
                 }
             ))
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.caption, design: .monospaced))
+            .modifier(SettingsFieldStyle(monospaced: true))
         }
+        .frame(maxWidth: .infinity)
     }
 }

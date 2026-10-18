@@ -73,37 +73,36 @@ struct ScreenshotMarkupView: View {
             Divider()
             toolbar
             Divider()
-            ZStack {
-                Color.black.opacity(0.03)
-                Image(nsImage: originalImage)
-                    .resizable()
-                    .frame(width: fitRect.width, height: fitRect.height)
-                    .position(x: fitRect.midX, y: fitRect.midY)
-                Canvas { context, _ in
-                    for stroke in strokes { draw(stroke, into: &context) }
-                    if let currentStroke { draw(currentStroke, into: &context) }
-                    if let cropRect {
-                        // Außerhalb des Ausschnitts abdunkeln, Rand gestrichelt.
-                        var outside = Path(fitRect)
-                        outside.addRect(cropRect)
-                        context.fill(outside, with: .color(.black.opacity(0.45)), style: FillStyle(eoFill: true))
-                        context.stroke(Path(cropRect), with: .color(.white),
-                                       style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+            GeometryReader { geo in
+                ZStack {
+                    Color.black.opacity(0.03)
+                    Image(nsImage: originalImage)
+                        .resizable()
+                        .frame(width: fitRect.width, height: fitRect.height)
+                        .position(x: fitRect.midX, y: fitRect.midY)
+                    Canvas { context, _ in
+                        for stroke in strokes { draw(stroke, into: &context) }
+                        if let currentStroke { draw(currentStroke, into: &context) }
+                        if let cropRect {
+                            // Außerhalb des Ausschnitts abdunkeln, Rand gestrichelt.
+                            var outside = Path(fitRect)
+                            outside.addRect(cropRect)
+                            context.fill(outside, with: .color(.black.opacity(0.45)), style: FillStyle(eoFill: true))
+                            context.stroke(Path(cropRect), with: .color(.white),
+                                           style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                        }
                     }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .contentShape(Rectangle())
+                .gesture(drawGesture)
+                .onAppear { updateCanvas(geo.size) }
+                .onChange(of: geo.size) { _, new in updateCanvas(new) }
             }
-            .frame(width: canvasSize.width, height: canvasSize.height)
-            .contentShape(Rectangle())
-            .gesture(drawGesture)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(GeometryReader { proxy in
-                Color.clear
-                    .onAppear { updateCanvas(proxy.size) }
-                    .onChange(of: proxy.size) { _, new in updateCanvas(new) }
-            })
         }
-        .frame(minWidth: 480, idealWidth: 760, minHeight: 380, idealHeight: 600)
+        .frame(minWidth: 440, idealWidth: 700, minHeight: 360, idealHeight: 560)
     }
 
     /// Passt die Leinwand an die verfügbare Größe an. Bereits gezeichnete Striche und der
@@ -131,15 +130,15 @@ struct ScreenshotMarkupView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             ForEach(MarkupTool.allCases, id: \.self) { tool in
                 Button {
                     selectedTool = tool
                 } label: {
                     Image(systemName: tool.icon)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(selectedTool == tool ? .white : .primary)
-                        .padding(8)
+                        .padding(6)
                         .background(selectedTool == tool ? Color.accentColor : Color.secondary.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
@@ -147,23 +146,27 @@ struct ScreenshotMarkupView: View {
                 .help(tool.label)
             }
 
-            Divider().frame(height: 20)
+            Divider().frame(height: 18)
 
-            ForEach(palette, id: \.self) { color in
-                Circle()
-                    .fill(color)
-                    .frame(width: 18, height: 18)
-                    .overlay(
-                        Circle().stroke(Color.primary.opacity(selectedColor == color ? 0.8 : 0.15),
-                                        lineWidth: selectedColor == color ? 2 : 1)
-                    )
-                    .onTapGesture { selectedColor = color }
+            HStack(spacing: 6) {
+                ForEach(palette, id: \.self) { color in
+                    Circle()
+                        .fill(color)
+                        .frame(width: 16, height: 16)
+                        .overlay(
+                            Circle().stroke(Color.primary.opacity(selectedColor == color ? 0.8 : 0.15),
+                                            lineWidth: selectedColor == color ? 2 : 1)
+                        )
+                        .onTapGesture { selectedColor = color }
+                }
             }
 
-            Divider().frame(height: 20)
+            Divider().frame(height: 18)
 
             Button(action: { strokes.removeLast() }) {
                 Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(5)
             }
             .buttonStyle(.plain)
             .disabled(strokes.isEmpty)
@@ -171,17 +174,20 @@ struct ScreenshotMarkupView: View {
 
             Button(action: { strokes.removeAll(); cropRect = nil }) {
                 Image(systemName: "trash")
+                    .font(.system(size: 12, weight: .medium))
+                    .padding(5)
             }
             .buttonStyle(.plain)
             .disabled(strokes.isEmpty && cropRect == nil)
             .help("Alle Markierungen entfernen")
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Button(cropRect == nil ? "Fertig" : "Ausschnitt übernehmen") {
                 onDone(finalImage(), cropRect != nil)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

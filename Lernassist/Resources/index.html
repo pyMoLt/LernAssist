@@ -28,6 +28,42 @@
   }
 }
 
+/* Floating "Text erklären"-Button */
+#explain-btn {
+  position: absolute;
+  display: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #7345DB;
+  border: 0.5px solid rgba(0, 0, 0, 0.14);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  cursor: pointer;
+  z-index: 1000;
+  user-select: none;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.15s ease;
+}
+#explain-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22), 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+#explain-btn:active {
+  transform: scale(0.95);
+}
+@media (prefers-color-scheme: dark) {
+  #explain-btn {
+    background: rgba(44, 44, 48, 0.92);
+    color: #B394FF;
+    border: 0.5px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.25);
+  }
+}
+
 * { box-sizing: border-box; }
 html, body {
   margin: 0; padding: 0;
@@ -108,6 +144,8 @@ th { background: var(--table-header); font-weight: 600; }
 
 /* Bilder */
 img { cursor: pointer; max-width: 100%; height: auto; border-radius: 6px; }
+/* Abbildungen aus der Recherche: zentriert, höchstens 420 px hoch (Klick öffnet groß). */
+img[src^="lernassist-image:"] { display: block; max-height: 420px; width: auto; margin: 10px auto 2px; }
 
 /* Trennlinie */
 hr { border: none; border-top: 1px solid var(--table-border); margin: 0.9em 0; }
@@ -122,6 +160,19 @@ em { font-style: italic; }
 .mermaid-block { margin: 0.8em 0; overflow-x: auto; }
 .mermaid-block.rendered { text-align: center; }
 .mermaid-block svg { max-width: 100%; height: auto; }
+.html-block { margin: 0.8em 0; }
+.html-block pre { margin-bottom: 0.4em; }
+.run-html {
+  font: 500 12px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #7345DB; background: rgba(115, 69, 219, 0.12);
+  border: none; border-radius: 999px; padding: 4px 11px; cursor: pointer;
+}
+.run-html:hover { background: rgba(115, 69, 219, 0.2); }
+@media (prefers-color-scheme: dark) {
+  .run-html { color: #B394FF; background: rgba(179, 148, 255, 0.16); }
+  .run-html:hover { background: rgba(179, 148, 255, 0.26); }
+}
+.mermaid-error { font-size: 0.8em; opacity: 0.6; margin-bottom: 0.3em; }
 </style>
 </head>
 <body>
@@ -167,11 +218,37 @@ md.renderer.rules.fence = function(tokens, idx, options, env, self) {
     var escaped = src.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     return '<div class="mermaid-block" data-src="' + escaped + '"><pre><code>' + escaped + '</code></pre></div>';
   }
+  var lang = (token.info || '').trim().toLowerCase();
+  if (lang === 'html' || lang === 'htm') {
+    // HTML im Chat (z. B. wenn das Modell kein Tool aufgerufen hat): per Knopf als Simulation öffnen.
+    var raw = token.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return '<div class="html-block">' + defaultFence(tokens, idx, options, env, self) +
+      '<button class="run-html" data-src="' + raw + '">▶ Als Simulation anzeigen</button></div>';
+  }
   return defaultFence(tokens, idx, options, env, self);
 };
 
 window._mermaidCache = window._mermaidCache || {};
 var mermaidLoading = null;
+
+function applyMermaidTheme() {
+  if (!window.mermaid) { return; }
+  var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  // Untergruppen (subgraph) sonst im Dark Mode hellblau mit weißer Schrift → unlesbar.
+  var vars = dark
+    ? { clusterBkg: 'rgba(255,255,255,0.045)', clusterBorder: 'rgba(255,255,255,0.22)', titleColor: '#d8d8de' }
+    : { clusterBkg: 'rgba(0,0,0,0.03)', clusterBorder: 'rgba(0,0,0,0.18)', titleColor: '#333' };
+  window.mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'antiscript',
+    htmlLabels: false,
+    flowchart: { htmlLabels: false },
+    theme: dark ? 'dark' : 'neutral',
+    themeVariables: vars,
+    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+  });
+}
+
 function loadMermaid() {
   if (window.mermaid) { return Promise.resolve(window.mermaid); }
   if (mermaidLoading) { return mermaidLoading; }
@@ -179,15 +256,68 @@ function loadMermaid() {
     var script = document.createElement('script');
     script.src = 'mermaid.min.js';
     script.onload = function() {
-      var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-      window.mermaid.initialize({ startOnLoad: false, securityLevel: 'antiscript', htmlLabels: false, flowchart: { htmlLabels: false }, theme: dark ? 'dark' : 'neutral',
-                                  fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif' });
+      applyMermaidTheme();
       resolve(window.mermaid);
     };
     script.onerror = reject;
     document.head.appendChild(script);
   });
   return mermaidLoading;
+}
+
+if (window.matchMedia) {
+  var darkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  var onColorSchemeChange = function() {
+    if (!window.mermaid) { return; }
+    applyMermaidTheme();
+    window._mermaidCache = {};
+    document.querySelectorAll('.mermaid-block.rendered').forEach(function(block) {
+      block.classList.remove('rendered');
+    });
+    renderMermaidBlocks(document.getElementById('content') || document.body);
+  };
+  if (darkMediaQuery.addEventListener) {
+    darkMediaQuery.addEventListener('change', onColorSchemeChange);
+  } else if (darkMediaQuery.addListener) {
+    darkMediaQuery.addListener(onColorSchemeChange);
+  }
+}
+
+// Setzt Knotentexte mit Sonderzeichen in Anführungszeichen: A[Text (x)] → A["Text (x)"].
+function repairMermaid(code) {
+  return code.replace(/(\b[\w-]+)\[(?!["(\[\/\\])([^\]\n"]*)\]/g, function(m, id, label) {
+    return /[()\{\}<>:;,&#|]/.test(label) ? id + '["' + label + '"]' : m;
+  }).replace(/(\b[\w-]+)\{(?!["{])([^}\n"]*)\}/g, function(m, id, label) {
+    return /[()\[\]<>:;,&#|]/.test(label) ? id + '{"' + label + '"}' : m;
+  });
+}
+// Feste helle Farben aus dem Modell (classDef/style fill:#e1f5fe) im Dark Mode abdunkeln –
+// Farbton bleibt, damit farbige Gruppen ihre Bedeutung behalten. Dunkle Schrift wird hell.
+function adaptMermaidColors(code) {
+  var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  if (!dark) { return code; }
+  function rgb(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) { hex = hex.split('').map(function(c) { return c + c; }).join(''); }
+    if (hex.length !== 6) { return null; }
+    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+  }
+  function lum(c) { return (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 255; }
+  function hex(c) { return '#' + c.map(function(v) { return ('0' + Math.round(v).toString(16)).slice(-2); }).join(''); }
+  return code.replace(/fill\s*:\s*(#[0-9a-fA-F]{3,6})/g, function(m, color) {
+    var c = rgb(color);
+    if (!c || lum(c) < 0.55) { return m; }
+    var base = [32, 32, 38];
+    return 'fill:' + hex([0, 1, 2].map(function(i) { return base[i] * 0.72 + c[i] * 0.28; }));
+  }).replace(/([^-])color\s*:\s*(#[0-9a-fA-F]{3,6})/g, function(m, pre, color) {
+    var c = rgb(color);
+    return (c && lum(c) < 0.45) ? pre + 'color:#e6e6ea' : m;
+  });
+}
+
+// Mermaid hängt bei Syntaxfehlern eigene Fehler-SVGs an <body> – die sollen nicht sichtbar bleiben.
+function cleanupMermaidErrors() {
+  document.querySelectorAll('body > [id^="dmmd"], body > svg[id^="mmd"]').forEach(function(n) { n.remove(); });
 }
 
 var mermaidCounter = 0;
@@ -206,13 +336,31 @@ function renderMermaidBlocks(el) {
     loadMermaid().then(function(mermaid) {
       document.querySelectorAll('.mermaid-block:not(.rendered)').forEach(function(block) {
         var src = block.getAttribute('data-src');
-        var decoded = new DOMParser().parseFromString(src, 'text/html').documentElement.textContent.replace(/<br\s*\/?>/gi, '<br/>');
-        mermaid.render('mmd' + (++mermaidCounter), decoded).then(function(result) {
+        var preserved = src.replace(/<br\s*\/?>/gi, '__MERMAID_BR__');
+        var decoded = new DOMParser().parseFromString(preserved, 'text/html').documentElement.textContent.replace(/__MERMAID_BR__|<br\s*\/?>/gi, '<br/>');
+        decoded = adaptMermaidColors(decoded);
+        var repaired = repairMermaid(decoded);
+        var show = function(result) {
           window._mermaidCache[src] = result.svg;
           block.innerHTML = result.svg;
           block.classList.add('rendered');
           reportHeight();
-        }).catch(function() { /* unvollständig oder fehlerhaft: Quelltext bleibt sichtbar */ });
+        };
+        mermaid.render('mmd' + (++mermaidCounter), decoded).then(show).catch(function() {
+          // Häufiger Modellfehler: Klammern o. Ä. in ungequoteten Knotentexten → reparierte Fassung.
+          return mermaid.render('mmd' + (++mermaidCounter), repaired).then(show);
+        }).catch(function() {
+          cleanupMermaidErrors();
+          // Stream noch unvollständig → beim nächsten Update erneut versuchen. Ist der Text fertig
+          // und trotzdem fehlerhaft, bleibt der Quelltext mit einem kurzen Hinweis sichtbar.
+          if (!block.querySelector('.mermaid-error')) {
+            var note = document.createElement('div');
+            note.className = 'mermaid-error';
+            note.textContent = 'Diagramm konnte nicht gezeichnet werden – Quelltext:';
+            block.insertBefore(note, block.firstChild);
+            reportHeight();
+          }
+        });
       });
     }).catch(function() {});
   }, 450);
@@ -251,6 +399,29 @@ function ensureLibs(content, fontScale) {
   });
 }
 
+// Ersetzt Formeln außerhalb von Code durch Platzhalter (ohne Markdown-Bedeutung).
+function protectMath(content) {
+  var store = [];
+  var parts = content.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/);
+  var mathRe = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$/g;
+  for (var i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) { continue; } // Code bleibt unangetastet
+    parts[i] = parts[i].replace(mathRe, function(m) {
+      store.push(m);
+      return 'LAMATHX' + (store.length - 1) + 'XLAMATH';
+    });
+  }
+  return { text: parts.join(''), store: store };
+}
+
+function restoreMath(html, store) {
+  if (!store.length) { return html; }
+  return html.replace(/LAMATHX(\d+)XLAMATH/g, function(m, n) {
+    var src = store[+n];
+    return src === undefined ? m : src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  });
+}
+
 function updateContent(content, fontScale) {
   var el = document.getElementById('content');
   ensureLibs(content, fontScale);
@@ -259,8 +430,11 @@ function updateContent(content, fontScale) {
     document.documentElement.style.fontSize = (14 * fontScale) + 'px';
   }
 
-  // 1. Markdown → HTML
-  el.innerHTML = md.render(content);
+  // 1. Markdown → HTML. Formeln vorher schützen: Sonst liest Markdown die Unterstriche in
+  //    „($[E]_0$) und ($k_{cat}$)“ als Kursiv-Markierung und zerstört die $…$-Grenzen.
+  var protectedMath = protectMath(content);
+  var html = md.render(protectedMath.text);
+  el.innerHTML = restoreMath(html, protectedMath.store);
 
   // 2. KaTeX: Mathe-Formeln rendern ($...$, $$...$$, \(...\) und \[...\]).
   // Viele lokale Modelle escapen Markdown-Unterstriche auch innerhalb von LaTeX
@@ -313,6 +487,12 @@ function updateContent(content, fontScale) {
 
 // ── Links und Bilder abfangen (im System-Browser öffnen, nicht in der WebView) ──
 document.addEventListener('click', function(e) {
+  var run = e.target.closest && e.target.closest('.run-html');
+  if (run) {
+    e.preventDefault();
+    try { window.webkit.messageHandlers.runHTML.postMessage(run.getAttribute('data-src') || ''); } catch(err) {}
+    return;
+  }
   if (e.target.tagName === 'IMG' && e.target.src) {
     try { window.webkit.messageHandlers.linkClicked.postMessage(e.target.src); } catch(e) {}
     return;
@@ -328,27 +508,8 @@ document.addEventListener('click', function(e) {
   // --- Text Selection & Floating Button ---
   const explainBtn = document.createElement('div');
   explainBtn.id = 'explain-btn';
-  explainBtn.innerHTML = '?';
+  explainBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:auto;"><circle cx="8" cy="8" r="7"/><path d="M6 6a2 2 0 0 1 3.5 1.2c0 1.2-1.5 1.8-1.5 1.8"/><circle cx="8" cy="12" r="0.5" fill="currentColor"/></svg>';
   explainBtn.title = 'Markierten Text erklären';
-  
-  // Basic styling for the floating button
-  Object.assign(explainBtn.style, {
-    position: 'absolute',
-    display: 'none',
-    width: '28px',
-    height: '28px',
-    backgroundColor: '#007AFF',
-    color: '#fff',
-    borderRadius: '14px',
-    textAlign: 'center',
-    lineHeight: '28px',
-    fontSize: '16px',
-    fontWeight: 'bold',
-    cursor: 'pointer',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-    zIndex: '1000',
-    userSelect: 'none'
-  });
   document.body.appendChild(explainBtn);
 
   let selectedText = '';
@@ -379,7 +540,7 @@ document.addEventListener('click', function(e) {
           
           explainBtn.style.top = `${Math.max(0, top)}px`;
           explainBtn.style.left = `${Math.max(0, left)}px`;
-          explainBtn.style.display = 'block';
+          explainBtn.style.display = 'flex';
         }
       } else {
         explainBtn.style.display = 'none';

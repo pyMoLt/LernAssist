@@ -42,7 +42,7 @@ actor PythonEnvironmentInstaller {
 
     /// Grundstock für Lernen, Datenauswertung und Grafiken (nur Wheels, ~250 MB).
     static let basePackages = ["numpy", "pandas", "scipy", "sympy", "matplotlib", "seaborn",
-                               "openpyxl", "statsmodels", "networkx", "pillow"]
+                               "openpyxl", "statsmodels", "networkx", "pillow", "requests"]
 
     static var root: URL { AppStorageLocation.root.appendingPathComponent("python-env", isDirectory: true) }
     static var venv: URL { root.appendingPathComponent("venv", isDirectory: true) }
@@ -67,6 +67,8 @@ actor PythonEnvironmentInstaller {
     /// Startet die Einrichtung (einmalig, parallel aufrufbar). `onStatus` meldet den Fortschritt.
     func ensureInstalled(force: Bool = false, onStatus: @escaping @Sendable (PythonEnvironmentStatus) -> Void) async {
         if !force, Self.isReady {
+            // Neu hinzugekommene Grundpakete (z. B. requests für Downloads) einmalig nachinstallieren.
+            await installMissingBasePackages(onStatus: onStatus)
             onStatus(.ready(version: Self.readyVersion ?? Self.pythonVersion))
             return
         }
@@ -123,6 +125,26 @@ actor PythonEnvironmentInstaller {
             "installed": ISO8601DateFormatter().string(from: Date()),
         ])
         try markerData.write(to: Self.marker, options: .atomic)
+    }
+
+    /// Grundpakete, die nach der Einrichtung zur Liste hinzukamen, ohne Neu-Einrichtung ergänzen.
+    private func installMissingBasePackages(onStatus: @escaping @Sendable (PythonEnvironmentStatus) -> Void) async {
+        guard let data = try? Data(contentsOf: Self.marker),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        let installed = Set(json["packages"] as? [String] ?? [])
+        let missing = Self.basePackages.filter { !installed.contains($0) }
+        guard !missing.isEmpty, let uv = try? await locateOrDownloadUV() else { return }
+        onStatus(.installing(step: "Pakete ergänzen (\(missing.joined(separator: ", ")))"))
+        do {
+            _ = try await Self.run(uv, ["pip", "install", "--python", Self.venvPython.path, "--only-binary", ":all:"] + missing,
+                                   environment: uvEnvironment(), timeout: 300)
+            json["packages"] = Self.basePackages
+            if let updated = try? JSONSerialization.data(withJSONObject: json) {
+                try? updated.write(to: Self.marker, options: .atomic)
+            }
+        } catch {
+            AppLog.services.error("Python-Umgebung: Pakete ergänzen fehlgeschlagen: \(error.localizedDescription)")
+        }
     }
 
     /// Installiert ein Paket als fertiges Wheel (kein Ausführen fremder Setup-Skripte).

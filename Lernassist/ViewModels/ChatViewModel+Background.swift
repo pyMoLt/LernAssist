@@ -164,19 +164,24 @@ extension ChatViewModel {
             if session.title == "Neuer Chat" {
                 stillDefaultTitle = true
             } else if let firstUser = session.messages.first(where: { $0.role == "user" }) {
-                stillDefaultTitle = session.title == String(firstUser.content.prefix(40))
+                // Slash-Befehle setzen den Titel aus der kurzen Anzeige (displayText), nicht aus dem Prompt.
+                stillDefaultTitle = session.title == String((firstUser.displayText ?? firstUser.content).prefix(40))
             } else {
                 stillDefaultTitle = false
             }
-            if stillDefaultTitle, !titlingInProgress.contains(sessionId) {
+            let userTurns = session.messages.filter { $0.role == "user" }.count
+            // Nach N Fragen einmal nachschärfen: Der Fokus eines Chats wandert oft.
+            let needsRefinement = !stillDefaultTitle && session.titleRefined != true && userTurns >= max(2, titleRefinementTurns)
+            if (stillDefaultTitle || needsRefinement), !titlingInProgress.contains(sessionId) {
                 let titleBeforeGeneration = session.title
+                let refine = needsRefinement
                 Task {
                     // Siehe waitUntilIdle(): eine gequeute Folgenachricht kann isStreaming
                     // zwischen dem Aufruf hier und der eigentlichen Ausführung bereits wieder auf
                     // true gesetzt haben (siehe isStreaming-didSet) – dann NICHT parallel zur neu
                     // gestarteten Konversation um Modell-/Netzwerkkapazität konkurrieren.
                     await self.waitUntilIdle()
-                    await self.generateTitle(sessionId: sessionId, previousTitle: titleBeforeGeneration)
+                    await self.generateTitle(sessionId: sessionId, previousTitle: titleBeforeGeneration, refine: refine)
                 }
             }
         }
@@ -208,41 +213,81 @@ extension ChatViewModel {
         }
     }
 
-    /// Auto-Labeling: generiert nach der ersten vollständigen Antwort einen kurzen, passenden
-    /// Titel für den Chat (löst die pauschale "erste 40 Zeichen"-Titelvergabe ab).
-    func generateTitle(sessionId: UUID, previousTitle: String) async {
+    /// Alle bisher vergebenen Fächer (für einheitliche Etiketten).
+    var knownSubjects: [String] {
+        let all = (sessions + archivedSessions).compactMap(\.subject).filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return all.filter { seen.insert($0.lowercased()).inserted }.sorted()
+    }
+
+    /// Auto-Labeling: Titel (2–4 Wörter) und Fach-Etikett in einem Aufruf. Nach der ersten Antwort
+    /// und einmal nach der dritten Frage (`refine`), falls sich der Schwerpunkt verschoben hat.
+    func generateTitle(sessionId: UUID, previousTitle: String, refine: Bool = false) async {
         titlingInProgress.insert(sessionId)
         defer { titlingInProgress.remove(sessionId) }
 
         guard let sessionIdx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
-        let context = Array(sessions[sessionIdx].messages.filter { $0.role == "user" || $0.role == "assistant" }.prefix(6))
+        let dialog = sessions[sessionIdx].messages.filter { $0.role == "user" || $0.role == "assistant" }
+        // Beim Nachschärfen den ganzen bisherigen Verlauf (gekürzt), sonst den Anfang.
+        let context = refine ? Array(dialog.suffix(10)) : Array(dialog.prefix(6))
         guard !context.isEmpty else { return }
 
         backgroundJobStatus = "Generiere Titel..."
         defer { if backgroundJobStatus == "Generiere Titel..." { backgroundJobStatus = nil } }
 
-        let title = await sendInvisiblePrompt(
-            "Fasse das bisherige Gespräch in einem sehr kurzen, prägnanten Titel zusammen " +
-            "(max. 6 Wörter, keine Anführungszeichen, keine Emojis, kein Punkt am Ende). Antworte NUR mit dem Titel.",
+        let subjects = knownSubjects
+        let subjectHint = subjects.isEmpty ? "" : " Bereits verwendete Fächer (bevorzugt wiederverwenden, wenn passend): \(subjects.prefix(30).joined(separator: ", "))."
+        let schema: [String: Any] = [
+            "type": "object",
+            "properties": ["title": ["type": "string"], "subject": ["type": "string"]],
+            "required": ["title", "subject"], "additionalProperties": false]
+        let raw = await sendInvisiblePrompt(
+            "Gib diesem Gespräch einen Titel aus 2–4 Wörtern, der das konkrete Fachthema nennt " +
+            "(z. B. „Michaelis-Menten-Kinetik“, „Gerinnungskaskade Ablauf“, „Dijkstra-Algorithmus“). " +
+            "Keine Füllwörter wie „Erklärung“, „Frage zu“ oder „Hilfe bei“, keine Anführungszeichen, keine Emojis. " +
+            "Ordne es außerdem einem allgemeinen Fach zu (1–2 Wörter, z. B. „Physiologie“, „Biochemie“, „Algorithmen“, „Analysis“)." +
+            subjectHint +
+            (refine ? " Berücksichtige den gesamten bisherigen Verlauf, nicht nur den Anfang." : "") +
+            " Antworte nur mit JSON: {\"title\": \"…\", \"subject\": \"…\"}",
             context: context,
-            useBackgroundJobModel: true
+            useBackgroundJobModel: true,
+            jsonSchema: ("chat_title", schema)
         )
-        // Fehler (Netzwerk/HTTP) werden nicht als Titel übernommen – früher landete z.B.
-        // "Netzwerkfehler: ..." als Chat-Titel in der Sidebar.
-        guard let title, !title.isEmpty else { return }
-
-        let cleaned = title
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'„“”.·"))
-        guard !cleaned.isEmpty, cleaned.count < 200 else { return }
+        // Fehler (Netzwerk/HTTP) werden nicht als Titel übernommen.
+        guard let raw, !raw.isEmpty, let parsed = Self.parseTitleAndSubject(raw) else { return }
 
         guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
-        // Nur überschreiben, wenn sich der Titel zwischenzeitlich nicht schon geändert hat
-        // (z.B. weil der Nutzer manuell umbenannt hat, während der Job lief) – exakter Vergleich
-        // mit dem beim Auslösen erfassten Titel statt einer "sieht unbetitelt aus"-Heuristik,
-        // die nach der ersten Nachricht nie mehr zutrifft (s. Kommentar in runBackgroundJobsIfNeeded).
+        // Nur überschreiben, wenn der Titel zwischenzeitlich nicht (z. B. vom Nutzer) geändert wurde.
         guard sessions[idx].title == previousTitle else { return }
-        sessions[idx].title = String(cleaned.prefix(50))
+        if !parsed.title.isEmpty { sessions[idx].title = parsed.title }
+        if let subject = parsed.subject, !subject.isEmpty, sessions[idx].subjectSetByUser != true {
+            // Schreibweise eines bekannten Fachs übernehmen („physiologie“ → „Physiologie“).
+            sessions[idx].subject = subjects.first { $0.lowercased() == subject.lowercased() } ?? subject
+        }
+        if refine || sessions[idx].messages.filter({ $0.role == "user" }).count >= 3 {
+            sessions[idx].titleRefined = true
+        }
+    }
+
+    /// Liest {"title", "subject"}; fällt auf reinen Text (nur Titel) zurück.
+    nonisolated static func parseTitleAndSubject(_ raw: String) -> (title: String, subject: String?)? {
+        func clean(_ text: String) -> String {
+            let line = text.components(separatedBy: .newlines).first ?? text
+            return String(line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'„“”.·")).prefix(40))
+        }
+        var text = raw.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
+        if let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end {
+            text = String(text[start...end])
+        }
+        if let data = text.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let title = clean(object["title"] as? String ?? "")
+            let subject = (object["subject"] as? String).map { String(clean($0).prefix(30)) }
+            return title.isEmpty && (subject ?? "").isEmpty ? nil : (title, subject)
+        }
+        let title = clean(raw)
+        return title.isEmpty || title.count > 60 ? nil : (title, nil)
     }
 
     /// Bild-zu-Text: beschreibt einen angehängten Screenshot im Hintergrund, damit ältere

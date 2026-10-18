@@ -26,20 +26,16 @@ struct SettingsView: View {
         ZStack {
             VStack(spacing: 0) {
                 header
-                Divider()
                 HStack(spacing: 0) {
                     navigation
-                    Divider()
                     content
                 }
                 footer
             }
             helpIntro
         }
-        // Eigenes, größenveränderbares Fenster statt festem 920×640-Sheet im 800×600-Panel:
-        // Das Sheet war breiter als das Panel und wurde links/rechts abgeschnitten
-        // (Audit 2026-10-12, UI H2).
-        .frame(minWidth: 760, idealWidth: 920, minHeight: 520, idealHeight: 640)
+        .background(DS.Surface.canvas)
+        .frame(minWidth: 780, idealWidth: 940, minHeight: 540, idealHeight: 660)
         .onReceive(NotificationCenter.default.publisher(for: .debugSwitchSettingsTab)) { note in
             if let rawTab = note.userInfo?["tab"] as? String,
                let tab = SettingsTab(rawValue: rawTab) {
@@ -53,14 +49,7 @@ struct SettingsView: View {
 
     private var header: some View {
         HStack(spacing: DS.Space.m) {
-            ZStack {
-                Circle()
-                    .fill(DS.Ink.accent.opacity(0.13))
-                Image(systemName: "graduationcap.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(DS.Ink.accent.gradient)
-            }
-            .frame(width: 36, height: 36)
+            LernAssistBrandIcon(size: 36)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Einstellungen")
@@ -73,11 +62,11 @@ struct SettingsView: View {
             Spacer()
 
             if isHelpModeActive {
-                Label("Hilfe aktiv", systemImage: "questionmark.circle.fill")
+                Label("Info-Modus: Einstellung überfahren", systemImage: "info.circle.fill")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(DS.Ink.accent)
+                    .foregroundStyle(DS.Accent.indigo)
                     .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
+                    .padding(.vertical, 5)
                     .background(Capsule().fill(DS.Surface.selection))
             }
 
@@ -86,77 +75,93 @@ struct SettingsView: View {
                     isHelpModeActive.toggle()
                 }
             } label: {
-                Image(systemName: isHelpModeActive ? "questionmark.circle.fill" : "questionmark.circle")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(isHelpModeActive ? DS.Ink.accent : .secondary)
+                Image(systemName: isHelpModeActive ? "info.circle.fill" : "info.circle")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isHelpModeActive ? DS.Accent.indigo : .secondary)
                     .frame(width: 30, height: 30)
+                    .background(Circle().fill(isHelpModeActive ? DS.Surface.selection : DS.Surface.control))
             }
             .buttonStyle(.plain)
-            .help("Hilfe-Modus umschalten")
+            .help("Info-Modus: Erklärungen zu jeder Einstellung beim Überfahren")
+            .accessibilityLabel(isHelpModeActive ? "Info-Modus ausschalten" : "Info-Modus einschalten")
 
             Button(action: finish) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(DS.Surface.chip))
+                    .background(Circle().fill(DS.Surface.control))
             }
             .buttonStyle(.plain)
             .help("Einstellungen schließen")
             .accessibilityLabel("Einstellungen schließen")
+            .accessibilityLabel("Einstellungen schließen")
         }
         .padding(.horizontal, DS.Space.xl)
         .padding(.vertical, DS.Space.m)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Surface.canvas)
     }
 
     private var navigation: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
             navigationGroup("Konfiguration", tabs: [.endpoints, .model, .search, .tools, .learning])
-            navigationGroup("App", tabs: [.hotkeys, .appearance, .advanced, .experimental])
+            navigationGroup("System & App", tabs: [.hotkeys, .appearance, .advanced, .experimental])
             Spacer(minLength: 0)
-            Label("Änderungen werden lokal gespeichert", systemImage: "lock.fill")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, DS.Space.xs)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption2)
+                        .foregroundStyle(DS.Accent.emerald)
+                    Text("Lokal gespeichert")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text(AppVersion.display)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, DS.Space.s)
         }
         .padding(DS.Space.m)
-        .frame(width: 215, alignment: .leading)
-        .background(DS.Surface.navigation)
+        .frame(width: 224, alignment: .leading)
+        .background(DS.Surface.sidebar)
     }
 
     private func navigationGroup(_ title: String, tabs: [SettingsTab]) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, DS.Space.s)
+                .padding(.bottom, 2)
 
             ForEach(tabs) { tab in
+                let isSelected = selectedTab == tab
                 Button {
                     withAnimation(.easeInOut(duration: 0.14)) {
                         selectedTab = tab
                     }
                 } label: {
                     HStack(spacing: DS.Space.s) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 13, weight: .medium))
-                            .frame(width: 18)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(tab.tint.opacity(isSelected ? 0.22 : 0.12))
+                                .frame(width: 24, height: 24)
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(tab.tint)
+                        }
                         Text(tab.title)
-                            .font(.system(.subheadline, design: .rounded).weight(selectedTab == tab ? .semibold : .regular))
+                            .font(.system(.subheadline, design: .rounded).weight(isSelected ? .semibold : .regular))
+                            .foregroundStyle(isSelected ? DS.Ink.primary : .secondary)
                         Spacer(minLength: 0)
                     }
-                    .foregroundStyle(selectedTab == tab ? DS.Ink.accent : DS.Ink.primary)
                     .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                            .fill(selectedTab == tab ? DS.Surface.selection : .clear)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                            .stroke(selectedTab == tab ? DS.Ink.accent.opacity(0.18) : .clear, lineWidth: 0.5)
+                            .fill(isSelected ? DS.Surface.selection : .clear)
                     )
                 }
                 .buttonStyle(.plain)
@@ -166,15 +171,16 @@ struct SettingsView: View {
     }
 
     private var content: some View {
-        ScrollView {
+        ScrollView(.vertical) {
             selectedTabContent
-                .frame(maxWidth: 650, alignment: .leading)
+                .frame(maxWidth: 660, alignment: .leading)
                 .padding(.horizontal, DS.Space.xxl)
-                .padding(.vertical, DS.Space.xl)
+                .padding(.vertical, DS.Space.l)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .textBackgroundColor).opacity(0.34))
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DS.Surface.canvas)
+        .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
     }
 
     @ViewBuilder
@@ -195,18 +201,17 @@ struct SettingsView: View {
     private var footer: some View {
         HStack(spacing: DS.Space.s) {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            Text("Einstellungen werden beim Schließen gespeichert")
+                .foregroundStyle(DS.Accent.emerald)
+            Text("Einstellungen werden automatisch übernommen")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Fertig", action: finish)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
         }
         .padding(.horizontal, DS.Space.xl)
         .padding(.vertical, DS.Space.m)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(DS.Surface.canvas)
     }
 
     @ViewBuilder
@@ -219,7 +224,7 @@ struct SettingsView: View {
             VStack(spacing: DS.Space.l) {
                 Image(systemName: "questionmark.circle.fill")
                     .font(.system(size: 38))
-                    .foregroundStyle(DS.Ink.accent.gradient)
+                    .foregroundStyle(DS.Accent.brandGradient)
                 Text("Hilfe-Modus aktiviert")
                     .font(.system(.title3, design: .rounded).weight(.semibold))
                 Text("Bewege den Mauszeiger über markierte Elemente, um Hinweise zu sehen. Solange dieser Modus aktiv ist, sind Änderungen geschützt.")
@@ -231,8 +236,7 @@ struct SettingsView: View {
                         hasSeenHelpIntro = true
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
             }
             .padding(DS.Space.xxl)
             .frame(width: 410)
@@ -263,7 +267,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .endpoints: "Endpunkte"
-        case .model: "Modell"
+        case .model: "Modell & KI"
         case .learning: "Lernmodus"
         case .search: "Recherche"
         case .hotkeys: "Hotkeys"
@@ -288,17 +292,42 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         }
     }
 
+    var tint: Color {
+        switch self {
+        case .endpoints: DS.Accent.blue
+        case .model: DS.Accent.indigo
+        case .learning: DS.Accent.amber
+        case .search: DS.Accent.cyan
+        case .hotkeys: DS.Accent.rose
+        case .tools: DS.Accent.emerald
+        case .advanced: DS.Accent.indigo
+        case .appearance: DS.Accent.cyan
+        case .experimental: DS.Accent.amber
+        }
+    }
+
     var navigationSubtitle: String {
         switch self {
-        case .endpoints: "Verbindungen und Profile"
-        case .model: "Modell und Kontext"
-        case .learning: "Lernstil und Antworten"
-        case .search: "Websuche, Quellen und Browsing"
-        case .hotkeys: "Schnellzugriffe"
-        case .tools: "Werkzeuge und Berechtigungen"
-        case .advanced: "Hintergrund und Kontext"
-        case .appearance: "Darstellung und Verhalten"
-        case .experimental: "Neue Funktionen testen"
+        case .endpoints: "Server-Verbindungen, Profile und direkte Modellwahl"
+        case .model: "Modell-Parameter, Kontextfenster und Hintergrund-Jobs"
+        case .learning: "Didaktik, Lernstil und Antwortverhalten"
+        case .search: "Websuche, Quellen und lokales Browsing"
+        case .hotkeys: "Globale Tastenkürzel für schnellen Zugriff"
+        case .tools: "Werkzeuge, System-Integration und Berechtigungen"
+        case .advanced: "Hintergrund-Verarbeitung und Diagnose"
+        case .appearance: "Darstellung, Schriftgröße und Fensterverhalten"
+        case .experimental: "Vorschau-Funktionen und Labor-Optionen"
         }
+    }
+}
+
+
+/// Versionsanzeige aus dem App-Bundle (MARKETING_VERSION + Build).
+enum AppVersion {
+    static var display: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "LernAssist \(version) (\(build))"
     }
 }

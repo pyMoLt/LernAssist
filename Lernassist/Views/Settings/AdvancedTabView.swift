@@ -4,142 +4,315 @@ import SwiftUI
 
 struct AdvancedTabView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @State private var showResetConfirmation = false
 
     var body: some View {
-        // SettingsView stellt bereits die scrollbare Content-Fläche bereit. Ein geschachteltes
-        // AppKit-Formular verliert unter macOS 26 beim Tabwechsel gelegentlich seinen Layout-Host:
-        // Die Accessibility-Elemente existieren dann noch, die Sheet-Fläche wird aber leer oder
-        // verschoben und wirkt wie ein Deadlock. Deshalb nur normale SwiftUI-Stacks verwenden.
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSection(icon: "lock.shield", title: "Berechtigungen") {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Berechtigungs-Assistent")
-                            .font(.callout.weight(.medium))
-                        Text("Öffnet das Ersteinrichtungs-Fenster mit den benötigten Berechtigungen (Zugriffs-Hilfen für „Auswahl erklären“, Bildschirmaufnahme für Screenshots) inkl. Live-Status und Anforderungs-Buttons.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            settingsSection(icon: "lock.shield.fill", title: "Einrichtung & Berechtigungen", tint: DS.Accent.emerald) {
+                SettingsRow(
+                    title: "Einrichtungs-Assistent",
+                    subtitle: "Rolle dieses Macs, Verbindung zu oMLX, Recherche und Berechtigungen in fünf Schritten.",
+                    icon: "wand.and.stars",
+                    tint: DS.Accent.emerald
+                ) {
+                    Button("Assistent starten") {
+                        NotificationCenter.default.post(name: .showSetupAssistant, object: nil)
                     }
-                    Spacer()
-                    Button("Öffnen") {
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.emerald, prominent: true))
+                    .settingHelp("Führt durch die komplette Einrichtung – z. B. auf einem Gerät, das die Modelle eines Servers im Netzwerk nutzt. Bestehende Chats bleiben unberührt.")
+                }
+
+                SettingsHairline()
+
+                SettingsRow(
+                    title: "Berechtigungs-Assistent",
+                    subtitle: "Prüft Zugriffs-Hilfen („Auswahl erklären“) und Bildschirmaufnahme (Screenshots) mit Live-Status.",
+                    icon: "checkmark.shield.fill",
+                    tint: DS.Accent.emerald
+                ) {
+                    Button("Assistent öffnen") {
                         NotificationCenter.default.post(name: .showPermissionOnboarding, object: nil)
                     }
-                    .settingHelp("Zeigt das Berechtigungs-Fenster auch nach dem Erststart erneut – nützlich nach Updates oder wenn ein Hotkey still nichts tut.")
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.emerald, prominent: true))
+                    .settingHelp("Zeigt das Berechtigungs-Fenster erneut – nützlich nach Updates oder wenn ein Hotkey still nichts tut.")
                 }
             }
 
-            settingsSection(icon: "gearshape.2", title: "Hintergrundprozesse") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("LernAssist kann Aufgaben im Hintergrund erledigen, wenn du den Chat gerade nicht nutzt, um den Lesefluss nicht zu stören.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            settingsSection(icon: "archivebox.fill", title: "Chats", tint: DS.Accent.blue) {
+                SettingsRow(
+                    title: "Automatisch archivieren",
+                    subtitle: "Chats ohne Aktivität wandern ins Archiv (Sidebar unten → Archiv) und bleiben dort lesbar.",
+                    icon: "clock.arrow.circlepath",
+                    tint: DS.Accent.blue
+                ) {
+                    Picker("", selection: $viewModel.autoArchiveDays) {
+                        Text("nach 7 Tagen").tag(7)
+                        Text("nach 14 Tagen").tag(14)
+                        Text("nach 30 Tagen").tag(30)
+                        Text("nach 90 Tagen").tag(90)
+                        Text("nie").tag(0)
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
+                    .settingHelp("Wird beim App-Start geprüft. Karteikarten archivierter Chats bleiben in der Wiederholung.")
+                }
+            }
 
-                    Toggle("Auto-Labeling aktivieren", isOn: $viewModel.autoLabelingEnabled)
-                        .settingHelp("Erstellt nach der ersten Antwort automatisch einen passenden Titel für den Chat.")
+            settingsSection(icon: "gearshape.2.fill", title: "Hintergrundprozesse", tint: DS.Accent.indigo) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Automatische Chat-Titel (Auto-Labeling)",
+                        subtitle: "Erstellt nach der ersten Antwort im Hintergrund einen prägnanten Titel.",
+                        icon: "tag.fill",
+                        tint: DS.Accent.indigo
+                    ) {
+                        Toggle("", isOn: $viewModel.autoLabelingEnabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
 
-                    Toggle("Bild-zu-Text Konvertierung", isOn: $viewModel.autoImageToTextEnabled)
-                        .settingHelp("Wandelt hochgeladene Screenshots im Hintergrund in Textbeschreibungen um, um den Arbeitsspeicher (KV-Cache) des Modells zu schonen.")
+                    SettingsHairline()
 
-                    Toggle("Bilder aus Dokumenten prozessieren", isOn: $viewModel.extractImagesFromPDF)
-                        .settingHelp("Sendet jede PDF-Seite bzw. jedes eingebettete Bild aus Word-/PowerPoint-Dokumenten an das Vision-Modell, um Bilder und Diagramme zu beschreiben (Achtung: Kann viele Token verbrauchen).")
+                    SettingsRow(
+                        title: "Bild-zu-Text-Konvertierung im Hintergrund",
+                        subtitle: "Wandelt ältere Screenshots in Textbeschreibungen um, um KV-Cache zu sparen.",
+                        icon: "text.viewfinder",
+                        tint: DS.Accent.cyan
+                    ) {
+                        Toggle("", isOn: $viewModel.autoImageToTextEnabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Eingebettete Bilder aus Dokumenten analysieren",
+                        subtitle: "Beschreibt Folien und Abbildungen aus PDFs/Word/PowerPoint per Vision-Modell.",
+                        icon: "doc.viewfinder",
+                        tint: DS.Accent.amber
+                    ) {
+                        Toggle("", isOn: $viewModel.extractImagesFromPDF)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
 
                     if viewModel.extractImagesFromPDF {
-                        Picker("Detailgrad der Bildextraktion", selection: $viewModel.imageExtractionDetail) {
-                            Text("Kurz (Ressourcenschonend)").tag("Kurz")
-                            Text("Normal").tag("Normal")
-                            Text("Detailliert (Kostet mehr Tokens)").tag("Detailliert")
+                        SettingsRow(
+                            title: "Detailgrad der Bildextraktion",
+                            subtitle: "Bestimmt die Ausführlichkeit der Bildbeschreibungen.",
+                            icon: "slider.horizontal.below.rectangle",
+                            tint: DS.Accent.amber
+                        ) {
+                            SoftDropdownMenu(
+                                label: viewModel.imageExtractionDetail,
+                                width: 195
+                            ) {
+                                ForEach([
+                                    ("Kurz", "Kurz (Ressourcenschonend)"),
+                                    ("Normal", "Normal"),
+                                    ("Detailliert", "Detailliert (Mehr Tokens)")
+                                ], id: \.0) { tag, title in
+                                    Button {
+                                        viewModel.imageExtractionDetail = tag
+                                    } label: {
+                                        if viewModel.imageExtractionDetail == tag {
+                                            Label(title, systemImage: "checkmark")
+                                        } else {
+                                            Text(title)
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        .pickerStyle(.menu)
-                        .settingHelp("Bestimmt, wie detailliert das Vision-Modell eingebettete Bilder aus PDFs/Word/PowerPoint beschreiben soll.")
                     }
 
-                    Toggle("Thinking bei Hintergrund-Jobs deaktivieren (experimentell)", isOn: $viewModel.disableThinkingForBackgroundJobs)
-                        .settingHelp("Best-effort: versucht, den internen Denkprozess von Reasoning-Modellen bei Titel-Generierung, Bild-Beschreibung und Zusammenfassungen abzuschalten. Bei LM Studio + Qwen3.5/3.6 kann dies serverseitig ignoriert werden.")
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Thinking bei Hintergrund-Jobs deaktivieren",
+                        subtitle: "Schaltet den internen Denkprozess für Titel & Zusammenfassungen ab (sofern vom Server unterstützt).",
+                        icon: "bolt.fill",
+                        tint: DS.Accent.amber
+                    ) {
+                        Toggle("", isOn: $viewModel.disableThinkingForBackgroundJobs)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
                 }
             }
 
-            settingsSection(icon: "text.line.first.and.arrowtriangle.forward", title: "Chat-Kontext") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Kompakt-Vorschlag zeigen", isOn: $viewModel.autoCompactSuggestionsEnabled)
-                        .settingHelp("Zeigt in der Chat-Leiste einen „Zusammenfassen“-Chip, sobald der Chat das Kontextfenster zu einem großen Teil füllt.")
+            settingsSection(icon: "arrow.triangle.merge", title: "Kontext-Kompaktierung (/compact)", tint: DS.Accent.blue) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Kompakt-Vorschlag automatisch einblenden",
+                        subtitle: "Zeigt einen „Zusammenfassen“-Hinweis, sobald sich das Kontextfenster füllt.",
+                        icon: "sparkles.rectangle.stack",
+                        tint: DS.Accent.blue
+                    ) {
+                        Toggle("", isOn: $viewModel.autoCompactSuggestionsEnabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
 
                     if viewModel.autoCompactSuggestionsEnabled {
-                        HStack {
+                        HStack(spacing: DS.Space.m) {
                             Text("Schwellwert")
-                            Spacer()
-                            Text("\(Int(viewModel.autoCompactThreshold * 100)) %")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                        Slider(value: $viewModel.autoCompactThreshold, in: 0.5...0.9, step: 0.05)
-                            .settingHelp("Ab welchem geschätzten Kontext-Füllstand der Vorschlag erscheint.")
-                    }
-
-                    Stepper(value: $viewModel.compactSummaryTokens, in: 1_000...16_000, step: 500) {
-                        HStack {
-                            Text("Länge der Zusammenfassung")
-                            Spacer()
-                            Text("\(viewModel.compactSummaryTokens) Tokens")
-                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                            Slider(value: $viewModel.autoCompactThreshold, in: 0.5...0.9, step: 0.05)
+                                .tint(DS.Ink.accent)
+                            Text("\(Int(viewModel.autoCompactThreshold * 100)) %")
+                                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                .foregroundStyle(DS.Accent.blue)
+                                .frame(width: 44, alignment: .trailing)
                         }
                     }
-                    .settingHelp("Richtwert für die Länge der Zusammenfassung bei „Zusammenfassen“ bzw. /compact – als Anweisung an das Modell, keine harte Grenze (nichts wird abgeschnitten). Länger = mehr Details bleiben erhalten.")
 
-                    Stepper(value: $viewModel.compactKeepLastMessages, in: 0...6) {
-                        HStack {
-                            Text("Letzte Nachrichten wörtlich übernehmen")
-                            Spacer()
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Ziel-Länge der Zusammenfassung",
+                        subtitle: "Richtwert in Tokens für die komprimierte Gesprächszusammenfassung.",
+                        icon: "text.alignleft",
+                        tint: DS.Accent.blue
+                    ) {
+                        HStack(spacing: DS.Space.s) {
+                            Text("\(viewModel.compactSummaryTokens) tok")
+                                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                .foregroundStyle(DS.Accent.indigo)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Surface.control))
+                            Stepper("", value: $viewModel.compactSummaryTokens, in: 1_000...16_000, step: 500)
+                                .labelsHidden()
+                        }
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Letzte Nachrichten wörtlich behalten",
+                        subtitle: "Anzahl der jüngsten Nachrichten, die unverändert erhalten bleiben.",
+                        icon: "bubble.left.and.bubble.right",
+                        tint: DS.Accent.blue
+                    ) {
+                        HStack(spacing: DS.Space.s) {
                             Text("\(viewModel.compactKeepLastMessages)")
-                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                                .foregroundStyle(DS.Accent.indigo)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(DS.Surface.control))
+                            Stepper("", value: $viewModel.compactKeepLastMessages, in: 0...6)
+                                .labelsHidden()
                         }
                     }
-                    .settingHelp("So viele der letzten Nachrichten werden unverändert hinter die Zusammenfassung gehängt, damit das Modell weiß, worum es gerade ging.")
                 }
             }
 
-            settingsSection(icon: "play.rectangle", title: "YouTube-Import") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("Bevorzugte Untertitel-Sprache", selection: $viewModel.youtubeSubtitleLanguage) {
-                        Text("Deutsch").tag("de")
-                        Text("Englisch").tag("en")
-                        Text("Erste verfügbare Spur").tag("")
+            settingsSection(icon: "play.rectangle.fill", title: "YouTube-Transkripte", tint: DS.Accent.rose) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Bevorzugte Untertitel-Sprache",
+                        subtitle: "Wird beim Importieren von YouTube-Lernvideos vorrangig geladen.",
+                        icon: "captions.bubble",
+                        tint: DS.Accent.rose
+                    ) {
+                        SoftDropdownMenu(
+                            label: viewModel.youtubeSubtitleLanguage == "de" ? "Deutsch" : (viewModel.youtubeSubtitleLanguage == "en" ? "Englisch" : "Erste verfügbare Spur"),
+                            width: 185
+                        ) {
+                            ForEach([
+                                ("de", "Deutsch"),
+                                ("en", "Englisch"),
+                                ("", "Erste verfügbare Spur")
+                            ], id: \.0) { tag, title in
+                                Button {
+                                    viewModel.youtubeSubtitleLanguage = tag
+                                } label: {
+                                    if viewModel.youtubeSubtitleLanguage == tag {
+                                        Label(title, systemImage: "checkmark")
+                                    } else {
+                                        Text(title)
+                                    }
+                                }
+                            }
+                        }
                     }
-                    .pickerStyle(.menu)
-                    .settingHelp("Welche Untertitel-Spur beim Importieren eines YouTube-Videos bevorzugt wird.")
 
-                    HStack {
-                        Text("Max. Zeichen pro Transkript")
-                        Spacer()
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Max. Zeichen pro YouTube-Transkript",
+                        subtitle: "Schützt das Kontextfenster bei sehr langen Vorlesungsaufzeichnungen.",
+                        icon: "character.cursor.ibeam",
+                        tint: DS.Accent.rose
+                    ) {
                         TextField("30000", value: $viewModel.youtubeTranscriptCharLimit, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 90)
-                            .settingHelp("Längere Transkripte werden auf diesen Wert gekürzt, damit ein einzelnes Video nicht das komplette Kontextfenster füllt.")
+                            .modifier(SettingsFieldStyle(monospaced: true))
+                            .frame(width: 110)
                     }
                 }
             }
 
-            settingsSection(icon: "arrow.triangle.2.circlepath", title: "Tool-Runden") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Stepper(value: $viewModel.maxToolRounds, in: 1...12) {
-                        HStack {
-                            Text("Maximale aufeinanderfolgende Tool-Runden")
-                            Spacer()
-                            Text("\(viewModel.maxToolRounds)")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
+            SettingsDisclosureSection(
+                title: "Erweitert (Dokumente & Textauswahl)",
+                subtitle: "Bild-Beschreibungsbudget für Dokumente und Kontextradius für „Text erklären“",
+                icon: "slider.horizontal.3",
+                tint: DS.Accent.amber
+            ) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Dokument-Bild-Budget",
+                        subtitle: "Maximale Anzahl von Bildern pro Dokument, die per KI-Vision beschrieben werden.",
+                        icon: "photo.badge.checkmark",
+                        tint: DS.Accent.amber,
+                        help: "Verhindert übermäßige Vision-Aufrufe bei langen Skripten oder Präsentationen mit vielen Folien (0–50 Bilder, Standard 12)."
+                    ) {
+                        stepperBadge("\(viewModel.documentImageBudget) Bilder", value: $viewModel.documentImageBudget, range: 0...50, step: 2)
                     }
-                    .settingHelp("Bestimmt, wie oft das Modell innerhalb eines Turns Tools iterativ aufrufen darf. Standard: 8. Ein niedrigerer Wert begrenzt Latenz; ein höherer Wert gibt Python-/Recherche-Korrekturen mehr Raum.")
 
-                    Text("Der Wert gilt pro Nutzer-Turn und verhindert Endlosschleifen aus Tool-Aufrufen. Nach dem Limit erhält das Modell bzw. der Nutzer ein sichtbares Ergebnis.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Kontextradius für „Text erklären“",
+                        subtitle: "Zeichenmenge vor und nach der Textauswahl für präzise Begriffserklärungen.",
+                        icon: "character.cursor.ibeam",
+                        tint: DS.Accent.indigo,
+                        help: "Bestimmt, wie viel Textumfeld der markierten Textstelle an das Modell für die Erklärung übergeben wird (100–1200 Zeichen, Standard 400 Zeichen)."
+                    ) {
+                        stepperBadge("± \(viewModel.inlineExplainRadius) Zeichen", value: $viewModel.inlineExplainRadius, range: 100...1200, step: 50)
+                    }
+                }
+            }
+
+            settingsSection(icon: "arrow.counterclockwise.circle.fill", title: "Standardwerte", tint: DS.Accent.rose) {
+                SettingsRow(
+                    title: "Standardwerte wiederherstellen",
+                    subtitle: "Setzt technische Grenzwerte, Timeouts und Budgets zurück. Endpunkte, Modelle samt Sampling, Prompts, Lernstil, Darstellung, Hotkeys, Schalter und Quellen bleiben.",
+                    icon: "arrow.counterclockwise",
+                    tint: DS.Accent.rose
+                ) {
+                    Button("Zurücksetzen …") {
+                        showResetConfirmation = true
+                    }
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .confirmationDialog(
+            "Standardwerte wiederherstellen?",
+            isPresented: $showResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Standardwerte wiederherstellen", role: .destructive) {
+                viewModel.resetToDefaults()
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Zurückgesetzt werden nur technische Grenzwerte, Timeouts und Budgets (Tools, Recherche, Lernen, Dokumente). Unverändert bleiben Endpunkte, Profile und Modelle samt Sampling-Werten, API-Keys, eigene Prompts, Lernstil, Darstellung, Hotkeys, Ein/Aus-Schalter, Tool-Auswahl, Recherche-Quellen, Domainlisten und Kontakt-E-Mail.")
+        }
     }
 }

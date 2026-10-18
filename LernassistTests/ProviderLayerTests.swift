@@ -261,9 +261,9 @@ final class OMLXProviderTests: XCTestCase {
         XCTAssertEqual(local.backgroundJobModel, "", "Hintergrund-Jobs nutzen standardmäßig das Hauptmodell")
         XCTAssertEqual(EndpointManager.chatCompletionsURL(for: local)?.absoluteString, "http://127.0.0.1:8072/v1/chat/completions")
 
-        let remote = EndpointProfile.omlxRemote()
+        let remote = EndpointProfile.omlxRemote(host: "studio")
         XCTAssertTrue(remote.isRemote)
-        XCTAssertEqual(remote.baseURL, "http://macbook-pro:8072")
+        XCTAssertEqual(remote.baseURL, "http://studio:8072")
         XCTAssertEqual(remote.effectiveRequestTimeout, 300)
         XCTAssertEqual(remote.thinkingMode, .on)
     }

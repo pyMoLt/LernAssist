@@ -7,6 +7,10 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
     case europePMC = "europepmc"
     case arxiv
     case stackExchange = "stackexchange"
+    case openAlex = "openalex"
+    case semanticScholar = "semanticscholar"
+    case medlinePlus = "medlineplus"
+    case openFDA = "openfda"
     /// Exa über MCP – nur Fallback, wenn die anderen Quellen zu wenig liefern.
     case exa
 
@@ -19,6 +23,10 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
         case .europePMC:     return "Europe PMC (Medizin/Biologie)"
         case .arxiv:         return "arXiv (Naturwissenschaft/Technik)"
         case .stackExchange: return "Stack Exchange"
+        case .openAlex:      return "OpenAlex (Fachliteratur aller Fächer)"
+        case .semanticScholar: return "Semantic Scholar (Fachliteratur)"
+        case .medlinePlus:   return "MedlinePlus (Gesundheitsthemen, Englisch)"
+        case .openFDA:       return "openFDA (US-Fachinformationen zu Arzneimitteln)"
         case .exa:           return "Exa (Fallback über MCP)"
         }
     }
@@ -30,17 +38,25 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
         case .europePMC:     return "cross.case"
         case .arxiv:         return "atom"
         case .stackExchange: return "bubble.left.and.text.bubble.right"
+        case .openAlex:      return "books.vertical"
+        case .semanticScholar: return "graduationcap"
+        case .medlinePlus:   return "heart.text.square"
+        case .openFDA:       return "pills"
         case .exa:           return "sparkle.magnifyingglass"
         }
     }
 
     var help: String {
         switch self {
-        case .searxng:       return "Allgemeine Websuche über deine SearXNG-Instanz (z. B. auf dem MacBook Pro)."
+        case .searxng:       return "Allgemeine Websuche über eine eigene SearXNG-Instanz."
         case .wikipedia:     return "Artikel direkt über die Wikipedia-API – sauberer Text ohne Seitenmenüs."
         case .europePMC:     return "Fachartikel mit Abstracts aus Europe PMC (enthält PubMed)."
         case .arxiv:         return "Preprints aus Physik, Mathematik, Informatik, Biologie."
-        case .stackExchange: return "Beste Antworten von Stack Overflow und anderen Stack-Exchange-Seiten."
+        case .stackExchange: return "Beste Antworten von Stack Overflow und anderen Stack-Exchange-Seiten. Ohne Key etwa 300 Anfragen pro Tag."
+        case .openAlex:      return "Offener Katalog wissenschaftlicher Arbeiten aller Fächer, mit Abstracts. Kostenlos, ohne Key."
+        case .semanticScholar: return "Fachartikel mit Abstracts und Kurzfassungen. Ohne Key gemeinsamer, knapper Zugang – kann langsam sein."
+        case .medlinePlus:   return "Verständliche Übersichten zu Krankheiten und Gesundheitsthemen der US-Nationalbibliothek (Englisch)."
+        case .openFDA:       return "Amerikanische Fachinformationen (Indikation, Dosierung, Kontraindikationen) zu einem Wirkstoff. Für deutsche Präparate gibt es keine freie Schnittstelle."
         case .exa:           return "KI-aufbereitete Websuche von Exa. Wird nur gefragt, wenn die anderen Quellen zu wenig liefern. Ohne Key: kostenlose Stufe."
         }
     }
@@ -85,6 +101,8 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
     /// oMLX-Profil, über das gerankt wird (nil = aktives Profil, falls oMLX, sonst erstes oMLX-Profil).
     var rerankerProfileID: UUID? = nil
     var rerankerTimeout: Double = 8
+    /// Kandidaten-Fenster für den Reranker (Top-N BM25 an Reranker übergeben).
+    var rerankerWindow: Int = 60
 
     // Quellen-Details
     var wikipediaLanguage: String = "de"
@@ -99,6 +117,8 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
     var blockedDomains: [String] = ["pinterest.com", "facebook.com", "instagram.com", "tiktok.com", "quora.com"]
 
     var cacheMinutes: Int = 10
+    /// Abbildungen aus der Recherche anbieten ([B#], die App zeigt sie im Chat).
+    var imagesEnabled: Bool = true
     /// Kontakt (E-Mail) für die App-Kennung bei Fach-APIs (Wikipedia, Europe PMC, arXiv,
     /// Stack Exchange). Wikimedia empfiehlt das ausdrücklich; leer = anonyme Kennung.
     var apiContactEmail: String = ""
@@ -146,9 +166,9 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case enabledSources, resultsPerSource, fullTextPages, fetchTimeout, maxDownloadMB
         case passageChars, maxPassages, maxPassagesPerSource, tokenBudget
-        case rerankerMode, rerankerModel, rerankerProfileID, rerankerTimeout
+        case rerankerMode, rerankerModel, rerankerProfileID, rerankerTimeout, rerankerWindow
         case wikipediaLanguage, stackExchangeSites, exaMinWebResults, exaResults
-        case trustedDomains, goodDomains, blockedDomains, cacheMinutes, apiContactEmail
+        case trustedDomains, goodDomains, blockedDomains, cacheMinutes, apiContactEmail, imagesEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -169,6 +189,7 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         rerankerModel = try c.decodeIfPresent(String.self, forKey: .rerankerModel) ?? d.rerankerModel
         rerankerProfileID = try c.decodeIfPresent(UUID.self, forKey: .rerankerProfileID)
         rerankerTimeout = try c.decodeIfPresent(Double.self, forKey: .rerankerTimeout) ?? d.rerankerTimeout
+        rerankerWindow = try c.decodeIfPresent(Int.self, forKey: .rerankerWindow) ?? d.rerankerWindow
         wikipediaLanguage = try c.decodeIfPresent(String.self, forKey: .wikipediaLanguage) ?? d.wikipediaLanguage
         stackExchangeSites = try c.decodeIfPresent([String].self, forKey: .stackExchangeSites) ?? d.stackExchangeSites
         exaMinWebResults = try c.decodeIfPresent(Int.self, forKey: .exaMinWebResults) ?? d.exaMinWebResults
@@ -177,6 +198,7 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         goodDomains = try c.decodeIfPresent([String].self, forKey: .goodDomains) ?? d.goodDomains
         blockedDomains = try c.decodeIfPresent([String].self, forKey: .blockedDomains) ?? d.blockedDomains
         cacheMinutes = try c.decodeIfPresent(Int.self, forKey: .cacheMinutes) ?? d.cacheMinutes
+        imagesEnabled = try c.decodeIfPresent(Bool.self, forKey: .imagesEnabled) ?? true
         apiContactEmail = try c.decodeIfPresent(String.self, forKey: .apiContactEmail) ?? ""
     }
 
@@ -195,6 +217,7 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         try c.encode(rerankerModel, forKey: .rerankerModel)
         try c.encodeIfPresent(rerankerProfileID, forKey: .rerankerProfileID)
         try c.encode(rerankerTimeout, forKey: .rerankerTimeout)
+        try c.encode(rerankerWindow, forKey: .rerankerWindow)
         try c.encode(wikipediaLanguage, forKey: .wikipediaLanguage)
         try c.encode(stackExchangeSites, forKey: .stackExchangeSites)
         try c.encode(exaMinWebResults, forKey: .exaMinWebResults)
@@ -203,6 +226,7 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         try c.encode(goodDomains, forKey: .goodDomains)
         try c.encode(blockedDomains, forKey: .blockedDomains)
         try c.encode(cacheMinutes, forKey: .cacheMinutes)
+        try c.encode(imagesEnabled, forKey: .imagesEnabled)
         try c.encode(apiContactEmail, forKey: .apiContactEmail)
     }
 }

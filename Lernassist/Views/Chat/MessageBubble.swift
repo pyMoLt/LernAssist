@@ -13,6 +13,7 @@ struct MessageBubble: View, Equatable {
         lhs.message == rhs.message &&
         lhs.isStreaming == rhs.isStreaming &&
         lhs.isContinuation == rhs.isContinuation &&
+        lhs.embedded == rhs.embedded &&
         lhs.fontScale == rhs.fontScale
     }
     let message: ChatMessage
@@ -23,6 +24,9 @@ struct MessageBubble: View, Equatable {
     /// Nur true für die letzte Nachricht während aktiver Generierung
     let isStreaming: Bool
     let isContinuation: Bool
+    /// Teil einer Antwort-Gruppe (AssistantTurnRow): Avatar, Gedankengang und Tool-Zeilen zeigt
+    /// dann die Arbeitsschritte-Gruppe – die Bubble rendert nur die Ergebnisse.
+    var embedded: Bool = false
     /// Schriftgrößen-Multiplikator (Erscheinungsbild-Einstellung). Muss Teil der Equatable-Prüfung
     /// sein, sonst überspringt SwiftUIs Diffing die Neuberechnung bei einer reinen Größenänderung,
     /// wenn sich sonst nichts an der Nachricht geändert hat.
@@ -44,7 +48,6 @@ struct MessageBubble: View, Equatable {
     var onRollbackFailed: (() -> Void)? = nil
     /// Hover-Zustand für die Einblendung der Aktionsleiste (Phase G).
     @State private var isHovered = false
-    @State private var isThinkingExpanded = false
     @State private var didCopy = false
     struct ExplanationRequest: Identifiable { let id = UUID(); let text: String }
     @State private var selectedExplanation: ExplanationRequest? = nil
@@ -54,6 +57,7 @@ struct MessageBubble: View, Equatable {
         chatViewModel: ChatViewModel,
         isStreaming: Bool = false,
         isContinuation: Bool = false,
+        embedded: Bool = false,
         fontScale: Double = 1.0,
         onExplainDifferently: (() -> Void)? = nil,
         onCheckConfidence: (() -> Void)? = nil,
@@ -67,6 +71,7 @@ struct MessageBubble: View, Equatable {
         self.chatViewModel = chatViewModel
         self.isStreaming = isStreaming
         self.isContinuation = isContinuation
+        self.embedded = embedded
         self.fontScale = fontScale
         self.onExplainDifferently = onExplainDifferently
         self.onCheckConfidence = onCheckConfidence
@@ -75,7 +80,6 @@ struct MessageBubble: View, Equatable {
         self.onEditFromHere = onEditFromHere
         self.onRetryFailed = onRetryFailed
         self.onRollbackFailed = onRollbackFailed
-        self._isThinkingExpanded = State(initialValue: false)
         self._didCopy = State(initialValue: false)
     }
 
@@ -83,6 +87,10 @@ struct MessageBubble: View, Equatable {
     
     /// Verhindert das Anzeigen von komplett leeren "Geister-Bubbles"
     private var isCompletelyEmpty: Bool {
+        if embedded {
+            return !WorkStep.hasAnswerText(message) && message.imageID == nil && message.htmlArtifact == nil
+                && message.quizCard == nil && message.errorMessage == nil
+        }
         // Ein Thought-Prozess ist NIEMALS leer
         if message.thinking != nil { return false }
         if let tools = message.toolCalls, !tools.isEmpty { return false }
@@ -139,8 +147,11 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.s + 2)
-            .frame(maxWidth: 420, alignment: .trailing)
             .background(userBubbleShape.fill(DS.Surface.bubbleUser))
+            .overlay(
+                userBubbleShape.stroke(DS.Accent.brand.opacity(0.14), lineWidth: 0.75)
+            )
+            .frame(maxWidth: 420, alignment: .trailing)
         }
     }
 
@@ -157,15 +168,10 @@ struct MessageBubble: View, Equatable {
 
     private var assistantMessageContent: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
-            if !isContinuation {
-                Circle()
-                    .fill(DS.Ink.accent.gradient.opacity(0.16))
-                    .frame(width: 30, height: 30)
-                    .overlay(
-                        Image(systemName: "graduationcap.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(DS.Ink.accent.gradient)
-                    )
+            if embedded {
+                EmptyView()
+            } else if !isContinuation {
+                LernAssistBrandIcon(size: 30)
                     .padding(.top, 2)
             } else {
                 Spacer().frame(width: 30)
@@ -188,13 +194,13 @@ struct MessageBubble: View, Equatable {
 
                 // Tool-Artefakt: interaktive Abfragekarte (quiz_card)
                 if let card = message.quizCard {
-                    QuizCardView(card: card) { optionIndex, freeText in
+                    QuizCardView(card: card, onAnswer: { optionIndex, freeText in
                         chatViewModel.answerQuizCard(messageId: message.id, optionIndex: optionIndex, freeText: freeText)
-                    }
+                    }, onRemember: { chatViewModel.rememberQuizCard(messageId: message.id) })
                 }
 
                 // Tool Calls
-                if let tools = message.toolCalls, !tools.isEmpty {
+                if !embedded, let tools = message.toolCalls, !tools.isEmpty {
                     VStack(alignment: .leading, spacing: DS.Space.xs) {
                         // Identität über die Position, nicht über tool.id (Audit U16): Inline
                         // geparste Tool-Calls haben oft den leeren String als id – mehrere
@@ -209,8 +215,10 @@ struct MessageBubble: View, Equatable {
                 }
 
                 // Thinking-Bereich – Zeigen sobald das Feld initialisiert wurde
-                if let thinking = message.thinking {
-                    thinkingSection(thinking, stillThinking: isStreaming && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if embedded {
+                    EmptyView()
+                } else if let thinking = message.thinking {
+                    ThinkingStepRow(text: thinking, isLive: isStreaming && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } else if isStreaming && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // Allererste Phase: noch kein Thinking-Eintrag da, nur Leerzeichen oder nichts
                     HStack(spacing: 6) {
@@ -220,12 +228,12 @@ struct MessageBubble: View, Equatable {
                     }
                 }
 
-                // Hauptinhalt
-                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Hauptinhalt (eingebettet: nur echter Antworttext, Zwischenstand steht in den Schritten)
+                if embedded ? WorkStep.hasAnswerText(message) : !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     contentView
 
                     // Quellen-Nachweis
-                    if let tools = message.toolCalls, !tools.isEmpty {
+                    if !embedded, let tools = message.toolCalls, !tools.isEmpty {
                         let sources = tools.compactMap { $0.source }.filter { !$0.isEmpty }
                         if !sources.isEmpty {
                             // Reihenfolge-Erhaltende Deduplizierung (Audit U14)
@@ -235,16 +243,17 @@ struct MessageBubble: View, Equatable {
                         }
                     }
 
-                    // Aktionsleiste – erscheint erst beim Hover (Phase G)
+                    // Aktionsleiste – nur bei Hover sichtbar, Platz bleibt immer stabil reserviert
                     if !isStreaming {
                         HStack {
                             messageActions
-                                .opacity(isHovered ? 1 : 0)
-                                .animation(.easeOut(duration: 0.12), value: isHovered)
+                                .opacity(isHovered ? 1.0 : 0.0)
+                                .allowsHitTesting(isHovered)
+                                .animation(.easeOut(duration: 0.14), value: isHovered)
                             Spacer()
                         }
                     }
-                } else if isStreaming && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } else if !embedded && isStreaming && message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             && message.thinking != nil {
                     // Hat Thinking, Content kommt aber noch
                     HStack(spacing: 6) {
@@ -261,7 +270,7 @@ struct MessageBubble: View, Equatable {
                 }
             }
 
-            Spacer(minLength: 40)
+            Spacer(minLength: 0)
         }
     }
 
@@ -272,7 +281,7 @@ struct MessageBubble: View, Equatable {
             HStack(spacing: DS.Space.xs) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.85, green: 0.35, blue: 0.2))
+                    .foregroundStyle(DS.Accent.rose)
                 Text("Antwort fehlgeschlagen")
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.primary)
@@ -285,19 +294,15 @@ struct MessageBubble: View, Equatable {
                 if let retry = onRetryFailed {
                     Button(action: retry) {
                         Label("Erneut versuchen", systemImage: "arrow.clockwise")
-                            .font(.caption.weight(.medium))
                     }
-                    .controlSize(.regular)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
                     .help("Dieselbe Frage nochmal senden – mit frischem Payload")
                 }
                 if let rollback = onRollbackFailed {
                     Button(action: rollback) {
                         Label("Frage bearbeiten", systemImage: "square.and.pencil")
-                            .font(.caption.weight(.medium))
                     }
-                    .controlSize(.regular)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.primary))
                     .help("Antwort und Frage zurücksetzen – der Text landet bearbeitbar im Eingabefeld")
                 }
             }
@@ -319,15 +324,17 @@ struct MessageBubble: View, Equatable {
             Text((try? AttributedString(markdown: message.content,
                                         options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
                  ?? AttributedString(message.content))
-                .font(.caption)
+                .font(.system(size: 11.5, design: .rounded))
                 .multilineTextAlignment(message.content.contains("\n") ? .leading : .center)
                 .textSelection(.enabled)
-                .frame(maxWidth: 560, alignment: message.content.contains("\n") ? .leading : .center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.secondary.opacity(0.15))
-                .cornerRadius(12)
+                .padding(.vertical, 5)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(DS.Surface.pill)
+                )
+                .frame(maxWidth: 560, alignment: message.content.contains("\n") ? .leading : .center)
                 .foregroundStyle(.secondary)
             Spacer()
         }
@@ -342,6 +349,7 @@ struct MessageBubble: View, Equatable {
                 assistantMessageContent
             }
         }
+        .contentShape(Rectangle())
         .onHover { hovering in
             isHovered = hovering
         }
@@ -354,78 +362,6 @@ struct MessageBubble: View, Equatable {
                 selectedExplanation = nil
             })
         }
-    }
-
-    // Thinking-Sektion – Eigener Aufbau statt DisclosureGroup für 100% Klick-Zuverlässigkeit auf macOS
-    private func thinkingSection(_ thinking: String, stillThinking: Bool) -> some View {
-        // Wortanzahl NUR nach dem Denken berechnen (O(n) split auf wachsendem Text kostet
-        // während Streaming alle 200ms → exponentiell teurer je länger der Gedankengang).
-        // Während stillThinking zeigen wir nur einen ungefähren Zeichencount (O(1)).
-        let wordInfo: String = stillThinking
-            ? "~\(thinking.utf16.count / 5) Wörter"
-            : "\(thinking.split(separator: " ").count) Wörter"
-
-        return VStack(alignment: .leading, spacing: 0) {
-            // Kopfzeile als Button
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isThinkingExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isThinkingExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(DS.Ink.accent.opacity(0.5))
-                    Image(systemName: "brain.head.profile")
-                        .font(.caption)
-
-                    if stillThinking {
-                        Text("Denkt nach...")
-                            .font(.caption).fontWeight(.medium)
-                        ProgressView().controlSize(.mini)
-                    } else {
-                        Text("Gedankengang anzeigen")
-                            .font(.caption).fontWeight(.medium)
-                    }
-
-                    Spacer()
-
-                    Text(wordInfo)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary.opacity(0.7))
-                }
-                .padding(8)
-                .contentShape(Rectangle())
-                .foregroundStyle(DS.Ink.accent)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 2)
-
-            // Inhalt (ausgeklappt) – während Streaming nur die letzten 2000 Zeichen zeigen,
-            // damit SwiftUI nicht den gesamten wachsenden String layouten muss.
-            if isThinkingExpanded {
-                let displayText = stillThinking && thinking.count > 2000
-                    ? "…" + thinking.suffix(2000)
-                    : thinking
-                Text(displayText)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(nil)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(DS.Ink.accent.opacity(0.03))
-                    .cornerRadius(6)
-                    .padding(.bottom, 4)
-            }
-        }
-        .padding(6)
-        .background(DS.Ink.accent.opacity(0.05))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(DS.Ink.accent.opacity(0.2), lineWidth: 1)
-        )
     }
 
     // MARK: - Quellen-Nachweis (Phase 7B)
@@ -462,136 +398,116 @@ struct MessageBubble: View, Equatable {
         .padding(.leading, 4)
     }
 
-    // MARK: – Aktionsleiste (Kopieren + Andere Erklärung)
+    // MARK: – Dezente, fließende Aktionsleiste unter einer Antwort (Design 2.0)
     private var messageActions: some View {
-        HStack(spacing: 6) {
+        messageActionsRow(compact: true)
+        .padding(.top, 4)
+        .padding(.leading, 2)
+    }
+
+    /// Reine Quizkarten-Nachricht (ohne Text) – dort merkt die Karte selbst.
+    private var embeddedQuizOnly: Bool { message.quizCard != nil && message.content.isEmpty }
+
+    private func messageActionsRow(compact: Bool) -> some View {
+        HStack(spacing: 1) {
             // ── Kopieren ──────────────────────────────────────────────
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message.content, forType: .string)
-                withAnimation(.easeInOut(duration: 0.15)) { didCopy = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                    withAnimation(.easeInOut(duration: 0.15)) { didCopy = false }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                        .font(.system(size: 10, weight: .medium))
-                    if didCopy {
-                        Text("Kopiert")
-                            .font(.caption2)
-                            .transition(.opacity)
+            MessageActionItem(
+                icon: didCopy ? "checkmark" : "doc.on.doc",
+                label: didCopy ? "Kopiert" : "Kopieren",
+                help: "Antwort in die Zwischenablage kopieren",
+                alwaysShowLabel: didCopy,
+                action: {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.content, forType: .string)
+                    withAnimation(.easeInOut(duration: 0.15)) { didCopy = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation(.easeInOut(duration: 0.15)) { didCopy = false }
                     }
                 }
-                .foregroundColor(didCopy ? .green : .secondary.opacity(0.6))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule().fill(didCopy ? Color.green.opacity(0.10) : DS.Surface.chip)
+            )
+
+            // ── Als Karte merken ─────────────────────────────────────
+            if !embeddedQuizOnly {
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "rectangle.on.rectangle.angled",
+                    label: "Als Karte merken",
+                    help: "Diese Erklärung zu 1–3 Karteikarten verdichten (Panel „Karten“ → Wiederholen)",
+                    action: { chatViewModel.rememberAsFlashcards(messageId: message.id) }
                 )
-                .animation(.easeInOut(duration: 0.15), value: didCopy)
             }
-            .buttonStyle(.plain)
-            .help("Antwort in die Zwischenablage kopieren")
 
             // ── Andere Erklärung ──────────────────────────────────────
             if let explain = onExplainDifferently {
-                Button(action: explain) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 10, weight: .medium))
-                        Text("Andere Erklärung")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary.opacity(0.6))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(DS.Surface.chip))
-                }
-                .buttonStyle(.plain)
-                .help("Erkläre mit anderer Analogie oder einem anderen Beispiel")
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "arrow.triangle.2.circlepath",
+                    label: "Andere Erklärung",
+                    help: "Erkläre mit anderer Analogie oder einem anderen Beispiel",
+                    action: explain
+                )
             }
 
             // ── Confidence Score ───────────────────────────────────────
             if let confidence = onCheckConfidence {
-                Button(action: confidence) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "gauge.with.needle")
-                            .font(.system(size: 10, weight: .medium))
-                        Text("Wie sicher?")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary.opacity(0.6))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(DS.Surface.chip))
-                }
-                .buttonStyle(.plain)
-                .help("KI nach Konfidenz und möglichen Unsicherheiten in der Antwort fragen")
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "gauge.with.needle",
+                    label: "Wie sicher?",
+                    help: "KI nach Konfidenz und möglichen Unsicherheiten in der Antwort fragen",
+                    action: confidence
+                )
             }
 
             // ── Verifizieren ───────────────────────────────────────────
             if let verify = onVerify {
-                Button(action: verify) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.seal")
-                            .font(.system(size: 10, weight: .medium))
-                        Text("Verifizieren")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary.opacity(0.6))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(DS.Surface.chip))
-                }
-                .buttonStyle(.plain)
-                .help("Zwingt das Modell, die Aussage per Websuche zu überprüfen")
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "checkmark.seal",
+                    label: "Verifizieren",
+                    help: "Zwingt das Modell, die Aussage per Websuche zu überprüfen",
+                    action: verify
+                )
             }
 
-            // ── Abzweigen (Phase H) ────────────────────────────────────
+            // ── Abzweigen ──────────────────────────────────────────────
             if let branch = onBranch {
-                Button(action: branch) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 10, weight: .medium))
-                        Text("Abzweigen")
-                            .font(.caption2)
-                    }
-                    .foregroundStyle(.secondary.opacity(0.6))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(DS.Surface.chip))
-                }
-                .buttonStyle(.plain)
-                .help("Ab hier einen eigenen Chat-Zweig starten – die Historie bis zu dieser Antwort wird kopiert")
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "arrow.triangle.branch",
+                    label: "Abzweigen",
+                    help: "Ab hier einen eigenen Chat-Zweig starten – die Historie bis zu dieser Antwort wird kopiert",
+                    action: branch
+                )
             }
 
-            // ── Teilen (Phase H) ───────────────────────────────────────
-            // System-Share-Menü im Safari-Stil: Antwort als Markdown in Mail, Notizen,
-            // AirDrop usw. – ShareLink öffnet auf macOS automatisch den NSSharingServicePicker.
-            ShareLink(item: message.content, subject: Text(message.content.prefix(60))) {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 10, weight: .medium))
-                    Text("Teilen")
-                        .font(.caption2)
-                }
-                .foregroundStyle(.secondary.opacity(0.6))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(DS.Surface.chip))
-                .help("Antwort über das System-Menü teilen (Mail, Notizen, AirDrop …)")
-            }
+            // ── Teilen (rahmenlos über NSSharingServicePicker statt ShareLink-Kasten) ──
+            MessageActionDivider()
+            MessageShareActionItem(
+                text: message.content,
+                help: "Antwort über das System-Menü teilen (Mail, Notizen, AirDrop …)"
+            )
+
+            // ── Exportieren (PDF/Markdown, z. B. Lernzettel aus /summary) ──
+            MessageActionDivider()
+            MessageExportActionItem(text: message.content)
         }
-        .padding(.top, 3)
-        .padding(.leading, 4)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(DS.Surface.control.opacity(0.55))
+        )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     // Hauptinhalt
     @ViewBuilder
     private var contentView: some View {
-        MarkdownView(markdown: ChatViewModel.linkCitations(in: message.content,
-                                                           links: chatViewModel.citationLinks(for: message.id)),
+        MarkdownView(markdown: ChatViewModel.linkCitations(
+                        in: ChatViewModel.embedResearchImages(in: message.content,
+                                                             images: chatViewModel.researchImages(for: message.id)),
+                        links: chatViewModel.citationLinks(for: message.id)),
                      fontScale: fontScale) { text in
             self.selectedExplanation = ExplanationRequest(text: text)
         }
@@ -601,3 +517,131 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 2)
     }
 }
+
+// MARK: - Dezente Nachrichten-Aktions-Bausteine (neutral, rahmenlos, Hover-Feedback)
+
+private struct MessageActionDivider: View {
+    var body: some View {
+        Circle()
+            .fill(Color.primary.opacity(0.14))
+            .frame(width: 2.5, height: 2.5)
+            .padding(.horizontal, 2)
+    }
+}
+
+/// Kompakter Symbol-Knopf; die Beschriftung gleitet erst beim Überfahren hinein.
+private struct MessageActionItem: View {
+    let icon: String
+    let label: String?
+    let help: String
+    var alwaysShowLabel = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9.5, weight: .medium))
+                if let label, isHovered || alwaysShowLabel {
+                    Text(label)
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(
+                Capsule()
+                    .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
+        .help(help)
+        .accessibilityLabel(label ?? help)
+    }
+}
+
+/// Exportiert die Antwort als PDF (wie im Chat gerendert) oder Markdown.
+private struct MessageExportActionItem: View {
+    let text: String
+    @State private var isHovered = false
+
+    var body: some View {
+        Menu {
+            Button("Als PDF sichern …") { StudySheetExporter.shared.exportPDF(text, suggestedName: StudySheetExporter.fileName(from: text)) }
+            Button("Als Markdown sichern …") { StudySheetExporter.shared.exportMarkdown(text, suggestedName: StudySheetExporter.fileName(from: text)) }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 9.5, weight: .medium))
+                if isHovered {
+                    Text("Exportieren")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(Capsule().fill(isHovered ? Color.primary.opacity(0.08) : Color.clear))
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
+        .help("Antwort als PDF oder Markdown sichern (z. B. Lernzettel aus /summary)")
+        .accessibilityLabel("Exportieren")
+    }
+}
+
+private struct MessageShareActionItem: View {
+    let text: String
+    let help: String
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            let picker = NSSharingServicePicker(items: [text])
+            if let window = NSApp.keyWindow, let contentView = window.contentView {
+                let mouseLocation = window.mouseLocationOutsideOfEventStream
+                let rect = NSRect(x: mouseLocation.x, y: mouseLocation.y, width: 1, height: 1)
+                picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 9.5, weight: .medium))
+                if isHovered {
+                    Text("Teilen")
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(
+                Capsule()
+                    .fill(isHovered ? Color.primary.opacity(0.08) : Color.clear)
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
+        .help(help)
+        .accessibilityLabel("Teilen")
+    }
+}
+

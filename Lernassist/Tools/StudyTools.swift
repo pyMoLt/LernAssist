@@ -48,8 +48,7 @@ markiert. number = Nummer des Screenshots; ohne number kommt der vorletzte.
             return .failure("Screenshot #\(requested ?? 0) gibt es nicht. Vorhanden: #1 bis #\(shots.count).")
         }
         return ToolResult(content: "Screenshot #\(target.number) wird dir als Bild angehängt. \(target.caption)",
-                          artifacts: [.modelImage(base64: target.base64,
-                                                  caption: "[Screenshot #\(target.number), erneut abgerufen]")])
+                          artifacts: [.modelImage(screenshotNumber: target.number)])
     }
 }
 

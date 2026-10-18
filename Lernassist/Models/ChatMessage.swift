@@ -65,7 +65,7 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     var imageDescription: String?
     /// EINMALIGE, unveränderliche Momentaufnahme dessen, was für diese Nachricht ans Modell
     /// geschickt wird, sobald sie nicht mehr die aktuellste (per Bild "highlighted") Nachricht ist
-    /// (siehe `ChatViewModel.freezeImageContextForOlderMessages`). nil = kein Bildkontext.
+    /// (siehe `ChatViewModel.applyImageRetention`). nil = kein Bildkontext.
     ///
     /// Warum das nötig ist: Ohne Einfrieren würde `apiMessages()` bei jeder Anfrage live prüfen,
     /// ob `imageDescription` inzwischen fertig ist – eine ältere Nachricht würde also mal OHNE,
@@ -196,4 +196,17 @@ nonisolated struct ToolCallInfo: Identifiable, Codable, Equatable, Sendable {
     var arguments: String
     var result: String?
     var source: String?
+    /// Tool-Rundenlimit: `.finalRound` = letzte erlaubte Runde (der API-Inhalt bekommt den
+    /// Abschluss-Hinweis), `.notExecuted` = nach dem Limit nicht mehr ausgeführt.
+    var limitNote: ToolLimitNote? = nil
+    /// `recall_screenshot`: Nummer des erneut angehängten Screenshots. Das Bild selbst wird beim
+    /// Aufbau des Requests aus dem Chat geholt – so ist der Verlauf identisch zur Tool-Runde.
+    var recalledScreenshot: Int? = nil
+    /// Abbildungen aus der Recherche (web_search/browse_url), im ganzen Chat eindeutig nummeriert.
+    var researchImages: [ResearchImageRef]? = nil
+}
+
+nonisolated enum ToolLimitNote: String, Codable, Sendable {
+    case finalRound
+    case notExecuted
 }

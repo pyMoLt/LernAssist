@@ -32,9 +32,11 @@ enum ToolArtifact {
     /// Interaktive Abfragekarte im Chat. Nach einer Karte wartet die App auf die Antwort des
     /// Nutzers, statt das Modell weiterschreiben zu lassen.
     case quiz(QuizCard)
-    /// Bild NUR für das Modell (z. B. ein erneut abgerufener Screenshot) – wird nach den
-    /// Tool-Ergebnissen als Bildnachricht in den nächsten Request gelegt, nicht neu angezeigt.
-    case modelImage(base64: String, caption: String)
+    /// Screenshot NUR für das Modell (erneut abgerufen) – wird nach den Tool-Ergebnissen als
+    /// Bildnachricht in den Request gelegt (auch in allen späteren), nicht neu angezeigt.
+    case modelImage(screenshotNumber: Int)
+    /// Abbildungen aus der Recherche ([B#]); die App zeigt sie, wenn das Modell [B#] schreibt.
+    case researchImages([ResearchImageRef])
 }
 
 /// Klassifikation eines Tool-Fehlers für den App-seitigen Retry-Layer (Nutzer-Feature):

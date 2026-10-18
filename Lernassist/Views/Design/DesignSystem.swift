@@ -1,13 +1,11 @@
 import SwiftUI
+import AppKit
 
-// MARK: - Design-System (Phase G)
+// MARK: - Design-System 2.0 ("Flowing Surfaces & Tasteful Accents")
 //
-// Zentrales Fundament für das gesamte UI: Spacing-Skala, semantische Farben, Radien und
-// wiederverwendbare Bausteine (Glass-Chips, Icon-Buttons). Kein View nutzt mehr Ad-hoc-
-// Werte wie `opacity(0.08)` oder hartkodierte Abstände für Flächen, die das System kennt.
-//
-// Dark/Light: Alle Farbtokens sind von Systemfarben abgeleitet (keine Hex-Werte), damit
-// Dark Mode und "Transparenz reduzieren" automatisch korrekt bleiben.
+// Zentrales Fundament für das gesamte UI: Spacing-Skala, harmonische Akzentfarben,
+// rahmenlose Soft-Surfaces (vermeiden harte schwarze 1px-Systemränder bei aktivierter
+// Kontrasterhöhung) sowie das neue vektorbasierte LernAssist-App-Icon.
 
 enum DS {
     // MARK: Spacing-Skala
@@ -25,118 +23,310 @@ enum DS {
     // MARK: Radien
 
     enum Radius {
-        static let small: CGFloat = 6
-        static let medium: CGFloat = 10
-        static let large: CGFloat = 14
-        static let extraLarge: CGFloat = 18
+        static let small: CGFloat = 7
+        static let medium: CGFloat = 11
+        static let large: CGFloat = 15
+        static let extraLarge: CGFloat = 20
     }
 
-    // MARK: Semantische Farben
+    // MARK: Kuratierte Akzent-Palette
+
+    enum Accent {
+        /// Primärer Marken-Akzent (abgestimmt auf das neue LernAssist-Icon).
+        static let brand = Color(red: 0.45, green: 0.27, blue: 0.86)
+        static let indigo = brand
+        /// Hellerer Sekundärton für Verläufe und Glows.
+        static let brandLight = Color(red: 0.56, green: 0.36, blue: 0.94)
+        /// Tiefer Indigo-Ton für Verläufe.
+        static let brandDeep = Color(red: 0.28, green: 0.19, blue: 0.68)
+
+        /// Harmonischer Marken-Verlauf.
+        static let brandGradient = LinearGradient(
+            colors: [brandLight, brand, brandDeep],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+
+        /// Smaragd / Mint: Live-Token-Speed (Decode), Online-Status, Erfolg.
+        static let emerald = Color(red: 0.06, green: 0.72, blue: 0.50)
+        /// Bernstein / Amber: Prompt Processing (Prefill), Ladevorgang, Hinweise.
+        static let amber = Color(red: 0.95, green: 0.60, blue: 0.05)
+        /// Ozeanblau / Cyan: Recherche, Quellen, Diagramme, Wissen.
+        static let cyan = Color(red: 0.05, green: 0.58, blue: 0.88)
+        /// Kobaltblau: Dokumente, Lernplan, Struktur.
+        static let blue = Color(red: 0.23, green: 0.50, blue: 0.96)
+        /// Koralle / Rose: Quiz, Stopp-Aktion, Warnungen.
+        static let rose = Color(red: 0.94, green: 0.27, blue: 0.44)
+    }
+
+    // MARK: Semantische Text- & Linienfarben
 
     enum Ink {
         /// Primäre Textfarbe (folgt Light/Dark automatisch).
         static let primary = Color.primary
         /// Sekundäre Textfarbe für Labels, Hints, Captions.
         static let secondary = Color.secondary
-        /// Haarlinien / Trennlinien.
-        static let hairline = Color(nsColor: .separatorColor)
-        /// Akzent der App (App-Catalog-Akzent).
-        static let accent = Color.accentColor
+        /// Subtile Konturlinie (bewusst weich statt hartem System-Separator).
+        static let hairline = Color.primary.opacity(0.075)
+        /// Akzent für Text, Symbole und Auswahl: im Dark Mode heller, damit er auf dunklen
+        /// Flächen lesbar bleibt (das satte Markenviolett war dort kaum zu erkennen).
+        static let accent = Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(red: 0.70, green: 0.58, blue: 1.0, alpha: 1)
+                : NSColor(red: 0.45, green: 0.27, blue: 0.86, alpha: 1)
+        })
         /// Lern-/Quiz-Assoziation der App.
-        static let quiz = Color.purple
+        static let quiz = Accent.rose
         /// Dokument-/Import-Assoziation.
-        static let document = Color.blue
+        static let document = Accent.blue
     }
 
-    // MARK: Flächen
+    // MARK: Organische Flächen ("Flowing Surfaces")
 
     enum Surface {
-        /// Hintergrundfläche für Nachrichten-Chips, Popover-Zeilen etc. – subtil, ohne Deckkraft-Konkurrenz zum Vibrancy-Hintergrund.
+        /// Durchgehende Hauptfläche für Header, Chat-Verlauf und unteren Rand (verhindert Streifenbildung).
+        static let canvas = Color(nsColor: .windowBackgroundColor)
+        /// Sanft abgetönte Seitenleiste ohne harte Trennlinie.
+        static let sidebar = Color.primary.opacity(0.032)
+        /// Ruhige Karte für Einstellungen, Welcome-Cards und Gruppierungen.
+        static let card = Color(nsColor: .controlBackgroundColor).opacity(0.92)
+        /// Schwebende Kapsel-/Pill-Fläche (Header-Gruppen, Composer, Telemetrie).
+        static let pill = Color(nsColor: .controlBackgroundColor).opacity(0.94)
+        /// Rahmenlose Eingabefeld-Fläche in den Einstellungen.
+        static let control = Color.primary.opacity(0.048)
+        /// Hintergrundfläche für Nachrichten-Chips, Popover-Zeilen etc.
         static let chip = Color.primary.opacity(0.05)
         /// Hover-Variante derselben Fläche.
         static let chipHover = Color.primary.opacity(0.09)
-        /// Getönte Nutzer-Bubble (Chat-Nachricht vom Nutzer).
-        static let bubbleUser = Color.accentColor.opacity(0.10)
-        /// Hintergrund der Metrik-/Status-Chips (etwas sichtbarer als .chip).
-        static let status = Color.primary.opacity(0.08)
-        /// Ruhige Karte für Konfiguration und sekundäre Informationen.
-        static let card = Color(nsColor: .controlBackgroundColor).opacity(0.82)
-        /// Subtil abgesetzte Navigation, ohne den Content zu dominieren.
-        static let navigation = Color.primary.opacity(0.035)
-        /// Selektionsfarbe für eigene Navigationszeilen.
-        static let selection = Color.accentColor.opacity(0.14)
+        /// Getönte Nutzer-Bubble (Chat-Nachricht vom Nutzer) mit sanftem Marken-Tint.
+        static let bubbleUser = Accent.brand.opacity(0.12)
+        /// Hintergrund der Metrik-/Status-Chips.
+        static let status = Color.primary.opacity(0.065)
+        /// Subtil abgesetzte Navigation in den Einstellungen.
+        static let navigation = Color.primary.opacity(0.032)
+        /// Selektionsfarbe für aktive Navigationszeilen.
+        static let selection = Accent.brand.opacity(0.18)
+    }
+}
+
+// MARK: - LernAssistBrandIcon (Vektor-App-Icon für Header, Sidebar, Welcome & Avatar)
+
+/// Zeichnet das neue LernAssist-App-Icon (Indigo-Violett-Squircle, weiße Sucher-Ecken,
+/// Milchglas-Kachel, weißer Doktorhut mit goldener Quaste) gestochen scharf in jeder Größe.
+struct LernAssistBrandIcon: View {
+    var size: CGFloat = 32
+    var isCircle: Bool = false
+
+    var body: some View {
+        Canvas { context, canvasSize in
+            let w = canvasSize.width
+            let h = canvasSize.height
+            let s = min(w, h)
+            let scale = s / 1024.0
+
+            // 1. Hintergrund-Verlauf (#8E5BF0 → #6A3FD6 → #3B2A9E)
+            let bgRect = CGRect(x: 0, y: 0, width: w, height: h)
+            context.fill(
+                Path(bgRect),
+                with: .linearGradient(
+                    Gradient(stops: [
+                        .init(color: Color(red: 0.557, green: 0.357, blue: 0.941), location: 0.0),
+                        .init(color: Color(red: 0.416, green: 0.247, blue: 0.839), location: 0.55),
+                        .init(color: Color(red: 0.231, green: 0.165, blue: 0.620), location: 1.0)
+                    ]),
+                    startPoint: .zero,
+                    endPoint: CGPoint(x: w, y: h)
+                )
+            )
+
+            // Radialer Lichtglanz oben links
+            context.fill(
+                Path(bgRect),
+                with: .radialGradient(
+                    Gradient(colors: [Color.white.opacity(0.32), Color.white.opacity(0.0)]),
+                    center: CGPoint(x: w * 0.28, y: h * 0.20),
+                    startRadius: 0,
+                    endRadius: s * 0.60
+                )
+            )
+
+            // 2. Weiße Sucher-Ecken (Viewfinder)
+            var vf = Path()
+            // Oben links
+            vf.move(to: CGPoint(x: 232 * scale, y: 372 * scale))
+            vf.addLine(to: CGPoint(x: 232 * scale, y: 292 * scale))
+            vf.addQuadCurve(to: CGPoint(x: 292 * scale, y: 232 * scale), control: CGPoint(x: 232 * scale, y: 232 * scale))
+            vf.addLine(to: CGPoint(x: 372 * scale, y: 232 * scale))
+            // Oben rechts
+            vf.move(to: CGPoint(x: 652 * scale, y: 232 * scale))
+            vf.addLine(to: CGPoint(x: 732 * scale, y: 232 * scale))
+            vf.addQuadCurve(to: CGPoint(x: 792 * scale, y: 292 * scale), control: CGPoint(x: 792 * scale, y: 232 * scale))
+            vf.addLine(to: CGPoint(x: 792 * scale, y: 372 * scale))
+            // Unten rechts
+            vf.move(to: CGPoint(x: 792 * scale, y: 652 * scale))
+            vf.addLine(to: CGPoint(x: 792 * scale, y: 732 * scale))
+            vf.addQuadCurve(to: CGPoint(x: 732 * scale, y: 792 * scale), control: CGPoint(x: 792 * scale, y: 792 * scale))
+            vf.addLine(to: CGPoint(x: 652 * scale, y: 792 * scale))
+            // Unten links
+            vf.move(to: CGPoint(x: 372 * scale, y: 792 * scale))
+            vf.addLine(to: CGPoint(x: 292 * scale, y: 792 * scale))
+            vf.addQuadCurve(to: CGPoint(x: 232 * scale, y: 732 * scale), control: CGPoint(x: 232 * scale, y: 792 * scale))
+            vf.addLine(to: CGPoint(x: 232 * scale, y: 652 * scale))
+
+            context.stroke(
+                vf,
+                with: .color(.white.opacity(0.95)),
+                style: StrokeStyle(lineWidth: max(1.4, 44 * scale), lineCap: .round, lineJoin: .round)
+            )
+
+            // 3. Innere Glas-Kachel
+            let glassRect = CGRect(x: 322 * scale, y: 322 * scale, width: 380 * scale, height: 380 * scale)
+            let glassPath = Path(roundedRect: glassRect, cornerRadius: 92 * scale, style: .continuous)
+            context.fill(
+                glassPath,
+                with: .linearGradient(
+                    Gradient(colors: [Color.white.opacity(0.50), Color.white.opacity(0.20)]),
+                    startPoint: CGPoint(x: 512 * scale, y: 322 * scale),
+                    endPoint: CGPoint(x: 512 * scale, y: 702 * scale)
+                )
+            )
+            context.stroke(glassPath, with: .color(.white.opacity(0.68)), lineWidth: max(0.8, 6 * scale))
+
+            // 4. Doktorhut (Dach + Kappe + goldene Quaste)
+            var capTop = Path()
+            capTop.move(to: CGPoint(x: 512 * scale, y: 410 * scale))
+            capTop.addLine(to: CGPoint(x: 652 * scale, y: 470 * scale))
+            capTop.addLine(to: CGPoint(x: 512 * scale, y: 530 * scale))
+            capTop.addLine(to: CGPoint(x: 372 * scale, y: 470 * scale))
+            capTop.closeSubpath()
+            context.fill(capTop, with: .color(.white))
+
+            var capBase = Path()
+            capBase.move(to: CGPoint(x: 432 * scale, y: 500 * scale))
+            capBase.addLine(to: CGPoint(x: 432 * scale, y: 560 * scale))
+            capBase.addQuadCurve(
+                to: CGPoint(x: 592 * scale, y: 560 * scale),
+                control: CGPoint(x: 512 * scale, y: 610 * scale)
+            )
+            capBase.addLine(to: CGPoint(x: 592 * scale, y: 500 * scale))
+            capBase.addLine(to: CGPoint(x: 512 * scale, y: 534 * scale))
+            capBase.closeSubpath()
+            context.fill(capBase, with: .color(.white.opacity(0.92)))
+
+            var tassel = Path()
+            tassel.move(to: CGPoint(x: 640 * scale, y: 476 * scale))
+            tassel.addLine(to: CGPoint(x: 640 * scale, y: 560 * scale))
+            let gold = Color(red: 1.0, green: 0.824, blue: 0.290)
+            context.stroke(tassel, with: .color(gold), style: StrokeStyle(lineWidth: max(1.2, 14 * scale), lineCap: .round))
+
+            let dotRadius = max(1.4, 18 * scale)
+            let dotRect = CGRect(x: 640 * scale - dotRadius, y: 572 * scale - dotRadius, width: dotRadius * 2, height: dotRadius * 2)
+            context.fill(Path(ellipseIn: dotRect), with: .color(gold))
+        }
+        .frame(width: size, height: size)
+        .clipShape(
+            isCircle
+                ? AnyShape(Circle())
+                : AnyShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+        )
+        .overlay(
+            Group {
+                if isCircle {
+                    Circle().stroke(Color.white.opacity(0.22), lineWidth: 0.75)
+                } else {
+                    RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                        .stroke(Color.white.opacity(0.22), lineWidth: 0.75)
+                }
+            }
+        )
+        .shadow(color: DS.Accent.brand.opacity(0.22), radius: max(2, size * 0.14), x: 0, y: max(1, size * 0.06))
     }
 }
 
 // MARK: - Surface-Bausteine
 
-/// Einheitliche Karte für ruhige, informationsreiche Bereiche. Der Rand bleibt bewusst fein,
-/// damit die Oberfläche auch bei aktivierter Transparenzreduktion klar gegliedert ist.
+/// Einheitliche Karte für ruhige, informationsreiche Bereiche – ohne harte schwarze Konturlinien.
 struct AppCard<Content: View>: View {
     private let content: Content
+    var padding: CGFloat = DS.Space.l
 
-    init(@ViewBuilder content: () -> Content) {
+    init(padding: CGFloat = DS.Space.l, @ViewBuilder content: () -> Content) {
+        self.padding = padding
         self.content = content()
     }
 
     var body: some View {
         content
-            .padding(DS.Space.l)
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
                     .fill(DS.Surface.card)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
-                    .stroke(DS.Ink.hairline.opacity(0.55), lineWidth: 0.5)
+                    .stroke(DS.Ink.hairline, lineWidth: 0.75)
             )
+            .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
     }
 }
 
-// MARK: - GlassChip
-//
-// Wiederverwendbarer Liquid-Glass-Chip für die funktionale Ebene (Header-Buttons,
-// Status-Chips). Auf macOS 26+ nutzt er das echte glassEffect; die Inhalte bleiben
-// opak und lesbar. Glass gehört NUR auf Steuerflächen, nie auf Chat-Content (Kernregel
-// der Tahoe-Designsprache).
+// MARK: - Soft-Glass-Chips & Buttons (ohne schwarze High-Contrast-Ränder)
 
+/// Organischer Steuerungs-Chip für Header-Elemente, Status-Kapseln und Popover-Trigger.
+/// Vermeidet `.glassEffect`, damit macOS bei aktivierter Kontrasterhöhung keinen schwarzen 1px-Rahmen erzwingt.
 struct GlassChip<Content: View>: View {
     @Environment(\.controlActiveState) private var controlActiveState
+    @State private var isHovered = false
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         content()
-            .glassEffect(.regular, in: Capsule())
-            .opacity(controlActiveState == .inactive ? 0.6 : 1.0)
+            .background(
+                Capsule()
+                    .fill(isHovered ? DS.Surface.chipHover : DS.Surface.pill)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(DS.Ink.hairline, lineWidth: 0.75)
+            )
+            .shadow(color: .black.opacity(0.035), radius: 5, x: 0, y: 1.5)
+            .opacity(controlActiveState == .inactive ? 0.65 : 1.0)
+            .onHover { isHovered = $0 }
     }
 }
 
-/// Icon-Button auf Glass (Header: Einstellungen, Teilen, …).
+/// Icon-Button mit sanfter Kapsel-/Kreisfläche und Hover-Feedback (ohne harten schwarzen Systemrand).
 struct GlassIconButton: View {
     let systemImage: String
     let help: String
+    var tint: Color? = nil
     let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(tint ?? (isHovered ? DS.Ink.accent : .primary))
                 .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(isHovered ? DS.Accent.brand.opacity(0.10) : Color.clear)
+                )
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular, in: Circle())
         .help(help)
+        .accessibilityLabel(help)
+        .onHover { isHovered = $0 }
     }
 }
 
-/// Teilen-Button im Safari-Stil, auf Glass. Bekommt einen LAZY Provider statt des Strings
-/// selbst (Perf-Audit K2): Der Chat-Markdown wird erst beim Klick gebaut – vorher baute ihn
-/// ShareLink bei jedem Body-Eval (d.h. ~5x/s während des Streamings + pro Tastendruck) neu,
-/// O(Chat-Länge) pro Render.
+/// Teilen-Button im Safari-Stil, passend zur organischen Header-Gruppe.
 struct GlassShareButton: View {
     let provideItem: () -> String
     let help: String
+    @State private var isHovered = false
 
     var body: some View {
         Button {
@@ -144,12 +334,17 @@ struct GlassShareButton: View {
         } label: {
             Image(systemName: "square.and.arrow.up")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isHovered ? DS.Ink.accent : .primary)
                 .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(isHovered ? DS.Accent.brand.opacity(0.10) : Color.clear)
+                )
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular, in: Circle())
         .help(help)
+        .accessibilityLabel(help)
+        .onHover { isHovered = $0 }
     }
 
     /// Öffnet den System-Share-Picker (wie Safari): Mail, Notizen, AirDrop usw.
@@ -158,7 +353,6 @@ struct GlassShareButton: View {
               let panel = NSApp.windows.first(where: { $0 is NSPanel && $0.isVisible }),
               let contentView = panel.contentView else { return }
         let picker = NSSharingServicePicker(items: [text])
-        // Anker oben rechts (Panel-Koordinaten, contentView ist geflippt).
         let rect = NSRect(x: contentView.bounds.width - 240, y: 48, width: 12, height: 12)
         picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
     }

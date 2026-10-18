@@ -55,7 +55,22 @@ enum CodeHighlighter {
 
     /// Färbt den Code. Spätere Regeln (Strings, Kommentare) überschreiben frühere, damit
     /// Schlüsselwörter in Strings/Kommentaren nicht eingefärbt bleiben.
+    /// Kleiner Cache: Die Karte wird bei jedem Chat-Update neu gezeichnet, der Code ändert sich
+    /// danach aber nicht mehr – Regex-Läufe über den ganzen Code nur einmal pro Stand.
+    private static var cache: [String: AttributedString] = [:]
+    private static var cacheOrder: [String] = []
+
     static func highlight(_ code: String, language: String) -> AttributedString {
+        let key = language + "\u{0}" + code
+        if let cached = cache[key] { return cached }
+        let result = computeHighlight(code, language: language)
+        cache[key] = result
+        cacheOrder.append(key)
+        if cacheOrder.count > 24 { cache[cacheOrder.removeFirst()] = nil }
+        return result
+    }
+
+    private static func computeHighlight(_ code: String, language: String) -> AttributedString {
         var attributed = AttributedString(code)
         attributed.foregroundColor = Palette.text
         let rules = language.lowercased() == "python" ? pythonRules : webRules

@@ -33,99 +33,109 @@ struct InlineExplainPopover: View {
     @State private var flushLoop: Task<Void, Never>? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header
-            HStack {
-                Text("Text erklären")
-                    .font(.headline)
-                Spacer()
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
+        VStack(alignment: .leading, spacing: DS.Space.m) {
+            header
 
-            // Markierte Stelle
-            ScrollView {
-                Text(selectedText)
-                    .font(.subheadline)
-                    .italic()
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(maxHeight: 80)
-            .padding(8)
-            .background(Color.secondary.opacity(0.1))
-            .cornerRadius(6)
-
-            // Mini-Chat
-            if !popoverMessages.isEmpty {
-                Divider()
+            ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(popoverMessages) { msg in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(msg.role == "user" ? "Du" : "LernAssist")
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
-
-                                if msg.role == "user" {
-                                    Text(msg.content)
-                                        .font(.body)
-                                } else if msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    HStack(spacing: 6) {
-                                        ProgressView().controlSize(.mini)
-                                        Text("Antwortet...")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary).italic()
-                                    }
-                                } else {
-                                    MarkdownView(markdown: msg.content, fontScale: fontScale)
+                    VStack(alignment: .leading, spacing: DS.Space.m) {
+                        ForEach(Array(popoverMessages.enumerated()), id: \.element.id) { index, msg in
+                            // Die automatische erste Frage wird nicht angezeigt – nur echte Rückfragen.
+                            if msg.role == "user" {
+                                if index > 0 { followUpBubble(msg.content) }
+                            } else if msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                HStack(spacing: DS.Space.s) {
+                                    ProgressView().controlSize(.mini)
+                                    Text("Erklärt …").font(.caption).foregroundStyle(.secondary)
                                 }
+                                .padding(.vertical, 4)
+                            } else {
+                                MarkdownView(markdown: msg.content, fontScale: fontScale * 0.95)
                             }
-                            .padding(8)
-                            .background(msg.role == "user" ? DS.Ink.accent.opacity(0.1) : Color.secondary.opacity(0.1))
-                            .cornerRadius(8)
                         }
+                        Color.clear.frame(height: 1).id("end")
                     }
                 }
-                .frame(maxHeight: 320)
-            } else if isThinking {
-                Divider()
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Nachdenken...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 8)
+                .frame(maxHeight: 300)
+                .onChange(of: popoverMessages.last?.content) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
             }
 
-            Spacer(minLength: 0)
-
-            // Eingabe
-            HStack {
-                TextField("Was genau möchtest du dazu wissen?", text: $userQuestion)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onSubmit(askQuestion)
-
-                Button(action: askQuestion) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .foregroundColor(canSend ? .blue : .secondary)
-                        .font(.title2)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(!canSend)
-            }
+            followUpField
         }
-        .padding()
-        .frame(width: 450, height: popoverMessages.isEmpty ? 220 : 500)
+        .padding(DS.Space.l)
+        .frame(width: 380)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(DS.Surface.canvas)
+        .onAppear {
+            // Schnelle Auskunft: sofort erklären, Rückfragen optional.
+            if popoverMessages.isEmpty { ask(Self.defaultQuestion) }
+        }
         .onDisappear {
             activeStream?.cancel()
             flushLoop?.cancel()
         }
+    }
+
+    private static let defaultQuestion = "Erkläre den markierten Begriff."
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: DS.Space.s) {
+            Image(systemName: "text.magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(DS.Ink.accent)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(DS.Surface.selection))
+            Text(selectedText)
+                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+            Spacer(minLength: DS.Space.s)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(DS.Surface.chip))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("Schließen")
+        }
+    }
+
+    private func followUpBubble(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 40)
+            Text(text)
+                .font(.system(size: 12.5, design: .rounded))
+                .padding(.horizontal, DS.Space.m)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.bubbleUser))
+        }
+    }
+
+    private var followUpField: some View {
+        HStack(spacing: DS.Space.s) {
+            TextField("Nachfragen …", text: $userQuestion)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, design: .rounded))
+                .onSubmit(askQuestion)
+            Button(action: askQuestion) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(canSend ? DS.Accent.brand : Color.secondary.opacity(0.35)))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSend)
+            .accessibilityLabel("Nachfrage senden")
+        }
+        .padding(.leading, DS.Space.m)
+        .padding(.trailing, 5)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(DS.Surface.chip))
     }
 
     private var canSend: Bool {
@@ -136,7 +146,12 @@ struct InlineExplainPopover: View {
 
     private func askQuestion() {
         let question = userQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty, activeStream == nil else { return }
+        guard !question.isEmpty else { return }
+        ask(question)
+    }
+
+    private func ask(_ question: String) {
+        guard activeStream == nil else { return }
 
         let isFirstQuestion = popoverMessages.isEmpty
         let userMsg = ChatMessage(role: "user", content: question)
@@ -188,15 +203,15 @@ struct InlineExplainPopover: View {
         // ein Update pro Chunk wäre unnötig teuer (gleiche Strategie wie der Haupt-Chat).
         // Das Stream-Ende wird über `stream.value` abgewartet – ein ECHTES Ende statt
         // des früheren 60-Sekunden-Sleep-Hacks (Audit C7/U2).
-        flushLoop = Task {
+        flushLoop = Task { @MainActor in
             var lastApplied = ""
-            func apply(_ text: String) {
+            @MainActor func apply(_ text: String) {
                 guard text != lastApplied,
                       let idx = popoverMessages.firstIndex(where: { $0.id == targetId }) else { return }
                 lastApplied = text
                 popoverMessages[idx].content = text
             }
-            let ticker = Task {
+            let ticker = Task { @MainActor in
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     apply(buffer.current)
@@ -214,47 +229,32 @@ struct InlineExplainPopover: View {
 
     private func buildSystemPrompt() -> String {
         """
-        \(chatViewModel.prompt(for: chatViewModel.learningStyle))
-
-        Du bist der Erklär-Assistent zu einer vom Nutzer markierten Textstelle. Antworte kompakt und auf die Frage fokussiert. Alles Nötige steht im Kontextblock – spekuliere nicht über den restlichen Chatverlauf.
+        Du gibst schnelle, präzise Erklärungen zu einer markierten Stelle aus einem Lernchat. \
+        Erkläre den Begriff im Zusammenhang dieser Stelle – so kurz wie möglich, so ausführlich wie nötig: \
+        meist 2–5 Sätze, bei Bedarf eine kurze Aufzählung oder Formel. Keine Einleitung, keine Wiederholung \
+        der Frage, keine Rückfragen. Antworte in der Sprache des Kontexts.
         """
     }
 
-    /// Kontext-Fenster (statt Vollhistorie): die letzten paar Nutzer-/Assistent-Nachrichten
-    /// bis zur markierten Nachricht, die markierte Nachricht selbst nur als Fenster um die
-    /// Markierung (~500 Zeichen je Seite).
+    /// Schlanker Kontext: Thema des Chats und die Stelle rund um die Markierung – kein Chatverlauf.
     private func contextPrompt(question: String) -> String {
-        // Zur Fragezeit schneiden (Audit U4/U3): keine eingefrorene Prefix-Kopie, sondern der
-        // aktuelle Verlauf bis zur markierten Nachricht – dadurch ist der Kontext auch dann
-        // aktuell, wenn ältere Nachrichten nach dem Öffnen des Popovers noch erweitert wurden.
-        let upToMarked: [ChatMessage]
-        if let idx = history.firstIndex(where: { $0.id == markedMessageId }) {
-            upToMarked = Array(history.prefix(idx + 1))
+        let session = chatViewModel.sessions.first { $0.messages.contains { $0.id == markedMessageId } }
+        let surroundingText: String
+        if let markedMsg = history.first(where: { $0.id == markedMessageId }) {
+            surroundingText = windowAroundSelection(in: markedMsg.content)
         } else {
-            upToMarked = []
+            surroundingText = selectedText
         }
-        let candidates = upToMarked.filter { $0.role == "user" || $0.role == "assistant" }
-        var lines: [String] = []
-        for msg in candidates.suffix(contextMessages) {
-            let body = msg.id == markedMessageId
-                ? windowAroundSelection(in: msg.content)
-                : truncated(msg.content, limit: contextCharLimit)
-            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-            lines.append("\(msg.role == "user" ? "Nutzer" : "Assistent"): \(body)")
-        }
+        var topic = session?.title ?? ""
+        if let subject = session?.subject, !subject.isEmpty { topic += topic.isEmpty ? subject : " (\(subject))" }
 
         return """
-        Der Nutzer hat in einem Chat folgende Stelle markiert:
-        <SELECTION>
-        \(selectedText)
-        </SELECTION>
+        \(topic.isEmpty ? "" : "Thema des Chats: \(topic)\n")Markiert: „\(selectedText)“
 
-        Umgebender Chatverlauf (gekürzt):
-        <CONTEXT>
-        \(lines.joined(separator: "\n\n"))
-        </CONTEXT>
+        Stelle im Text:
+        \(surroundingText)
 
-        Frage: \(question)
+        \(question)
         """
     }
 
@@ -289,7 +289,7 @@ struct InlineExplainPopover: View {
     // Konfiguration (Magic Numbers benannt statt verstreuter Literale)
     private let contextMessages = 6
     private let contextCharLimit = 800
-    private let selectionRadius = 500
+    private var selectionRadius: Int { max(50, chatViewModel.inlineExplainRadius) }
 }
 
 /// Thread-sicherer Chunk-Puffer: Die Reihenfolge der Chunks bleibt garantiert erhalten

@@ -4,9 +4,22 @@ import Foundation
 /// Oberfläche zeigt: Titel, Argumente, Quellen, Code, Konsolenausgabe, Fehler.
 struct ToolCallPresentation {
     let call: ToolCallInfo
+    /// Einmal geparst statt bei jedem Zugriff (title, language, code … lasen sonst je neu).
+    private let json: [String: Any]?
+
+    init(call: ToolCallInfo) {
+        self.call = call
+        if let data = call.arguments.data(using: .utf8) {
+            json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } else {
+            json = nil
+        }
+    }
 
     var isRunning: Bool { call.result == nil }
-    var isError: Bool { call.result?.contains("<TOOL_ERROR>") == true || call.result?.hasPrefix("Nicht ausgeführt") == true }
+    /// Wegen des Tool-Rundenlimits nicht ausgeführt (ruhige Info statt Fehler).
+    var isLimitReached: Bool { call.limitNote == .notExecuted }
+    var isError: Bool { !isLimitReached && (call.result?.contains("<TOOL_ERROR>") == true || call.result?.hasPrefix("Nicht ausgeführt") == true) }
 
     var symbol: String {
         switch call.name {
@@ -48,11 +61,6 @@ struct ToolCallPresentation {
 
     // MARK: Argumente (auch während des Streamings)
 
-    private var json: [String: Any]? {
-        guard let data = call.arguments.data(using: .utf8) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    }
-
     var argumentsComplete: Bool { json != nil }
 
     func argument(_ key: String) -> String {
@@ -68,7 +76,13 @@ struct ToolCallPresentation {
         return lang.isEmpty ? (call.arguments.contains("<html") || call.arguments.contains("<!DOCTYPE") ? "html" : "python") : lang
     }
 
-    var code: String { argument("code") }
+    /// Code wie er ausgeführt wird: Nach dem Streamen bereinigt (Markdown-Zäune o. Ä.), damit
+    /// Zeilennummern und Fehlerkontext zur angezeigten Fassung passen.
+    var code: String {
+        let raw = argument("code")
+        guard argumentsComplete, call.name == "coding_sandbox" else { return raw }
+        return language == "html" ? CodingTool.sanitizeHTMLCode(raw) : CodingEnvironment.sanitizePythonCode(raw)
+    }
 
     var packages: [String] { (json?["install_packages"] as? [String]) ?? [] }
 

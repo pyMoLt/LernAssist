@@ -18,10 +18,7 @@ nonisolated final class CodingEnvironment {
     private let fileManager = FileManager.default
 
     /// Basisordner in Application Support
-    var baseDirectory: URL {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("LernAssist")
-    }
+    var baseDirectory: URL { AppStorageLocation.root }
 
     /// Aktive Umgebung: die eigene Python-3.12-Umgebung (PythonEnvironmentInstaller), solange
     /// sie noch nicht fertig ist das alte venv aus dem System-Python.
@@ -83,13 +80,33 @@ nonisolated final class CodingEnvironment {
         let workingDirectory: String
     }
 
-    /// Max. gespeicherte Skript-Versionen pro Session-Ordner (Nutzer-Feature): Cap gegen
-    /// endloses Anwachsen; die ältesten Versionen fliegen zuerst raus.
-    private static let maxScriptVersions = 10
-    /// Ausgabe-Kappung (Nutzer-Feature): Volle stdout/stderr inkl. Traceback statt aggressivem
-    /// Trimmen, aber mit Cap gegen Kontext-Flut. Das ENDE bleibt erhalten – Tracebacks und
-    /// Fehlermeldungen stehen typischerweise am Ende der Ausgabe.
-    private static let maxOutputCharacters = 10_000
+    /// Einstellbare Grenzen (Einstellungen → Tools → Erweitert). Werden vom Main-Thread gesetzt
+    /// und während eines laufenden Skripts gelesen – daher hinter einem Lock.
+    struct Limits: Sendable {
+        /// Max. gespeicherte Skript-Versionen pro Session-Ordner: Cap gegen endloses Anwachsen;
+        /// die ältesten Versionen fliegen zuerst raus.
+        var maxScriptVersions = 10
+        /// Ausgabe-Kappung: volle stdout/stderr inkl. Traceback, aber mit Cap gegen Kontext-Flut.
+        /// Das ENDE bleibt erhalten – Tracebacks stehen typischerweise am Ende der Ausgabe.
+        var maxOutputCharacters = 10_000
+        /// Sandbox-Timeout in Sekunden.
+        var sandboxTimeout: Double = 150
+        /// Matplotlib-Plot-Auflösung in DPI.
+        var plotDpi = 150
+        /// Internet für Python (über den Proxy der App, siehe PythonNetworkProxy).
+        var internetEnabled = true
+        /// Höchstgröße pro Download und Höchstzahl an Verbindungen pro Lauf.
+        var downloadMaxMB = 25
+        var maxDownloadsPerRun = 10
+        /// Erlaubte Dateitypen (Content-Type-Prüfung im Python-Vorspann).
+        var downloadTypes: [DownloadFileType] = DownloadFileType.defaults
+    }
+    private let limitsLock = NSLock()
+    private var storedLimits = Limits()
+    var limits: Limits {
+        get { limitsLock.lock(); defer { limitsLock.unlock() }; return storedLimits }
+        set { limitsLock.lock(); storedLimits = newValue; limitsLock.unlock() }
+    }
 
     /// Führt ein Python-Skript aus und gibt stdout/stderr, Exit-Code sowie generierte
     /// Bild-Dateien zurück. Das Skript wird VERSIONIERT abgelegt (script_v1.py, script_v2.py,
@@ -132,13 +149,30 @@ nonisolated final class CodingEnvironment {
         // automatisch mit plt.savefig(), damit die KI keinen Fehler bekommt, wenn sie plt.show() aufruft.
         // Wenn das Skript aber schon selbst plt.savefig() genutzt hat, wird plt.show() ignoriert,
         // um doppelte Bilder in der Ausgabe zu vermeiden.
-        let guardedCode = Self.pythonPrelude + "\n" + code
+        let sanitizedCode = Self.sanitizePythonCode(code)
+        let limits = self.limits
+        let guardedCode = Self.makePrelude(dpi: limits.plotDpi) + "\n" + sanitizedCode
         try guardedCode.write(to: scriptURL, atomically: true, encoding: .utf8)
 
         // Sandbox-Profil mit gezielter Read-Denylist und Exec-Allowlist schreiben. Das Profil
         // wird auch vom run_command-Tool verwendet; dadurch gelten für Modell-Code und bestätigte
         // Terminal-Aufrufe dieselben Grenzen.
-        let profileURL = try writeSandboxProfile(for: chatOutputDirectory)
+        // Internet nur über den Proxy der App: eigener Proxy pro Lauf, Sandbox erlaubt nur ihn.
+        var proxy: PythonNetworkProxy?
+        var proxyPort: UInt16?
+        if limits.internetEnabled {
+            let candidate = PythonNetworkProxy(
+                policy: .init(maxConnections: max(1, limits.maxDownloadsPerRun),
+                              maxBytesPerConnection: max(1, limits.downloadMaxMB) * 1_048_576),
+                permission: { host in await DownloadPermissions.shared.requestPermission(host: host) })
+            if let port = try? await candidate.start(), port > 0 {
+                proxy = candidate
+                proxyPort = port
+            }
+        }
+        defer { proxy?.stop() }
+        let runStart = Date()
+        let profileURL = try writeSandboxProfile(for: chatOutputDirectory, proxyPort: proxyPort)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
@@ -148,24 +182,43 @@ nonisolated final class CodingEnvironment {
         // Minimal-Environment statt vollständiger Vererbung (Audit T4/C5): Das LLM-generierte
         // Skript könnte sonst die App-Umgebung (inkl. evtl. API-Keys) über `os.environ` lesen und
         // per stdout exfiltrieren. Nur was Python/Server-Bibliotheken nachweislich brauchen.
-        let env: [String: String] = [
+        var env: [String: String] = [
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": chatOutputDirectory.path,
             "TMPDIR": NSTemporaryDirectory(),
             "MPLCONFIGDIR": chatOutputDirectory.path,
             "XDG_CACHE_HOME": chatOutputDirectory.path, // Verhindert Fontconfig Cache Errors
         ]
+        if let proxyPort {
+            let proxyURL = "http://127.0.0.1:\(proxyPort)"
+            for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] { env[key] = proxyURL }
+            env["NO_PROXY"] = ""
+            let mime = limits.downloadTypes.flatMap(\.mimePrefixes)
+            env["LERNASSIST_ALLOWED_MIME"] = (try? JSONSerialization.data(withJSONObject: mime))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            env["LERNASSIST_MAX_BYTES"] = String(max(1, limits.downloadMaxMB) * 1_048_576)
+        }
         process.environment = env
 
-        // 150s: großzügig genug für normale Datenanalyse/Plots, verhindert aber ein für immer
-        // hängendes Skript (z.B. eine Endlosschleife oder eine geblockte native Fensterschleife,
-        // siehe Warnung in CodingTool.description) davon, den kompletten Chat einzufrieren – ohne
-        // Timeout wartete runProcess vorher unbegrenzt auf die Prozess-Beendigung, wodurch weder
-        // eine Antwort noch neue Nachrichten im selben Chat je wieder ankamen.
-        let result = try await runProcess(process, timeout: 150)
+        // Konfigurierbares Timeout: standardmäßig 150 s, großzügig für normale Datenanalyse,
+        // verhindert aber ein für immer hängendes Skript.
+        let timeout = max(10, limits.sandboxTimeout)
+        let result = try await runProcess(process, timeout: timeout, extraTime: { proxy?.waitingTime ?? 0 })
         var output = result.output
+        // Internet-Protokoll und Prüfung der neuen Dateien (Programme, Installer, Skripte raus).
+        if let proxy, !proxy.eventLog.isEmpty {
+            output += "\n\n--- INTERNET ---\n" + proxy.eventLog.joined(separator: "\n")
+            if proxy.usedConnections > 0 {
+                let removed = DataDownloader.sweep(directory: chatOutputDirectory, modifiedSince: runStart,
+                                                   keep: copiedInputNames,
+                                                   allowArchives: limits.downloadTypes.contains(.archives))
+                for item in removed {
+                    output += "\nEntfernt: \(item.name) – \(item.reason) sind nicht erlaubt."
+                }
+            }
+        }
         if result.timedOut {
-            output += "\n\n[Skript nach 150s abgebrochen – vermutlich eine Endlosschleife oder ein blockierender Aufruf (z.B. ein natives GUI-Fenster).]"
+            output += "\n\n[Skript nach \(Int(timeout))s abgebrochen – vermutlich eine Endlosschleife oder ein blockierender Aufruf (z.B. ein natives GUI-Fenster).]"
         } else if output.isEmpty && result.exitCode != 0 {
             output = "Exit Code: \(result.exitCode)"
         }
@@ -181,7 +234,7 @@ nonisolated final class CodingEnvironment {
         }
 
         return PythonRunResult(
-            output: Self.cappedOutput(output.trimmingCharacters(in: .whitespacesAndNewlines)),
+            output: Self.cappedOutput(output.trimmingCharacters(in: .whitespacesAndNewlines), limit: limits.maxOutputCharacters),
             imagePaths: imagePaths.sorted(),
             exitCode: result.exitCode,
             timedOut: result.timedOut,
@@ -193,13 +246,32 @@ nonisolated final class CodingEnvironment {
     /// Vorspann jedes Skripts: Headless-Matplotlib, plt.show() → PNG. 150 dpi statt 300: Die
     /// Bilder gehen remote über Tailscale und als Base64 in den Chat – 300 dpi bei 12×8 Zoll
     /// ergaben 3600×2400 px (mehrere MB) ohne sichtbaren Gewinn im Chat.
-    static let pythonPrelude = """
+    static func makePrelude(dpi: Int = 150) -> String {
+        """
+    import os as _la_os
+    if _la_os.environ.get('LERNASSIST_ALLOWED_MIME'):
+        import json as _la_json, http.client as _la_http
+        _la_allowed = _la_json.loads(_la_os.environ['LERNASSIST_ALLOWED_MIME'])
+        _la_max = int(_la_os.environ.get('LERNASSIST_MAX_BYTES') or 0)
+        _la_begin = _la_http.HTTPResponse.begin
+        def _la_checked_begin(self):
+            _la_begin(self)
+            if 200 <= self.status < 300:
+                ctype = (self.getheader('Content-Type') or '').split(';')[0].strip().lower()
+                if ctype and ctype != 'application/octet-stream' and not any(ctype.startswith(p) or (p.startswith('+') and ctype.endswith(p)) for p in _la_allowed):
+                    self.close()
+                    raise PermissionError(f"LernAssist: Dateityp '{ctype}' ist in den Einstellungen nicht erlaubt.")
+                size = self.getheader('Content-Length')
+                if _la_max and size and size.isdigit() and int(size) > _la_max:
+                    self.close()
+                    raise PermissionError(f"LernAssist: Die Datei ist größer als {_la_max // 1048576} MB.")
+        _la_http.HTTPResponse.begin = _la_checked_begin
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         import glob
-        plt.rcParams['figure.dpi'] = 150
+        plt.rcParams['figure.dpi'] = \(dpi)
         plt.rcParams['figure.figsize'] = (10, 6)
         plt.rcParams['font.size'] = 12
         def custom_show(*args, **kwargs):
@@ -209,9 +281,56 @@ nonisolated final class CodingEnvironment {
     except ImportError:
         pass
     """
+    }
+
+    static let pythonPrelude = makePrelude(dpi: 150)
 
     /// Zeilen vor dem Nutzer-Code im Skript (für Traceback-Zeilennummern).
     static var preludeLineCount: Int { pythonPrelude.components(separatedBy: "\n").count }
+
+    /// Automatische Syntax-Bereinigung für Code kleinerer lokaler LLMs vor dem Speichern/Ausführen:
+    /// - Entfernt Markdown-Codefences (```python ... ```)
+    /// - Entfernt Pseudo-Tags wie <python>, <code>, <script> etc.
+    /// - Entfernt ein streunendes führendes '<' vor Variablenzuweisungen/Bezeichnern
+    ///   (z.B. `<html_content = open(...)` -> `html_content = open(...)`), das in Python
+    ///   einen unvermeidlichen SyntaxError auslösen würde.
+    static func sanitizePythonCode(_ rawCode: String) -> String {
+        var code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. Markdown-Codeblöcke abstreifen (```python ... ``` oder ``` ... ```)
+        if code.hasPrefix("```") {
+            let lines = code.components(separatedBy: "\n")
+            if lines.count >= 2 {
+                let startIdx = 1
+                let endIdx = lines.last?.trimmingCharacters(in: .whitespaces) == "```" ? lines.count - 1 : lines.count
+                if startIdx < endIdx {
+                    code = lines[startIdx..<endIdx].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        // 2. Streunende öffnende/schließende Tags am Skript-Anfang
+        let pseudoTags = ["<python>", "<?python", "<code>", "<script>", "</python>", "</code>", "</script>"]
+        for tag in pseudoTags {
+            if code.lowercased().hasPrefix(tag) {
+                code = String(code.dropFirst(tag.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        // 3. Typischer Syntaxfehler kleiner lokaler LLMs: ein versehentliches '<' vor dem ersten Bezeichner
+        // z.B. "<html_content = ...", "<data = ...", "<import os", "<def solve():"
+        if let regex = try? NSRegularExpression(pattern: #"^\s*<([a-zA-Z_][a-zA-Z0-9_]*)"#) {
+            let range = NSRange(code.startIndex..., in: code)
+            if let match = regex.firstMatch(in: code, range: range),
+               let fullRange = Range(match.range, in: code),
+               let captureRange = Range(match.range(at: 1), in: code) {
+                let identifier = String(code[captureRange])
+                code = code.replacingCharacters(in: fullRange, with: identifier)
+            }
+        }
+
+        return code
+    }
 
     // MARK: - Begrenztes Terminal
 
@@ -276,8 +395,9 @@ nonisolated final class CodingEnvironment {
             return (version, url)
         } ?? []
 
-        if existing.count >= Self.maxScriptVersions {
-            let numberToRemove = existing.count - Self.maxScriptVersions + 1
+        let maxScriptVersions = limits.maxScriptVersions
+        if existing.count >= maxScriptVersions {
+            let numberToRemove = existing.count - maxScriptVersions + 1
             for old in existing.sorted(by: { $0.version < $1.version }).prefix(numberToRemove) {
                 try? fileManager.removeItem(at: old.url)
             }
@@ -296,12 +416,25 @@ nonisolated final class CodingEnvironment {
     /// zuverlässig: dyld/Framework-Ladevorgänge brechen bereits vor dem Python-Entry-Point ab.
     /// Deshalb werden sensible Pfade gezielt gesperrt, während Prozessstarts strikt auf die
     /// freigegebenen Interpreter/Coreutils begrenzt bleiben.
-    private func writeSandboxProfile(for outputDirectory: URL) throws -> URL {
+    /// Pfad mit und ohne `/private`-Präfix (macOS: /tmp, /var und /etc sind Symlinks nach /private).
+    nonisolated static func pathVariants(_ path: String) -> [String] {
+        if path.hasPrefix("/private/") { return [path, String(path.dropFirst("/private".count))] }
+        for prefix in ["/tmp/", "/var/", "/etc/"] where path.hasPrefix(prefix) { return [path, "/private" + path] }
+        return [path]
+    }
+
+    private func writeSandboxProfile(for outputDirectory: URL, proxyPort: UInt16? = nil) throws -> URL {
         let profileURL = outputDirectory.appendingPathComponent("sandbox.sb")
         var profileLines: [String] = [
             "(version 1)",
             "(allow default)",
             "(deny network*)",
+        ]
+        // Internet nur über den Proxy der App auf diesem Mac (eigener Port pro Lauf).
+        if let proxyPort {
+            profileLines.append("(allow network-outbound (remote ip \"localhost:\(proxyPort)\"))")
+        }
+        profileLines += [
             "(deny file-write*)",
             "(allow file-write* (subpath \"/private/tmp\"))",
             "(allow file-write* (subpath \"/private/var/folders\"))",
@@ -314,7 +447,9 @@ nonisolated final class CodingEnvironment {
         let resolvedPython = URL(fileURLWithPath: pythonPath).resolvingSymlinksInPath().path
         var pythonExecutables = [resolvedPython]
         pythonExecutables.append(contentsOf: Self.pythonRuntimeExecutables(for: resolvedPython))
-        for executable in Set(pythonExecutables) {
+        // resolvingSymlinksInPath kürzt /private/tmp|var zu /tmp|var, die Sandbox prüft aber den
+        // echten Pfad – beide Schreibweisen freigeben.
+        for executable in Set(pythonExecutables.flatMap(Self.pathVariants)) {
             profileLines.append("(allow process-exec* (literal \"\(executable)\"))")
         }
         for executable in Self.terminalExecAllowlist {
@@ -528,10 +663,10 @@ nonisolated final class CodingEnvironment {
                 userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    private static func cappedOutput(_ output: String) -> String {
-        guard output.count > maxOutputCharacters else { return output }
-        let headCount = maxOutputCharacters / 3
-        let tailCount = maxOutputCharacters - headCount
+    private static func cappedOutput(_ output: String, limit: Int = 10_000) -> String {
+        guard output.count > limit else { return output }
+        let headCount = limit / 3
+        let tailCount = limit - headCount
         let head = String(output.prefix(headCount))
         let tail = String(output.suffix(tailCount))
         return "\(head)\n[… Ausgabe für den Modellkontext gekürzt …]\n\(tail)"
@@ -598,7 +733,8 @@ nonisolated final class CodingEnvironment {
     /// werden. Ein Watchdog-Task terminiert den Prozess nach `timeout` Sekunden zwangsweise,
     /// falls er dann noch läuft – der normale `terminationHandler` bleibt dabei der EINZIGE Pfad,
     /// der die Continuation auflöst (kein Risiko eines doppelten `resume`).
-    private func runProcess(_ process: Process, timeout: TimeInterval) async throws -> (output: String, exitCode: Int32, timedOut: Bool) {
+    private func runProcess(_ process: Process, timeout: TimeInterval,
+                            extraTime: @escaping @Sendable () -> TimeInterval = { 0 }) async throws -> (output: String, exitCode: Int32, timedOut: Bool) {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
@@ -615,7 +751,11 @@ nonisolated final class CodingEnvironment {
             // die SIGTERM ignorieren (Endlosschleife mit Signal-Handler).
             let state = ProcessState()
             let watchdog = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                // Zeit in Freigabe-Dialogen (Internet) zählt nicht gegen das Zeitlimit.
+                let start = Date()
+                while !Task.isCancelled, Date().timeIntervalSince(start) < timeout + extraTime() {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
                 guard !Task.isCancelled, process.isRunning else { return }
                 state.markTimedOut()
                 process.terminate() // SIGTERM

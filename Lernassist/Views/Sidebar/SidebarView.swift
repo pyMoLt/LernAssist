@@ -5,21 +5,17 @@ import UniformTypeIdentifiers
 
 struct SidebarView: View {
     @ObservedObject var viewModel: ChatViewModel
-    @State private var expandedArchiveGroups: Set<String> = []
     @State private var isShowingGallery = false
-    @State private var isArchiveSectionExpanded = true
-    @State private var isTrashSectionExpanded = false
-    @State private var isShowingEmptyTrashConfirmation = false
     @State private var searchText = ""
     /// Debounce-Puffer (Audit U5): Die Volltextsuche läuft über den Inhalt ALLER Sessions –
-    /// vorher wurde bei jedem Tastendruck sofort gefiltert und bei vielen/langen Chats die
-    /// komplette Inhaltsliste durchsucht. Gesucht wird erst 250 ms nach der letzten Eingabe.
+    /// gesucht wird erst 250 ms nach der letzten Eingabe.
     @State private var debouncedSearchText = ""
     @State private var searchDebounceTask: Task<Void, Never>? = nil
+    @State private var isArchiveDropTargeted = false
+    /// Fach-Filter (nil = alle Fächer).
+    @State private var subjectFilter: String?
 
-    /// Volltextsuche über Titel UND Nachrichteninhalt (case-insensitive) – vorher hatte die
-    /// Sidebar bei vielen Chats über längere Zeit keine Möglichkeit, gezielt einen alten Chat
-    /// wiederzufinden.
+    /// Volltextsuche über Titel UND Nachrichteninhalt (case-insensitive).
     private func matchesSearch(_ session: ChatSession) -> Bool {
         guard !debouncedSearchText.isEmpty else { return true }
         let q = debouncedSearchText.lowercased()
@@ -27,328 +23,327 @@ struct SidebarView: View {
         return session.messages.contains { $0.content.lowercased().contains(q) }
     }
 
-    private var filteredSessions: [ChatSession] {
-        // sorted(by:) ist stabil (Swift 5+) – gepinnte Chats rutschen nach oben, die relative
-        // Reihenfolge innerhalb "gepinnt"/"nicht gepinnt" bleibt sonst unverändert.
-        viewModel.sessions.filter(matchesSearch).sorted {
-            ($0.isPinned ?? false) && !($1.isPinned ?? false)
+    /// Aktive Chats in Zeitgruppen (Angepinnt · Heute · Gestern · Diese Woche · Älter).
+    private var sessionGroups: [(title: String, sessions: [ChatSession])] {
+        let calendar = Calendar.current
+        let now = Date()
+        let startOfToday = calendar.startOfDay(for: now)
+        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let startOfWeek = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
+
+        var pinned: [ChatSession] = [], today: [ChatSession] = [], yesterday: [ChatSession] = []
+        var week: [ChatSession] = [], older: [ChatSession] = []
+        let sorted = viewModel.sessions
+            .filter(matchesSearch)
+            .filter { subjectFilter == nil || $0.subject?.lowercased() == subjectFilter?.lowercased() }
+            .sorted { $0.lastActivityDate > $1.lastActivityDate }
+        for session in sorted {
+            let date = session.lastActivityDate
+            if session.isPinned ?? false { pinned.append(session) }
+            else if date >= startOfToday { today.append(session) }
+            else if date >= startOfYesterday { yesterday.append(session) }
+            else if date >= startOfWeek { week.append(session) }
+            else { older.append(session) }
         }
+        return [("Angepinnt", pinned), ("Heute", today), ("Gestern", yesterday), ("Diese Woche", week), ("Älter", older)]
+            .filter { !$0.sessions.isEmpty }
     }
 
-    private var filteredArchivedSessions: [ChatSession] {
-        viewModel.archivedSessions.filter(matchesSearch)
-    }
-
-    private var filteredTrashedSessions: [ChatSession] {
-        viewModel.trashedSessions.filter(matchesSearch)
+    private var archiveSearchHits: Int {
+        debouncedSearchText.isEmpty ? 0 : viewModel.archivedSessions.filter(matchesSearch).count
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: DS.Space.s) {
-                ZStack {
-                    Circle().fill(DS.Ink.accent.opacity(0.12))
-                    Image(systemName: "graduationcap.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(DS.Ink.accent.gradient)
-                }
-                .frame(width: 30, height: 30)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("LernAssist")
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    Text("Deine Lernräume")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, DS.Space.m)
-            .padding(.top, DS.Space.m)
-            .padding(.bottom, DS.Space.s)
+            header
+            galleryButton
+            searchField
+            subjectChips
 
-            // Global Screenshot Button at the top
-            Button(action: { isShowingGallery = true }) {
-                HStack(spacing: DS.Space.s) {
-                    Image(systemName: "photo.on.rectangle.angled")
-                    Text("Alle Screenshots")
-                        .font(.caption.weight(.medium))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, DS.Space.m)
-                .padding(.vertical, DS.Space.s)
-                .background(
-                    RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                        .fill(DS.Surface.card)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                        .stroke(DS.Ink.hairline.opacity(0.5), lineWidth: 0.5)
-                )
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, DS.Space.m)
-            .padding(.bottom, DS.Space.s)
-
-            // Volltextsuche über alle Chats (aktiv + archiviert)
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-                TextField("Chats durchsuchen...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.caption)
-                    .onChange(of: searchText) { newValue in
-                        // Debounce (Audit U5): siehe debouncedSearchText. Leerer Suchtext
-                        // filtert sofort (kein künstliches Delay beim Löschen).
-                        searchDebounceTask?.cancel()
-                        if newValue.isEmpty {
-                            debouncedSearchText = ""
-                            return
+            List(selection: $viewModel.activeSessionId) {
+                ForEach(sessionGroups, id: \.title) { group in
+                    Section {
+                        ForEach(group.sessions) { session in
+                            SessionRow(
+                                session: session,
+                                canDelete: viewModel.sessions.count > 1,
+                                onRename: { newTitle in viewModel.renameSession(id: session.id, newTitle: newTitle) },
+                                onArchive: { viewModel.archiveSession(id: session.id) },
+                                onDelete: { viewModel.trashSession(id: session.id) },
+                                onMoveToFolder: { folder in viewModel.moveSessionToFolder(id: session.id, folder: folder) },
+                                onTogglePin: { viewModel.togglePin(id: session.id) },
+                                onSetSubject: {
+                                    if let subject = FolderPrompt.ask(title: "Fach für „\(session.title)“",
+                                                                       message: "Allgemeines Fach, z. B. Physiologie oder Algorithmen. Leer lassen = KI entscheidet.",
+                                                                       initial: session.subject ?? "", allowEmpty: true) {
+                                        viewModel.setSubject(id: session.id, subject: subject)
+                                    }
+                                }
+                            )
+                            .tag(session.id)
+                            .itemProvider { NSItemProvider(object: session.id.uuidString as NSString) }
                         }
-                        searchDebounceTask = Task {
-                            try? await Task.sleep(nanoseconds: 250_000_000)
-                            guard !Task.isCancelled else { return }
-                            debouncedSearchText = newValue
-                        }
+                    } header: {
+                        Text(group.title)
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.tertiary)
                     }
-                if !searchText.isEmpty {
-                    Button(action: {
-                        searchDebounceTask?.cancel()
-                        searchText = ""
-                        debouncedSearchText = ""
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                }
+                if archiveSearchHits > 0 {
+                    Button {
+                        ArchiveWindowController.show(viewModel: viewModel, mode: .archive, search: debouncedSearchText)
+                    } label: {
+                        Label("\(archiveSearchHits) Treffer im Archiv", systemImage: "archivebox")
                             .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, DS.Space.s)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.chip))
-            .padding(.horizontal, DS.Space.m)
-            .padding(.bottom, DS.Space.s)
-
-            List(selection: $viewModel.activeSessionId) {
-                Section {
-                    ForEach(filteredSessions) { session in
-                        SessionRow(
-                            session: session,
-                            canDelete: viewModel.sessions.count > 1,
-                            onRename: { newTitle in viewModel.renameSession(id: session.id, newTitle: newTitle) },
-                            onArchive: { viewModel.archiveSession(id: session.id) },
-                            onDelete: { viewModel.trashSession(id: session.id) },
-                            onMoveToFolder: { folder in viewModel.moveSessionToFolder(id: session.id, folder: folder) },
-                            onTogglePin: { viewModel.togglePin(id: session.id) }
-                        )
-                        .tag(session.id)
-                        .itemProvider { NSItemProvider(object: session.id.uuidString as NSString) }
-                    }
-                }
-                .onDrop(of: [.text], isTargeted: nil) { providers in
-                    handleDropToCurrent(providers: providers)
-                }
-
-                let showArchiveSection = debouncedSearchText.isEmpty
-                    ? (!viewModel.archivedSessions.isEmpty || !viewModel.customArchiveFolders.isEmpty)
-                    : !filteredArchivedSessions.isEmpty
-                if showArchiveSection {
-                    DisclosureGroup(isExpanded: $isArchiveSectionExpanded) {
-                        let grouped = groupSessionsByFolder(filteredArchivedSessions)
-                        // Während einer Suche nur Ordner mit tatsächlichen Treffern zeigen – sonst
-                        // wäre orderedFolderKeys() (das über ALLE bekannten Ordner iteriert, auch
-                        // ohne Treffer) mit leeren "Ordner (0)"-Zeilen im Suchergebnis aufgetaucht.
-                        let visibleFolderKeys = orderedFolderKeys(from: grouped)
-                            .filter { debouncedSearchText.isEmpty || !(grouped[$0] ?? []).isEmpty }
-                        ForEach(visibleFolderKeys, id: \.self) { folderKey in
-                            let sessions = grouped[folderKey] ?? []
-                            DisclosureGroup(
-                                isExpanded: Binding(
-                                    get: { expandedArchiveGroups.contains(folderKey) },
-                                    set: { isExpanded in
-                                        if isExpanded { expandedArchiveGroups.insert(folderKey) }
-                                        else { expandedArchiveGroups.remove(folderKey) }
-                                    }
-                                )
-                            ) {
-                                ForEach(sessions) { session in
-                                    ArchivedSessionRow(
-                                        session: session,
-                                        onRestore: { viewModel.unarchiveSession(id: session.id) },
-                                        onTrash: { viewModel.trashArchivedSession(id: session.id) },
-                                        onMoveToFolder: { folder in viewModel.moveSessionToFolder(id: session.id, folder: folder) }
-                                    )
-                                    // Fehlte bisher: ohne itemProvider ließ sich ein bereits archivierter
-                                    // Chat nicht per Drag & Drop in einen ANDEREN Ordner ziehen (nur aktive
-                                    // Chats aus der Chatübersicht waren als Drag-Quelle nutzbar) – der
-                                    // Ordnerwechsel war dadurch nur über das Kontextmenü möglich.
-                                    .itemProvider { NSItemProvider(object: session.id.uuidString as NSString) }
-                                }
-                            } label: {
-                                Text("\(folderKey) (\(sessions.count))")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .onDrop(of: [.text], isTargeted: nil) { providers in
-                                handleDrop(providers: providers, folder: folderKey)
-                            }
-                            .contextMenu {
-                                Button("Ordner löschen") {
-                                    viewModel.deleteFolder(folderKey)
-                                }
-                            }
-                        }
-                        .onMove { indices, newOffset in
-                            // Die Indizes beziehen sich auf visibleFolderKeys (die ForEach-
-                            // Datenquelle), nicht auf customArchiveFolders – vorher wurden sie
-                            // auf das falsche Array angewendet (Audit U6): Sobald Ordner
-                            // existierten, die nicht in customArchiveFolders stehen, oder eine
-                            // Suche die Liste filterte, wurden die falschen Ordner verschoben.
-                            var keys = visibleFolderKeys
-                            keys.move(fromOffsets: indices, toOffset: newOffset)
-                            viewModel.reorderArchiveFolders(keys)
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text("Archiv").font(.headline)
-                            Button(action: {
-                                promptForNewFolder()
-                            }) {
-                                Image(systemName: "folder.badge.plus")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Neuen Archiv-Ordner erstellen")
-                            Spacer()
-                        }
-                    }
-                    .onDrop(of: [.text], isTargeted: nil) { providers in
-                        handleDropToArchive(providers: providers)
-                    }
-                }
-
-                let showTrashSection = debouncedSearchText.isEmpty
-                    ? !viewModel.trashedSessions.isEmpty
-                    : !filteredTrashedSessions.isEmpty
-                if showTrashSection {
-                    DisclosureGroup(isExpanded: $isTrashSectionExpanded) {
-                        ForEach(filteredTrashedSessions) { session in
-                            TrashedSessionRow(
-                                session: session,
-                                onRestore: { viewModel.restoreFromTrash(id: session.id) },
-                                onDeletePermanently: { viewModel.deleteTrashedSessionPermanently(id: session.id) }
-                            )
-                        }
-                    } label: {
-                        Text("Papierkorb (\(viewModel.trashedSessions.count))")
-                            .font(.headline)
-                            .contextMenu {
-                                Button(role: .destructive, action: {
-                                    isShowingEmptyTrashConfirmation = true
-                                }) {
-                                    Label("Papierkorb leeren", systemImage: "trash.fill")
-                                }
-                            }
-                            .alert("Papierkorb leeren?", isPresented: $isShowingEmptyTrashConfirmation) {
-                                Button("Abbrechen", role: .cancel) { }
-                                Button("Leeren", role: .destructive) { viewModel.emptyTrash() }
-                            }
-                    }
-                }
-            }
             .listStyle(.sidebar)
-
-            Button(action: { viewModel.createNewChat() }) {
-                Label("Neuer Chat", systemImage: "plus")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, DS.Space.xs)
+            .scrollContentBackground(.hidden)
+            .onDrop(of: [.text], isTargeted: nil) { providers in
+                handleDrop(providers) { viewModel.unarchiveSession(id: $0) }
             }
-            .buttonStyle(.glassProminent)
-            .controlSize(.large)
-            .padding(DS.Space.m)
+
+            footer
         }
+        .background(DS.Surface.sidebar)
         .sheet(isPresented: $isShowingGallery) {
             ScreenshotGalleryView(viewModel: viewModel)
         }
     }
-    
-    private func promptForNewFolder() {
-        let alert = NSAlert()
-        alert.messageText = "Neuer Ordner"
-        alert.informativeText = "Gib den Namen des neuen Ordners ein:"
-        alert.addButton(withTitle: "Erstellen")
-        alert.addButton(withTitle: "Abbrechen")
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        alert.accessoryView = input
-        if alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty {
-            viewModel.addCustomArchiveFolder(input.stringValue)
+
+    // MARK: Kopf
+
+    private var header: some View {
+        HStack(spacing: DS.Space.s + 2) {
+            LernAssistBrandIcon(size: 28)
+            Text("LernAssist")
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+            Spacer(minLength: 0)
+            SidebarIconButton(systemImage: "square.and.pencil", help: "Neuer Chat (⌘N)") {
+                viewModel.createNewChat()
+            }
+            .accessibilityLabel("Neuer Chat")
+        }
+        .padding(.horizontal, DS.Space.m)
+        .padding(.top, DS.Space.m)
+        .padding(.bottom, DS.Space.s + 2)
+    }
+
+    private var galleryButton: some View {
+        Button(action: { isShowingGallery = true }) {
+            HStack(spacing: DS.Space.s) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(DS.Ink.accent)
+                    .frame(width: 18)
+                Text("Alle Screenshots")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, DS.Space.s + 2)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.control))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, DS.Space.m)
+        .padding(.bottom, DS.Space.s)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            TextField("Chats durchsuchen …", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.caption)
+                .onChange(of: searchText) { _, newValue in
+                    searchDebounceTask?.cancel()
+                    if newValue.isEmpty {
+                        debouncedSearchText = ""
+                        return
+                    }
+                    searchDebounceTask = Task {
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        guard !Task.isCancelled else { return }
+                        debouncedSearchText = newValue
+                    }
+                }
+            if !searchText.isEmpty {
+                Button(action: {
+                    searchDebounceTask?.cancel()
+                    searchText = ""
+                    debouncedSearchText = ""
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Suche leeren")
+            }
+        }
+        .padding(.horizontal, DS.Space.s)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.chip))
+        .padding(.horizontal, DS.Space.m)
+        .padding(.bottom, DS.Space.xs)
+    }
+
+    // MARK: Fach-Filter
+
+    /// Fächer der aktiven Chats, häufigste zuerst.
+    private var activeSubjects: [String] {
+        var counts: [String: (name: String, count: Int)] = [:]
+        for subject in viewModel.sessions.compactMap(\.subject) where !subject.isEmpty {
+            let key = subject.lowercased()
+            counts[key] = (counts[key]?.name ?? subject, (counts[key]?.count ?? 0) + 1)
+        }
+        return counts.values.sorted { $0.count == $1.count ? $0.name < $1.name : $0.count > $1.count }.map(\.name)
+    }
+
+    @ViewBuilder
+    private var subjectChips: some View {
+        let subjects = activeSubjects
+        if !subjects.isEmpty {
+            HStack(spacing: 0) {
+                Menu {
+                    Button {
+                        withAnimation(.snappy(duration: 0.2)) { subjectFilter = nil }
+                    } label: {
+                        if subjectFilter == nil {
+                            Label("Alle", systemImage: "checkmark")
+                        } else {
+                            Text("Alle")
+                        }
+                    }
+                    Divider()
+                    ForEach(subjects, id: \.self) { subject in
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { subjectFilter = subject }
+                        } label: {
+                            if subjectFilter?.lowercased() == subject.lowercased() {
+                                Label(subject, systemImage: "checkmark")
+                            } else {
+                                Text(subject)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(subjectFilter ?? "Alle")
+                        .font(.system(size: 11, weight: subjectFilter == nil ? .medium : .semibold, design: .rounded))
+                        .foregroundStyle(subjectFilter == nil ? .secondary : DS.Ink.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(subjectFilter == nil ? DS.Surface.chip : DS.Surface.selection))
+                }
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Fach-Filter: \(subjectFilter ?? "Alle")")
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, DS.Space.m)
+            .padding(.bottom, DS.Space.xs)
         }
     }
 
-    private func handleDrop(providers: [NSItemProvider], folder: String) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: "public.text", options: nil) { (item, error) in
-            guard let data = item as? Data,
-                  let idString = String(data: data, encoding: .utf8),
-                  let id = UUID(uuidString: idString) else { return }
-            DispatchQueue.main.async {
-                viewModel.moveSessionToFolder(id: id, folder: folder)
+    // MARK: Fuß: Archiv & Papierkorb
+
+    private var footer: some View {
+        HStack(spacing: DS.Space.xs) {
+            SidebarFooterButton(title: "Archiv", systemImage: "archivebox",
+                                count: viewModel.archivedSessions.count, highlighted: isArchiveDropTargeted) {
+                ArchiveWindowController.show(viewModel: viewModel, mode: .archive)
             }
+            // Chats per Drag & Drop direkt archivieren.
+            .onDrop(of: [.text], isTargeted: $isArchiveDropTargeted) { providers in
+                handleDrop(providers) { viewModel.archiveSession(id: $0) }
+            }
+            SidebarFooterButton(title: "Papierkorb", systemImage: "trash",
+                                count: viewModel.trashedSessions.count, highlighted: false) {
+                ArchiveWindowController.show(viewModel: viewModel, mode: .trash)
+            }
+            Spacer(minLength: 0)
         }
-        return true
+        .padding(.horizontal, DS.Space.s)
+        .padding(.vertical, DS.Space.s)
     }
 
-    private func handleDropToCurrent(providers: [NSItemProvider]) -> Bool {
+    private func handleDrop(_ providers: [NSItemProvider], perform: @escaping (UUID) -> Void) -> Bool {
         guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: "public.text", options: nil) { (item, error) in
+        provider.loadItem(forTypeIdentifier: "public.text", options: nil) { item, _ in
             guard let data = item as? Data,
                   let idString = String(data: data, encoding: .utf8),
                   let id = UUID(uuidString: idString) else { return }
-            DispatchQueue.main.async {
-                viewModel.unarchiveSession(id: id)
-            }
+            DispatchQueue.main.async { perform(id) }
         }
         return true
     }
+}
 
-    private func handleDropToArchive(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: "public.text", options: nil) { (item, error) in
-            guard let data = item as? Data,
-                  let idString = String(data: data, encoding: .utf8),
-                  let id = UUID(uuidString: idString) else { return }
-            DispatchQueue.main.async {
-                viewModel.archiveSession(id: id)
-            }
+/// Kleiner runder Symbol-Button (Sidebar-Kopf).
+private struct SidebarIconButton: View {
+    let systemImage: String
+    let help: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isHovered ? DS.Ink.accent : .secondary)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(isHovered ? DS.Surface.chipHover : Color.clear))
+                .contentShape(Circle())
         }
-        return true
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { isHovered = $0 }
     }
-    
-    private func orderedFolderKeys(from grouped: [String: [ChatSession]]) -> [String] {
-        var keys = viewModel.customArchiveFolders
-        let otherKeys = grouped.keys.filter { !keys.contains($0) }.sorted(by: >)
-        keys.append(contentsOf: otherKeys)
-        return keys
-    }
-    
-    private func groupSessionsByFolder(_ sessions: [ChatSession]) -> [String: [ChatSession]] {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM yyyy"
-        formatter.locale = Locale(identifier: "de_DE")
-        
-        var dict = Dictionary(grouping: sessions) { session in
-            session.archiveFolder ?? formatter.string(from: session.date)
-        }
-        for folder in viewModel.customArchiveFolders {
-            if dict[folder] == nil {
-                dict[folder] = []
+}
+
+/// Dezenter Fuß-Button mit Zähler (Archiv, Papierkorb).
+private struct SidebarFooterButton: View {
+    let title: String
+    let systemImage: String
+    let count: Int
+    let highlighted: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.tertiary)
+                }
             }
+            .foregroundStyle(isHovered || highlighted ? DS.Ink.accent : .secondary)
+            .padding(.horizontal, DS.Space.s)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(isHovered || highlighted ? DS.Surface.chipHover : Color.clear))
+            .contentShape(Capsule())
         }
-        return dict
+        .buttonStyle(.plain)
+        .help("\(title) öffnen")
+        .accessibilityLabel(count > 0 ? "\(title), \(count) Chats" : title)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -362,6 +357,7 @@ private struct SessionRow: View {
     let onDelete: () -> Void
     let onMoveToFolder: (String) -> Void
     let onTogglePin: () -> Void
+    var onSetSubject: (() -> Void)? = nil
 
     @State private var isEditing = false
     @State private var draftTitle = ""
@@ -369,12 +365,15 @@ private struct SessionRow: View {
 
     private var isPinned: Bool { session.isPinned ?? false }
 
-    var body: some View {
-        HStack {
-            Image(systemName: isPinned ? "pin.fill" : "message.fill")
-                .foregroundColor(isPinned ? .orange : .blue.opacity(0.7))
-                .font(.caption)
+    @State private var isHovered = false
 
+    var body: some View {
+        HStack(spacing: DS.Space.s) {
+            if isPinned {
+                Image(systemName: "pin.fill")
+                    .foregroundStyle(DS.Ink.accent)
+                    .font(.system(size: 9))
+            }
             if isEditing {
                 TextField("Titel", text: $draftTitle, onCommit: commitRename)
                     .textFieldStyle(.plain)
@@ -382,68 +381,51 @@ private struct SessionRow: View {
                     .onExitCommand { isEditing = false }
             } else {
                 Text(session.title)
+                    .font(.system(size: 12.5, design: .rounded))
                     .lineLimit(1)
                     .onTapGesture(count: 2) { beginEditing() }
             }
-
-            Spacer()
-
-            if !isEditing {
+            Spacer(minLength: 0)
+            // Nur beim Überfahren: Archivieren. Alles Weitere per Rechtsklick.
+            if isHovered && !isEditing {
                 Button(action: onArchive) {
                     Image(systemName: "archivebox")
+                        .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
-                        .font(.caption)
                 }
                 .buttonStyle(.plain)
-                .opacity(0.6)
-                .help("Chat archivieren")
-
-                if canDelete {
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .opacity(0.6)
-                    .help("In den Papierkorb verschieben")
-                }
+                .help("Archivieren")
+                .accessibilityLabel("Chat archivieren")
+                .transition(.opacity)
             }
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
         .swipeActions(edge: .leading) {
-            Button(action: onArchive) {
-                Label("Archiv", systemImage: "archivebox")
-            }
-            .tint(.orange)
+            Button(action: onArchive) { Label("Archiv", systemImage: "archivebox") }
+                .tint(DS.Ink.accent)
         }
         .swipeActions(edge: .trailing) {
             if canDelete {
-                Button(action: onDelete) {
-                    Label("In Papierkorb", systemImage: "trash")
-                }
-                .tint(.red)
+                Button(action: onDelete) { Label("In Papierkorb", systemImage: "trash") }
+                    .tint(.red)
             }
         }
         .contextMenu {
-            Button(isPinned ? "Pin lösen" : "Anpinnen") {
-                onTogglePin()
+            Button("Umbenennen") { beginEditing() }
+            Button(isPinned ? "Nicht mehr anpinnen" : "Anpinnen") { onTogglePin() }
+            if let onSetSubject {
+                Button(session.subject.map { "Fach ändern (\($0)) …" } ?? "Fach festlegen …") { onSetSubject() }
             }
             Divider()
-            Button("Ordner zuweisen...") {
-                // Hier könnten wir einen Prompt-Dialog für den Ordnernamen einbauen,
-                // in SwiftUI macOS geht das per popover oder alert.
-                // Für diesen Prototyp:
-                let alert = NSAlert()
-                alert.messageText = "In welchen Ordner verschieben?"
-                alert.informativeText = "Gib den Namen des Archiv-Ordners ein:"
-                alert.addButton(withTitle: "Verschieben")
-                alert.addButton(withTitle: "Abbrechen")
-                let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-                alert.accessoryView = input
-                if alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty {
-                    onMoveToFolder(input.stringValue)
-                }
+            Button("Archivieren") { onArchive() }
+            Button("In Archiv-Ordner …") {
+                if let folder = FolderPrompt.ask(title: "In welchen Archiv-Ordner?") { onMoveToFolder(folder) }
+            }
+            if canDelete {
+                Divider()
+                Button("In den Papierkorb", role: .destructive) { onDelete() }
             }
         }
     }
@@ -460,129 +442,21 @@ private struct SessionRow: View {
     }
 }
 
-// MARK: - ArchivedSessionRow
+// MARK: - Ordnername abfragen
 
-private struct ArchivedSessionRow: View {
-    let session: ChatSession
-    let onRestore: () -> Void
-    let onTrash: () -> Void
-    let onMoveToFolder: (String) -> Void
-
-    var body: some View {
-        HStack {
-            Image(systemName: "message")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            Text(session.title)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button(action: onRestore) {
-                Image(systemName: "arrow.uturn.up")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .opacity(0.6)
-            .help("Wiederherstellen")
-
-            Button(action: onTrash) {
-                Image(systemName: "trash")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .opacity(0.6)
-            .help("In den Papierkorb verschieben")
-        }
-        .padding(.vertical, 2)
-        .swipeActions(edge: .leading) {
-            Button(action: onRestore) {
-                Label("Wiederherstellen", systemImage: "arrow.uturn.up")
-            }
-            .tint(.blue)
-        }
-        .swipeActions(edge: .trailing) {
-            Button(action: onTrash) {
-                Label("In Papierkorb", systemImage: "trash")
-            }
-            .tint(.red)
-        }
-        .contextMenu {
-            Button("In anderen Ordner verschieben...") {
-                let alert = NSAlert()
-                alert.messageText = "In welchen Ordner verschieben?"
-                alert.informativeText = "Gib den Namen des neuen Archiv-Ordners ein:"
-                alert.addButton(withTitle: "Verschieben")
-                alert.addButton(withTitle: "Abbrechen")
-                let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-                alert.accessoryView = input
-                if alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty {
-                    onMoveToFolder(input.stringValue)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - TrashedSessionRow
-
-private struct TrashedSessionRow: View {
-    let session: ChatSession
-    let onRestore: () -> Void
-    let onDeletePermanently: () -> Void
-
-    @State private var isShowingDeleteConfirmation = false
-
-    var body: some View {
-        HStack {
-            Image(systemName: "message")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            Text(session.title)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button(action: onRestore) {
-                Image(systemName: "arrow.uturn.up")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .opacity(0.6)
-            .help("Wiederherstellen")
-
-            Button(action: { isShowingDeleteConfirmation = true }) {
-                Image(systemName: "trash.fill")
-                    .foregroundColor(.red.opacity(0.7))
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .opacity(0.6)
-            .help("Endgültig löschen")
-        }
-        .padding(.vertical, 2)
-        .swipeActions(edge: .leading) {
-            Button(action: onRestore) {
-                Label("Wiederherstellen", systemImage: "arrow.uturn.up")
-            }
-            .tint(.blue)
-        }
-        .swipeActions(edge: .trailing) {
-            Button(action: { isShowingDeleteConfirmation = true }) {
-                Label("Endgültig löschen", systemImage: "trash")
-            }
-            .tint(.red)
-        }
-        // Im Papierkorb selbst ist "endgültig löschen" wirklich unwiderruflich (keine Trash-Stufe
-        // mehr darunter) – anders als das Verschieben in den Papierkorb selbst gibt es hier bewusst
-        // eine Rückfrage, um genau diesen letzten, nicht mehr rückgängig zu machenden Schritt
-        // abzusichern.
-        .alert("Chat endgültig löschen?", isPresented: $isShowingDeleteConfirmation) {
-            Button("Abbrechen", role: .cancel) {}
-            Button("Endgültig löschen", role: .destructive) { onDeletePermanently() }
-        } message: {
-            Text("„\(session.title)“ wird unwiderruflich gelöscht. Das kann nicht rückgängig gemacht werden.")
-        }
+enum FolderPrompt {
+    static func ask(title: String, message: String = "Name des Archiv-Ordners:", initial: String = "", allowEmpty: Bool = false) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Abbrechen")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        input.stringValue = initial
+        alert.accessoryView = input
+        alert.window.initialFirstResponder = input
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty && !allowEmpty ? nil : name
     }
 }

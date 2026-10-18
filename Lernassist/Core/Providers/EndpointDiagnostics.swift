@@ -58,7 +58,7 @@ nonisolated enum EndpointDiagnostics {
 
     private static func unreachable(_ profile: EndpointProfile, error: Error) -> ConnectionDiagnosis {
         let hint = profile.isRemote
-            ? "Nicht erreichbar. Läuft der Server auf dem anderen Mac, ist Tailscale verbunden und der Mac wach?"
+            ? "Nicht erreichbar. Läuft der Server, ist das Netzwerk bzw. VPN (z. B. Tailscale) verbunden und der Server-Rechner wach?"
             : "Nicht erreichbar. Läuft der Server auf diesem Mac?"
         return ConnectionDiagnosis(status: .unreachable, message: hint + " (\(error.localizedDescription))")
     }

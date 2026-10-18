@@ -21,60 +21,167 @@ struct LearningModeTabView: View {
     @State private var promptDraft: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSection(icon: "brain", title: "Lernmodus") {
-                Picker("", selection: $viewModel.learningStyle) {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            settingsSection(icon: "brain.head.profile", title: "Aktiver Lernmodus", tint: DS.Accent.amber) {
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
                     ForEach(LearningStyle.allCases, id: \.self) { style in
-                        Text(style.rawValue).tag(style)
+                        let isSelected = viewModel.learningStyle == style
+                        Button {
+                            viewModel.learningStyle = style
+                            selectedPromptStyle = style
+                        } label: {
+                            HStack(spacing: DS.Space.s) {
+                                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(isSelected ? DS.Ink.accent : .secondary.opacity(0.5))
+                                Text(style.rawValue)
+                                    .font(.system(.subheadline, design: .rounded).weight(isSelected ? .semibold : .regular))
+                                    .foregroundStyle(DS.Ink.primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, DS.Space.m)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
+                                    .fill(isSelected ? DS.Surface.selection : DS.Surface.control.opacity(0.55))
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
             }
 
-            settingsSection(icon: "text.bubble", title: "System-Prompts anpassen") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("", selection: $selectedPromptStyle) {
-                        ForEach(LearningStyle.allCases, id: \.self) { style in
-                            Text(style.rawValue.components(separatedBy: " ").first ?? style.rawValue)
-                                .tag(style)
-                        }
+            settingsSection(icon: "rectangle.on.rectangle.angled", title: "Karteikarten", tint: DS.Accent.indigo) {
+                SettingsRow(
+                    title: "Ziel-Behaltensrate",
+                    subtitle: "Wie sicher du dich bei einer Wiederholung erinnern sollst. Höher = häufiger wiederholen.",
+                    icon: "target",
+                    tint: DS.Accent.indigo
+                ) {
+                    HStack(spacing: DS.Space.s) {
+                        Slider(value: $viewModel.flashcardRetention, in: 0.80...0.97, step: 0.01)
+                            .frame(width: 140)
+                        Text("\(Int((viewModel.flashcardRetention * 100).rounded())) %")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .frame(width: 40, alignment: .trailing)
                     }
-                    .pickerStyle(.segmented)
-                    .settingHelp("Bearbeite die Prompts für jeden Lernmodus. Leer lassen = Werkseinstellung.")
+                    .settingHelp("Wiederholungsplanung nach FSRS-5 (wie Anki). 90 % ist der empfohlene Standard; 85 % spart Zeit, 95 % verdoppelt etwa die Wiederholungen.")
+                }
+            }
+
+            settingsSection(icon: "dial.medium", title: "Schwierigkeit", tint: DS.Accent.rose) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Abfragen im Chat",
+                        subtitle: viewModel.quizDifficulty.quizGuidance,
+                        icon: "questionmark.bubble",
+                        tint: DS.Accent.rose,
+                        help: "Gilt für Quizkarten im Chat („teste mich“, /quiz). Mit „/quiz 10 schwer Niere“ lässt sich die Stufe für ein einzelnes Quiz überschreiben."
+                    ) {
+                        difficultyMenu(selection: $viewModel.quizDifficulty)
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Karteikarten",
+                        subtitle: viewModel.flashcardDifficulty.cardGuidance,
+                        icon: "rectangle.on.rectangle.angled",
+                        tint: DS.Accent.indigo,
+                        help: "Gilt für neu erzeugte Karteikarten („Als Karte merken“ und „Karten erzeugen“). Bestehende Karten bleiben unverändert."
+                    ) {
+                        difficultyMenu(selection: $viewModel.flashcardDifficulty)
+                    }
+                }
+            }
+
+            SettingsDisclosureSection(
+                title: "Erweitert (Karteikarten)",
+                subtitle: "Wiederholungsintervalle nach Fehlschlägen und Karten-Extraktion",
+                icon: "slider.horizontal.3",
+                tint: DS.Accent.indigo
+            ) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: "Wiederholung nach „Nochmal“",
+                        subtitle: "Zeitabstand, nach dem eine vergessene Karteikarte erneut abgefragt wird.",
+                        icon: "arrow.uturn.backward.circle",
+                        tint: DS.Accent.rose,
+                        help: "Pause bis zur erneuten Abfrage einer vergessenen Karte in derselben Sitzung (Lapse, 1–60 min, Standard 10 min)."
+                    ) {
+                        stepperBadge("\(viewModel.flashcardAgainDelayMinutes) min", value: $viewModel.flashcardAgainDelayMinutes, range: 1...60, step: 1)
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: "Karten pro Antwort („Als Karte merken“)",
+                        subtitle: "Wie viele Karten das Modell aus einer Erklärung extrahiert.",
+                        icon: "rectangle.stack.badge.plus",
+                        tint: DS.Accent.indigo,
+                        help: "Obergrenze für generierte Karten bei der Aktion „Als Karte merken“ (1–5 Karten, Standard 3)."
+                    ) {
+                        stepperBadge("\(viewModel.flashcardCardsPerResponse)", value: $viewModel.flashcardCardsPerResponse, range: 1...5, step: 1)
+                    }
+                }
+            }
+
+            settingsSection(icon: "text.bubble.fill", title: "System-Prompts anpassen", tint: DS.Accent.indigo) {
+                VStack(alignment: .leading, spacing: DS.Space.m) {
+                    SettingsRow(
+                        title: "Lernmodus-Prompt bearbeiten",
+                        subtitle: "Wähle den Modus aus, dessen Instruktion unten angepasst werden soll.",
+                        icon: selectedPromptStyle.symbol,
+                        tint: DS.Accent.indigo
+                    ) {
+                        SoftDropdownMenu(
+                            label: selectedPromptStyle.rawValue,
+                            icon: selectedPromptStyle.symbol,
+                            iconTint: DS.Accent.indigo,
+                            width: 240
+                        ) {
+                            ForEach(LearningStyle.allCases, id: \.self) { style in
+                                Button {
+                                    selectedPromptStyle = style
+                                } label: {
+                                    if selectedPromptStyle == style {
+                                        Label(style.rawValue, systemImage: "checkmark")
+                                    } else {
+                                        Label(style.rawValue, systemImage: style.symbol)
+                                    }
+                                }
+                            }
+                        }
+                        .settingHelp("Bearbeite die Prompts für jeden Lernmodus. Leer lassen = Werkseinstellung.")
+                    }
 
                     TextEditor(text: $promptDraft)
                         .font(.system(.caption, design: .default))
-                        // Feste Höhe (kein Größen-Verhandelungs-Rückkopplung beim Resize)
-                        .frame(height: 150)
-                        .padding(6)
-                        .background(Color.primary.opacity(0.04))
-                        .cornerRadius(6)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(isCustom ? DS.Ink.accent.opacity(0.3) : Color.secondary.opacity(0.15),
-                                        lineWidth: 1)
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 155)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
+                                .fill(DS.Surface.control)
                         )
 
                     HStack {
                         if isCustom {
-                            Label("Angepasst", systemImage: "pencil.circle.fill")
-                                .font(.caption2)
-                                .foregroundStyle(DS.Ink.accent)
+                            Label("Eigener System-Prompt aktiv", systemImage: "pencil.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(DS.Accent.indigo)
                         } else {
-                            Label("Werkseinstellung", systemImage: "checkmark.circle")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            Label("Werkseinstellung aktiv", systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(DS.Accent.emerald)
                         }
                         Spacer()
                         if isCustom {
-                            Button("Zurücksetzen") {
+                            Button("Auf Standard zurücksetzen") {
                                 viewModel.customPrompts.removeValue(forKey: selectedPromptStyle.rawValue)
                                 promptDraft = selectedPromptStyle.defaultPrompt
                             }
-                            .font(.caption)
-                            .buttonStyle(.plain)
-                            .foregroundColor(.red.opacity(0.8))
+                            .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
                         }
                     }
                 }
@@ -85,12 +192,12 @@ struct LearningModeTabView: View {
             promptDraft = currentStoredPrompt
         }
         // Modus-Wechsel im Editor: Draft auf den (Custom- oder Werk-)Prompt des Modus umstellen.
-        .onChange(of: selectedPromptStyle) { _ in
+        .onChange(of: selectedPromptStyle) { _, _ in
             promptDraft = currentStoredPrompt
         }
         // Echte Eingabe: Draft zurückschreiben – NUR wenn er sich inhaltlich vom gespeicherten
         // Zustand unterscheidet (Guard verhindert auch hier jedes überflüssige @Published-Feuern).
-        .onChange(of: promptDraft) { draft in
+        .onChange(of: promptDraft) { _, draft in
             guard draft != currentStoredPrompt else { return }
             viewModel.customPrompts[selectedPromptStyle.rawValue] = draft
         }
@@ -104,5 +211,23 @@ struct LearningModeTabView: View {
     private var isCustom: Bool {
         !(viewModel.customPrompts[selectedPromptStyle.rawValue] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+private extension LearningModeTabView {
+    func difficultyMenu(selection: Binding<StudyDifficulty>) -> some View {
+        SoftDropdownMenu(label: selection.wrappedValue.label, icon: "dial.medium", iconTint: DS.Accent.rose, width: 150) {
+            ForEach(StudyDifficulty.allCases) { level in
+                Button {
+                    selection.wrappedValue = level
+                } label: {
+                    if selection.wrappedValue == level {
+                        Label(level.label, systemImage: "checkmark")
+                    } else {
+                        Text(level.label)
+                    }
+                }
+            }
+        }
     }
 }

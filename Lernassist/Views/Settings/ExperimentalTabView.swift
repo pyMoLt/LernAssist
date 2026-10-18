@@ -4,19 +4,18 @@ struct ExperimentalTabView: View {
     @ObservedObject var viewModel: ChatViewModel
 
     var body: some View {
-        // Kein geschachteltes `Form`; SettingsView besitzt bereits den äußeren Scroll-Container.
-        VStack(alignment: .leading, spacing: 20) {
-            settingsSection(icon: "magnifyingglass.circle", title: "Semantische Suche") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Semantische Suche aktivieren (Experimentell)", isOn: $viewModel.isSemanticSearchEnabled)
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            settingsSection(icon: "flask.fill", title: "Experimentelle Funktionen", tint: DS.Accent.amber) {
+                SettingsRow(
+                    title: "Semantische Dokumentensuche (RAG / Embeddings)",
+                    subtitle: "Indiziert hochgeladene Dokumente lokal über den Embedding-Endpunkt für kontextbezogene Abfragen.",
+                    icon: "sparkle.magnifyingglass",
+                    tint: DS.Accent.amber
+                ) {
+                    Toggle("", isOn: $viewModel.isSemanticSearchEnabled)
                         .toggleStyle(.switch)
+                        .labelsHidden()
                         .help("Nutzt den LM Studio/Ollama Endpoint, um Dokumente semantisch einzubetten und kontextbezogen im Chat abzufragen.")
-
-                    if viewModel.isSemanticSearchEnabled {
-                        Text("Wenn aktiviert, werden Dokumente und Bilder aus hochgeladenen Dateien beim Hinzufügen indiziert und durchsucht.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
         }

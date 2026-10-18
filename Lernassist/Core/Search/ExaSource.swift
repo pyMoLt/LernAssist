@@ -10,6 +10,7 @@ nonisolated struct ExaSource: SearchSource {
     static let endpoint = URL(string: "https://mcp.exa.ai/mcp")!
 
     func search(_ query: String, limit: Int) async throws -> [SearchHit] {
+        try await HostPacing.shared.waitTurn(host: Self.endpoint.host ?? "mcp.exa.ai")
         let headers = apiKey.isEmpty ? [:] : ["x-api-key": apiKey]
         let client = MCPHTTPClient(endpoint: Self.endpoint, headers: headers)
         let result = try await client.callTool("web_search_exa", arguments: [

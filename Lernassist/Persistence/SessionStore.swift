@@ -204,7 +204,7 @@ final class SessionStore {
     /// verschwinden. Die JSON-Datei der gerade gelöschten Session ist zu diesem Zeitpunkt schon
     /// weg, deshalb genügt der Scan über aktiv/Archiv/Papierkorb.
     private func removeImagesNoLongerReferenced(by deletedSession: ChatSession) {
-        let candidates = Set(deletedSession.messages.compactMap(\.imageID))
+        let candidates = Self.imageIDs(in: deletedSession)
         guard !candidates.isEmpty else { return }
 
         let referenced = referencedImageIDs()
@@ -222,6 +222,19 @@ final class SessionStore {
     /// Liest ausschließlich die Bild-Referenzen aller verbleibenden Session-Dateien. Fehlerhafte
     /// Dateien werden wie beim regulären Laden geloggt, blockieren aber nicht das Aufräumen
     /// anderer, gültiger Sessions.
+    /// Bilder einer Session: Nachrichten und Karteikarten (Bildkarten haben eine eigene Kopie).
+    static func imageIDs(in session: ChatSession) -> Set<UUID> {
+        var ids = Set(session.messages.compactMap(\.imageID))
+        // Abbildungen aus der Recherche ([B#]) liegen ebenfalls im Bildspeicher.
+        for message in session.messages {
+            for call in message.toolCalls ?? [] { ids.formUnion((call.researchImages ?? []).map(\.imageID)) }
+        }
+        for set in session.flashcardSets ?? [] {
+            ids.formUnion(set.cards.compactMap(\.imageID))
+        }
+        return ids
+    }
+
     private func referencedImageIDs() -> Set<UUID> {
         let directories = [AppStorageLocation.sessionsDir, AppStorageLocation.archiveDir, AppStorageLocation.trashDir]
         var result = Set<UUID>()
@@ -233,7 +246,7 @@ final class SessionStore {
             for file in files where file.pathExtension == "json" {
                 do {
                     let session = try decoder.decode(ChatSession.self, from: Data(contentsOf: file))
-                    result.formUnion(session.messages.compactMap(\.imageID))
+                    result.formUnion(Self.imageIDs(in: session))
                 } catch {
                     AppLog.persistence.error("Session-Datei konnte beim Bild-Aufräumen nicht gelesen werden (\(file.lastPathComponent)): \(error.localizedDescription)")
                 }

@@ -150,7 +150,7 @@ enum ToolCallParser {
         let argsObj = obj["arguments"] ?? obj["parameters"]
         let argsString: String
         if let argsDict = argsObj as? [String: Any],
-           let argsData = try? JSONSerialization.data(withJSONObject: argsDict),
+           let argsData = try? JSONSerialization.data(withJSONObject: argsDict, options: [.sortedKeys]),
            let argsStr = String(data: argsData, encoding: .utf8) {
             argsString = argsStr
         } else if let argsStr = argsObj as? String {

@@ -26,6 +26,10 @@ final class ToolRegistry {
 
     // MARK: - Aktive Tools
 
+    /// Standard-Schwierigkeit für `quiz_card` (Einstellungen → Lernen). Ändert den System-Prompt
+    /// nur, wenn der Nutzer die Einstellung wechselt – nicht von Anfrage zu Anfrage.
+    var quizDifficulty: StudyDifficulty = .medium
+
     var enabledTools: [AppTool] { tools.filter { $0.isEnabled } }
 
     /// OpenAI-kompatibles Schema-Array — nur für aktive Tools.
@@ -43,13 +47,14 @@ final class ToolRegistry {
             rules.append("Bei Fakten, Zahlen, Leitlinien oder Aktuellem, bei denen du unsicher bist: `web_search`. Zitiere [W#] nur für Belege, die dir `web_search` in diesem Gespräch tatsächlich geliefert hat – ohne Suche keine [W#]-Angaben, und erfinde keine Quellen.")
         }
         if names.contains("coding_sandbox") {
-            rules.append("Soll etwas berechnet, ausgewertet, geplottet oder interaktiv/als Simulation gezeigt werden, nutze `coding_sandbox` (Python für Daten/Plots, HTML/JS für Interaktives) statt Code nur als Text auszugeben.")
+            rules.append("Geht es um Datenauswertung, Berechnungen, Grafiken oder interaktive Darstellungen, führe Code mit `coding_sandbox` aus, statt ihn nur in den Chat zu schreiben – Python oder HTML, je nachdem was passt (typisch: Python für Daten und Plots, HTML/JS für Interaktives und Simulationen). Geht es um den Code selbst (erklären, besprechen, üben), schreibe ihn in den Chat.")
         }
         if names.contains("recall_screenshot") {
             rules.append("Musst du eine frühere Folie genau ansehen, hole sie mit `recall_screenshot`.")
         }
         if names.contains("quiz_card") {
-            rules.append("Zum Abfragen jede Frage einzeln als `quiz_card` stellen (nicht als Text) und dann auf die Antwort warten; nach dem Feedback die nächste Frage wieder als `quiz_card`.")
+            rules.append("Will der Nutzer abgefragt oder getestet werden („frag mich ab“, „teste mich“, „Quiz“), jede Frage einzeln als `quiz_card` stellen (nicht als Text) und auf die Antwort warten; nach dem Feedback die nächste Frage wieder als `quiz_card`. Nennt er eine Anzahl, genau so viele Fragen, danach kurze Auswertung.")
+            rules.append("Schwierigkeit der Abfragen: \(quizDifficulty.label) – \(quizDifficulty.quizGuidance) Nennt der Nutzer eine andere Stufe, gilt seine.")
         }
         rules.append("Meldet ein Tool <TOOL_ERROR>, lies die Ursache, korrigiere die Argumente oder fahre ohne Tool fort. Erfinde kein Ergebnis.")
         return "\n\n---\n**Tools:**\n" + rules.map { "- " + $0 }.joined(separator: "\n")

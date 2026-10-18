@@ -68,8 +68,11 @@ nonisolated struct ChatRequestBuilder {
         switch purpose {
         case .background(_, let disableThinking):
             if disableThinking { payload = EndpointManager.disableThinkingModifiers(payload) }
-        case .chat, .inline:
+        case .chat:
             payload = Self.applyThinking(profile.thinkingMode, budget: profile.thinkingBudget, to: payload)
+        case .inline:
+            // „Text erklären“ ist eine schnelle Nebenfrage: ohne Thinking, damit sofort Text kommt.
+            payload = EndpointManager.disableThinkingModifiers(payload)
         }
         return ProviderAdapters.adapter(for: profile.provider).adapt(payload: payload)
     }
@@ -104,7 +107,15 @@ nonisolated struct ChatRequestBuilder {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if stream { request.setValue("text/event-stream", forHTTPHeaderField: "Accept") }
         EndpointManager.authHeaders(for: profile).forEach { request.setValue($1, forHTTPHeaderField: $0) }
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        // Sortierte Schlüssel: Swift-Dictionaries haben pro Prozessstart eine zufällige Reihenfolge,
+        // und die Chat-Vorlage rendert die Tool-Schemas in genau dieser Reihenfolge. Unsortiert
+        // war nach jedem App-Neustart der komplette Prefix-Cache des Servers verloren.
+        request.httpBody = try Self.serialize(payload)
         return request
+    }
+
+    /// Deterministisches JSON für Requests (gleicher Inhalt → gleiche Bytes).
+    static func serialize(_ payload: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 }

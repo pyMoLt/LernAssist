@@ -67,13 +67,12 @@ final class ToolsPhase4Tests: XCTestCase {
              ChatScreenshot(number: 3, base64: "Qw==", caption: "")]
         }
         let byNumber = await tool.run(arguments: #"{"number":1}"#, sessionID: "s")
-        guard case .modelImage(let b64, let caption)? = byNumber.artifacts.first else { return XCTFail() }
-        XCTAssertEqual(b64, "QQ==")
-        XCTAssertTrue(caption.contains("#1"))
+        guard case .modelImage(let number)? = byNumber.artifacts.first else { return XCTFail() }
+        XCTAssertEqual(number, 1)
 
         let previous = await tool.run(arguments: "{}", sessionID: "s")
-        guard case .modelImage(let prev, _)? = previous.artifacts.first else { return XCTFail() }
-        XCTAssertEqual(prev, "Qg==", "Ohne Nummer: vorletzter Screenshot")
+        guard case .modelImage(let prev)? = previous.artifacts.first else { return XCTFail() }
+        XCTAssertEqual(prev, 2, "Ohne Nummer: vorletzter Screenshot")
 
         let missing = await tool.run(arguments: #"{"number":9}"#, sessionID: "s")
         XCTAssertTrue(missing.isError)

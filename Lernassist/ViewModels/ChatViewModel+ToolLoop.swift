@@ -8,38 +8,24 @@ import os
 extension ChatViewModel {
     // MARK: - Nach Streaming: Tool-Calls ausführen oder fertig
 
+    /// Hinweis an das Modell im letzten Tool-Ergebnis der letzten erlaubten Runde. Steht im
+    /// Tool-Ergebnis statt im System-Prompt: Tools und System-Prompt bleiben über den ganzen
+    /// Turn unverändert, sonst verwirft der Server seinen Prefix-Cache ab Token 0.
+    static let toolFinalRoundNotice = "[Hinweis der App: Das war die letzte erlaubte Tool-Runde. Rufe keine weiteren Tools auf. Beantworte die Frage jetzt mit den bisherigen Ergebnissen. Reichen sie nicht aus, sag ehrlich, welche Informationen fehlen oder unsicher sind.]"
+    /// Ergebnis für Aufrufe, die das Modell trotz des Hinweises noch stellt.
+    static let toolLimitNotExecutedMessage = "Nicht ausgeführt: Das Tool-Limit ist erreicht. Antworte jetzt ohne weitere Tools mit den bisherigen Ergebnissen und sag ehrlich, was fehlt oder unsicher ist."
+    static let toolLimitFallbackAnswer = "Ich konnte nach mehreren Tool-Aufrufen keine brauchbare Antwort finden. Versuch's gerne mit einer präziseren Frage oder einer anderen Quelle."
+
     static func toolInvocationSignature(_ call: ToolCallInfo) -> String {
         "\(call.name)\u{001F}\(call.arguments)"
     }
 
     func handleFinished(profile: EndpointProfile, sessionIdx: Int, assistantMsgId: UUID,
-                                 sessionId: UUID, prevMessages: [[String: Any]]) {
-        let configuredMaxToolRounds = min(max(maxToolRounds, 1), 12)
-        guard toolCallDepth < configuredMaxToolRounds else {
-            // Das Modell darf nicht in eine Endlosschleife aus Suche → Browse → neue Suche
-            // geraten. Bisher blieb der letzte, bewusst NICHT mehr ausgeführte Tool-Call jedoch
-            // mit `result == nil` stehen. Die UI zeigte dadurch einen Spinner, obwohl die Antwort
-            // bereits beendet war (wie im gemeldeten SearXNG-Fall). Jeder offene Call erhält
-            // daher ein sichtbares Endergebnis statt eines ewigen „lädt noch“.
-            if sessions.indices.contains(sessionIdx),
-               let mIdx = sessions[sessionIdx].messages.firstIndex(where: { $0.id == assistantMsgId }) {
-                let limitMessage = "Nicht ausgeführt: Das Limit von \(configuredMaxToolRounds) aufeinanderfolgenden Tool-Runden wurde erreicht."
-                if var calls = sessions[sessionIdx].messages[mIdx].toolCalls {
-                    for index in calls.indices where calls[index].result == nil {
-                        calls[index].result = limitMessage
-                    }
-                    sessions[sessionIdx].messages[mIdx].toolCalls = calls
-                }
-                if sessions[sessionIdx].messages[mIdx].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    sessions[sessionIdx].messages[mIdx].content =
-                        "Ich konnte nach mehreren Tool-Aufrufen keine brauchbare Antwort finden. Versuch's gerne mit einer präziseren Frage oder einer anderen Quelle."
-                }
-            }
-            finishExchange(sessionId: sessionId)
-            return
-        }
+                        sessionId: UUID, prevMessages: [[String: Any]]) {
+        let configuredMaxToolRounds = min(max(maxToolRounds, 1), 25)
 
-        guard let mIdx = sessions[sessionIdx].messages.firstIndex(where: { $0.id == assistantMsgId }) else {
+        guard sessions.indices.contains(sessionIdx),
+              let mIdx = sessions[sessionIdx].messages.firstIndex(where: { $0.id == assistantMsgId }) else {
             finishExchange(sessionId: sessionId); return
         }
 
@@ -104,6 +90,31 @@ extension ChatViewModel {
             }
         }
         sessions[sessionIdx].messages[mIdx].toolCalls = toolCalls
+
+        // Tool-Rundenlimit: Die letzte erlaubte Runde trägt im letzten Tool-Ergebnis den Hinweis,
+        // jetzt zu antworten (toolFinalRoundNotice). Ruft das Modell trotzdem noch Tools auf, werden
+        // sie nicht ausgeführt und es bekommt genau eine weitere Antwort-Runde; danach endet der
+        // Austausch. Kein `tool_choice: "none"` und kein Entfernen der Tools: oMLX nimmt die Tools
+        // dann aus der Chat-Vorlage, und der gesamte Prompt müsste neu berechnet werden.
+        if toolCallDepth >= configuredMaxToolRounds {
+            for index in toolCalls.indices where toolCalls[index].result == nil {
+                toolCalls[index].result = Self.toolLimitNotExecutedMessage
+                toolCalls[index].limitNote = .notExecuted
+            }
+            sessions[sessionIdx].messages[mIdx].toolCalls = toolCalls
+            guard toolCallDepth == configuredMaxToolRounds else {
+                if sessions[sessionIdx].messages[mIdx].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    sessions[sessionIdx].messages[mIdx].content = Self.toolLimitFallbackAnswer
+                }
+                finishExchange(sessionId: sessionId)
+                return
+            }
+            toolCallDepth += 1
+            continueAfterToolRound(profile: profile, sessionIdx: sessionIdx, mIdx: mIdx,
+                                   assistantMsgId: assistantMsgId, sessionId: sessionId,
+                                   prevMessages: prevMessages, generation: streamGeneration)
+            return
+        }
 
         // Ein Modell darf nach einer konkreten Fehlermeldung mit korrigiertem Code oder
         // geänderten Argumenten weiterarbeiten. Den exakt gleichen fehlerhaften Aufruf führen
@@ -191,39 +202,10 @@ extension ChatViewModel {
                     return
                 }
 
-                self.sessions[sessionIdx].messages[mIdx].toolCalls = updated
-                self.blockedToolInvocationSignatures.formUnion(failedSignatures)
-
-                guard let url = EndpointManager.chatCompletionsURL(for: profile) else {
-                    self.failCurrentExchange(sessionId: sessionId, targetMsgId: assistantMsgId,
-                                              message: "Ungültige Endpunkt-URL im Profil „\(profile.name)“.")
-                    return
-                }
-                var nextMessages = prevMessages
-
-                let currentContent = self.sessions[sessionIdx].messages[mIdx].content
-                let tcs: [[String: Any]] = updated.map { tc in
-                    ["id": tc.id, "type": "function",
-                     "function": ["name": tc.name, "arguments": tc.arguments] as [String: Any]]
-                }
-                nextMessages.append(["role": "assistant",
-                                      "content": currentContent.isEmpty ? NSNull() : currentContent,
-                                      "tool_calls": tcs])
-
-                for tc in updated {
-                    let toolContent = (tc.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    let finalResult = toolContent.isEmpty ? "Fehler: Das Tool hat kein Ergebnis geliefert." : toolContent
-                    nextMessages.append([
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": finalResult
-                    ])
-                }
-
                 // Artefakte (Bilder, interaktives HTML, Abfragekarten) direkt als eigene Chat-
                 // Nachrichten einfügen – unabhängig davon, ob das Modell sie später erwähnt.
                 var waitsForUser = false
-                for (_, artifacts) in artifactsByIndex.sorted(by: { $0.key < $1.key }) {
+                for (index, artifacts) in artifactsByIndex.sorted(by: { $0.key < $1.key }) {
                     for artifact in artifacts {
                         switch artifact {
                         case .image(let base64):
@@ -238,13 +220,27 @@ extension ChatViewModel {
                             message.quizCard = card
                             self.sessions[sessionIdx].messages.append(message)
                             waitsForUser = true
-                        case .modelImage(let base64, let caption):
-                            // Nur für das Modell: als Bildnachricht nach den Tool-Ergebnissen.
-                            nextMessages.append(EndpointManager.userImageMessage(text: caption, base64: base64,
-                                                                                 provider: profile.provider))
+                        case .modelImage(let number):
+                            // Nur für das Modell: apiMessages(for:) hängt den Screenshot nach den
+                            // Tool-Ergebnissen an – in dieser Runde wie in jeder späteren Anfrage.
+                            updated[index].recalledScreenshot = number
+                        case .researchImages(let refs):
+                            updated[index].researchImages = refs
                         }
                     }
                 }
+
+                // Beleg- und Bildnummern im ganzen Chat eindeutig machen, bevor die Ergebnisse ans
+                // Modell gehen (nach den Artefakten, damit die Abbildungen mitnummeriert werden).
+                let earlierCalls = self.sessions[sessionIdx].messages[..<mIdx].flatMap { $0.toolCalls ?? [] }
+                updated = Self.renumberCitations(in: updated, after: earlierCalls)
+
+                // Letzte erlaubte Runde: Das letzte Tool-Ergebnis trägt den Abschluss-Hinweis.
+                if self.toolCallDepth >= min(max(self.maxToolRounds, 1), 25), let last = updated.indices.last {
+                    updated[last].limitNote = .finalRound
+                }
+                self.sessions[sessionIdx].messages[mIdx].toolCalls = updated
+                self.blockedToolInvocationSignatures.formUnion(failedSignatures)
 
                 // Nach einer Abfragekarte wartet die App auf die Antwort des Nutzers – das Modell
                 // soll die Lösung nicht gleich hinterherschreiben.
@@ -253,20 +249,52 @@ extension ChatViewModel {
                     return
                 }
 
-                let newMsgId = UUID()
-                self.sessions[sessionIdx].messages.append(
-                    ChatMessage(id: newMsgId, role: "assistant", content: ""))
-
-                // Defensive: Der Folge-Stream startet im "streaming"-Zustand. isStreaming ging
-                // hier zwar nie auf false (das tun nur sendMessage-Reset, cancelStreaming,
-                // finishExchange und Fehlerpfade) – das explizite Setzen verhindert aber die
-                // historische Inkonsistenz, dass Tokens eintrafen, während die UI "idle" zeigte.
-                self.isStreaming = true
-                self.startStream(profile: profile, url: url, messages: nextMessages,
-                                 targetMsgId: newMsgId, sessionId: sessionId,
-                                 isFallbackAttempt: self.isUsingFallback,
-                                 generation: generation)
+                self.continueAfterToolRound(profile: profile, sessionIdx: sessionIdx, mIdx: mIdx,
+                                            assistantMsgId: assistantMsgId, sessionId: sessionId,
+                                            prevMessages: prevMessages, generation: generation)
             }
+        }
+    }
+
+    /// Startet die nächste Modell-Runde nach einer Tool-Runde. Assistant-Turn und Tool-Ergebnisse
+    /// kommen aus `apiMessages(for:)` – derselben Funktion, die später den Chat-Verlauf baut. So
+    /// ist diese Runde Byte für Byte identisch mit dem Verlauf der nächsten Frage (inkl.
+    /// `reasoning_content`), und der Prefix-Cache des Servers greift.
+    func continueAfterToolRound(profile: EndpointProfile, sessionIdx: Int, mIdx: Int,
+                                assistantMsgId: UUID, sessionId: UUID,
+                                prevMessages: [[String: Any]], generation: UUID) {
+        guard let url = EndpointManager.chatCompletionsURL(for: profile) else {
+            failCurrentExchange(sessionId: sessionId, targetMsgId: assistantMsgId,
+                                message: "Ungültige Endpunkt-URL im Profil „\(profile.name)“.")
+            return
+        }
+        let session = sessions[sessionIdx]
+        var nextMessages = prevMessages
+        nextMessages.append(contentsOf: apiMessages(for: session.messages[mIdx],
+                                                    provider: profile.provider,
+                                                    recalledScreenshot: screenshotLookup(in: session.messages)))
+
+        let newMsgId = UUID()
+        sessions[sessionIdx].messages.append(ChatMessage(id: newMsgId, role: "assistant", content: ""))
+
+        // Defensive: Der Folge-Stream startet im "streaming"-Zustand. isStreaming ging
+        // hier zwar nie auf false (das tun nur sendMessage-Reset, cancelStreaming,
+        // finishExchange und Fehlerpfade) – das explizite Setzen verhindert aber die
+        // historische Inkonsistenz, dass Tokens eintrafen, während die UI "idle" zeigte.
+        isStreaming = true
+        startStream(profile: profile, url: url, messages: nextMessages,
+                    targetMsgId: newMsgId, sessionId: sessionId,
+                    isFallbackAttempt: isUsingFallback,
+                    generation: generation)
+    }
+
+    /// Screenshot-Nummer → Base64 für `recall_screenshot`-Bilder im Request (lazy pro Nummer).
+    func screenshotLookup(in messages: [ChatMessage]) -> (Int) -> String? {
+        let numbers = Self.screenshotNumbers(in: messages)
+        return { number in
+            guard let id = numbers.first(where: { $0.value == number })?.key,
+                  let msg = messages.first(where: { $0.id == id }) else { return nil }
+            return Self.imagePayloadBase64(for: msg)
         }
     }
 
@@ -311,6 +339,12 @@ extension ChatViewModel {
         if let tool = registry.tool(named: "browse_url") as? BrowseURLTool {
             tool.configuration.settings = settings
             tool.configuration.reranker = reranker
+            tool.currentQuestionProvider = { [weak self] sessionID in
+                guard let self else { return nil }
+                let session = (sessionID.flatMap { sid in self.sessions.first(where: { $0.id.uuidString == sid }) })
+                    ?? self.activeSession
+                return session?.messages.last(where: { $0.role == "user" })?.content
+            }
         }
     }
 
@@ -324,6 +358,11 @@ extension ChatViewModel {
             browseTool.maxBrowseCharacters = maxBrowseCharacters
         }
         syncResearchConfiguration()
+        DownloadPermissions.shared.allowedDomains = { [weak self] in self?.downloadAllowedDomains ?? [] }
+        DownloadPermissions.shared.addAllowedDomain = { [weak self] host in
+            guard let self, !self.downloadAllowedDomains.contains(host) else { return }
+            self.downloadAllowedDomains.append(host)
+        }
         if let recall = registry.tool(named: "recall_screenshot") as? RecallScreenshotTool {
             recall.screenshotProvider = { [weak self] sessionID in self?.chatScreenshots(sessionID: sessionID) ?? [] }
         }

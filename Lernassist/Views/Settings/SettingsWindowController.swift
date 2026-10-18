@@ -17,6 +17,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 NotificationCenter.default.post(name: .debugSwitchSettingsTab, object: nil, userInfo: ["tab": tab])
             }
             window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
@@ -46,6 +47,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         self.window = window
 
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

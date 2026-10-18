@@ -18,8 +18,8 @@ final class ResearchTests: XCTestCase {
 
     func testBlockedHostnames() {
         XCTAssertTrue(WebFetcher.isBlockedHostname("localhost"))
-        XCTAssertTrue(WebFetcher.isBlockedHostname("macbook-pro"))
-        XCTAssertTrue(WebFetcher.isBlockedHostname("macbook-pro.tail1234.ts.net"))
+        XCTAssertTrue(WebFetcher.isBlockedHostname("home-server"))
+        XCTAssertTrue(WebFetcher.isBlockedHostname("home-server.tail1234.ts.net"))
         XCTAssertTrue(WebFetcher.isBlockedHostname("drucker.local"))
         XCTAssertFalse(WebFetcher.isBlockedHostname("de.wikipedia.org"))
     }

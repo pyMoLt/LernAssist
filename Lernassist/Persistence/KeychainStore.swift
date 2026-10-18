@@ -12,8 +12,23 @@ import os
 nonisolated enum KeychainStore {
     private static let service = "com.pymolt.LernAssist.apiKeys"
 
+    /// Unit-Tests schreiben nie in den echten Schlüsselbund – sonst landeten Test-Profile mit
+    /// Fantasie-Keys im Login-Schlüsselbund des Nutzers.
+    private static var inMemory: Bool { AppStorageLocation.isRunningUnitTests }
+    private static let testLock = NSLock()
+    nonisolated(unsafe) private static var testStore: [String: String] = [:]
+    private static func testValue(_ key: String) -> String? {
+        testLock.lock(); defer { testLock.unlock() }
+        return testStore[key]
+    }
+    private static func setTestValue(_ value: String?, _ key: String) {
+        testLock.lock(); defer { testLock.unlock() }
+        testStore[key] = value
+    }
+
     /// Speichert den API-Key eines Profils. Leerstring löscht den Eintrag (Profil ohne Key).
     static func setAPIKey(_ key: String, forProfileID id: UUID) {
+        if inMemory { setTestValue(key.isEmpty ? nil : key, id.uuidString); return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -51,6 +66,7 @@ nonisolated enum KeychainStore {
     }
 
     static func readAPIKey(forProfileID id: UUID) -> ReadResult {
+        if inMemory { return testValue(id.uuidString).map { .found($0) } ?? .notFound }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -86,6 +102,7 @@ nonisolated enum KeychainStore {
 
     /// Speichert ein benanntes Geheimnis. Leerstring löscht den Eintrag.
     static func setSecret(_ value: String, account: String) {
+        if inMemory { setTestValue(value.isEmpty ? nil : value, "secret." + account); return }
         let query = secretQuery(account)
         guard !value.isEmpty else { SecItemDelete(query as CFDictionary); return }
         let update = [kSecValueData as String: Data(value.utf8)]
@@ -101,6 +118,7 @@ nonisolated enum KeychainStore {
     }
 
     static func secret(account: String) -> String {
+        if inMemory { return testValue("secret." + account) ?? "" }
         var query = secretQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -112,6 +130,7 @@ nonisolated enum KeychainStore {
 
     /// Entfernt den API-Key eines Profils aus der Keychain (z.B. beim Löschen des Profils).
     static func deleteAPIKey(forProfileID id: UUID) {
+        if inMemory { setTestValue(nil, id.uuidString); return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

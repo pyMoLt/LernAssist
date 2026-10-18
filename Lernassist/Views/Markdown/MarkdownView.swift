@@ -22,8 +22,14 @@ struct MarkdownView: View {
 
 private class NonScrollingWebView: WKWebView {
     override func scrollWheel(with event: NSEvent) {
-        // Nicht selbst verarbeiten → an nächsten Responder (SwiftUI ScrollView) weiterleiten
-        nextResponder?.scrollWheel(with: event)
+        // Direkt an den Scrollbereich des Chats statt über die Responder-Kette: So behält AppKit
+        // die Geste samt Nachlauf in einer Hand, und beim Übergang zwischen Antwort (Web) und
+        // Nutzer-Nachricht (nativ) gibt es keinen Ruck.
+        if let outer = enclosingScrollView {
+            outer.scrollWheel(with: event)
+        } else {
+            nextResponder?.scrollWheel(with: event)
+        }
     }
 }
 
@@ -41,6 +47,9 @@ struct MarkdownWebView: NSViewRepresentable {
         config.userContentController.add(context.coordinator, name: "heightChanged")
         config.userContentController.add(context.coordinator, name: "linkClicked")
         config.userContentController.add(context.coordinator, name: "explainSelection")
+        config.userContentController.add(context.coordinator, name: "runHTML")
+        // Abbildungen aus der Recherche kommen über ein eigenes Schema direkt aus dem App-Speicher.
+        config.setURLSchemeHandler(ResearchImageSchemeHandler(), forURLScheme: ResearchImageSchemeHandler.scheme)
 
         let hideScrollbarCSS = """
             ::-webkit-scrollbar { display: none !important; }
@@ -50,7 +59,7 @@ struct MarkdownWebView: NSViewRepresentable {
             source: """
                 (function() {
                     var s = document.createElement('style');
-                    s.textContent = \\(Self.jsStringLiteral(hideScrollbarCSS));
+                    s.textContent = \(Self.jsStringLiteral(hideScrollbarCSS));
                     document.documentElement.appendChild(s);
                 })();
                 """,
@@ -252,7 +261,14 @@ struct MarkdownWebView: NSViewRepresentable {
                 }
             case "linkClicked":
                 if let urlStr = message.body as? String, let url = URL(string: urlStr) {
-                    NSWorkspace.shared.open(url)
+                    if url.scheme == ResearchImageSchemeHandler.scheme {
+                        // Abbildung aus der Recherche: groß im eigenen Fenster.
+                        if let id = UUID(uuidString: url.host ?? ""), let image = NSImage(contentsOf: AppStorageLocation.imageFile(id: id)) {
+                            DispatchQueue.main.async { OptimizedImageView.openImageWindow(image) }
+                        }
+                    } else {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             case "explainSelection":
                 if let dict = message.body as? [String: Any], let text = dict["text"] as? String {
@@ -260,8 +276,43 @@ struct MarkdownWebView: NSViewRepresentable {
                         self.parent.onExplainSelection?(text)
                     }
                 }
+            case "runHTML":
+                if let html = message.body as? String, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    DispatchQueue.main.async { HTMLArtifactView.openWindow(html: html) }
+                }
             default: break
             }
         }
     }
 }
+
+// MARK: - Abbildungen aus der Recherche
+
+/// Liefert `lernassist-image://<UUID>` aus dem Bildspeicher der App – nur Bilder, nur lokale Dateien.
+final class ResearchImageSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "lernassist-image"
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url, let id = UUID(uuidString: url.host ?? ""),
+              let data = try? Data(contentsOf: AppStorageLocation.imageFile(id: id)) else {
+            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+        let mime: String
+        switch DataDownloader.classify(data.prefix(16)).kind {
+        case "PNG": mime = "image/png"
+        case "JPEG": mime = "image/jpeg"
+        case "GIF": mime = "image/gif"
+        case "RIFF (z. B. WebP)": mime = "image/webp"
+        default:
+            urlSchemeTask.didFailWithError(URLError(.cannotDecodeContentData))
+            return
+        }
+        urlSchemeTask.didReceive(URLResponse(url: url, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil))
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {}
+}
+

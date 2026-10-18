@@ -109,8 +109,8 @@ actor SearchResultCache {
 ///
 /// Schnellstart SearXNG mit Docker:
 ///   docker run -d -p 8082:8080 --name searxng searxng/searxng
-///   → auf dem Docker-Mac: http://127.0.0.1:8082
-///   → von einem anderen Mac: http://<tailscale-hostname>:8082 (niemals localhost)
+///   → auf dem Rechner mit dem Container: http://127.0.0.1:8082
+///   → von einem anderen Gerät: http://<hostname-oder-ip>:8082 (niemals localhost)
 class SearchService {
     static let shared = SearchService()
 

@@ -11,20 +11,31 @@ nonisolated struct SearchHit: Equatable, Sendable {
     var blocks: [String]?
     /// Position in der Ergebnisliste der Quelle (0 = bester Treffer).
     var rank: Int
+    /// Abbildungen der Seite (Kandidaten für [B#]).
+    var images: [PageImage]? = nil
+    /// Seite mit Abbildungen samt Legende (Europe PMC → PMC-Artikel), geladen nur wenn zitiert.
+    var figurePage: String? = nil
 
     var domain: String { URL(string: url)?.host?.lowercased().replacingOccurrences(of: "www.", with: "") ?? "" }
 
     /// Normalisierte URL für die Duplikaterkennung.
-    var key: String {
+    var key: String { Self.normalizedKey(url) }
+
+    /// Gleiche Seite → gleicher Schlüssel: ohne www/Mobil-Präfix, Fragment und Tracking-Parameter,
+    /// Pfad dekodiert (Prozent-Kodierung, bei Wikipedia Leerzeichen = Unterstrich).
+    static func normalizedKey(_ url: String) -> String {
         guard var c = URLComponents(string: url) else { return url.lowercased() }
         c.scheme = "https"
-        c.host = c.host?.lowercased().replacingOccurrences(of: "www.", with: "").replacingOccurrences(of: ".m.wikipedia.org", with: ".wikipedia.org")
+        let host = c.host?.lowercased().replacingOccurrences(of: "www.", with: "").replacingOccurrences(of: ".m.wikipedia.org", with: ".wikipedia.org")
+        c.host = host
         c.fragment = nil
         c.queryItems = c.queryItems?.filter { !$0.name.lowercased().hasPrefix("utm_") && $0.name != "ref" }
         if c.queryItems?.isEmpty == true { c.queryItems = nil }
-        var s = c.string ?? url
-        while s.hasSuffix("/") { s.removeLast() }
-        return s.lowercased()
+        var path = c.path.removingPercentEncoding ?? c.path
+        if host?.hasSuffix("wikipedia.org") == true { path = path.replacingOccurrences(of: " ", with: "_") }
+        while path.hasSuffix("/") { path.removeLast() }
+        let query = c.percentEncodedQuery.map { "?" + $0 } ?? ""
+        return ("https://" + (host ?? "") + path + query).lowercased()
     }
 }
 
@@ -74,12 +85,14 @@ nonisolated struct WikipediaSource: SearchSource {
     var language: String = "de"
     /// Für so viele Top-Artikel wird der volle Klartext geladen.
     var fullArticles: Int = 2
+    /// Abbildungen der Top-Artikel mitladen (Einstellung „Abbildungen aus der Recherche“).
+    var withImages: Bool = true
     var id: ResearchSource { .wikipedia }
 
     func search(_ query: String, limit: Int) async throws -> [SearchHit] {
         let lang = language.isEmpty ? "de" : language
         guard let url = SourceHTTP.url("https://\(lang).wikipedia.org/w/rest.php/v1/search/page",
-                                       ["q": query, "limit": String(max(1, min(limit, 10)))]),
+                                       ["q": ResearchImages.textQuery(query), "limit": String(max(1, min(limit, 10)))]),
               let json = try await SourceHTTP.json(url, userAgent: userAgent) as? [String: Any],
               let pages = json["pages"] as? [[String: Any]] else { return [] }
 
@@ -91,16 +104,43 @@ nonisolated struct WikipediaSource: SearchSource {
             return SearchHit(source: .wikipedia, title: title, url: "https://\(lang).wikipedia.org/wiki/\(path)",
                              snippet: excerpt, rank: index)
         }
-        await withTaskGroup(of: (Int, [String]?).self) { group in
+        await withTaskGroup(of: (Int, [String]?, [PageImage]).self) { group in
             for index in hits.indices.prefix(fullArticles) {
                 let title = hits[index].title
-                group.addTask { (index, try? await Self.article(title: title, lang: lang, userAgent: userAgent)) }
+                let pageURL = hits[index].url
+                group.addTask {
+                    async let blocks = try? Self.article(title: title, lang: lang, userAgent: userAgent)
+                    async let images = withImages
+                        ? Self.mediaImages(title: title, lang: lang, pageURL: pageURL, userAgent: userAgent) : []
+                    return (index, await blocks, await images)
+                }
             }
-            for await (index, blocks) in group where blocks?.isEmpty == false {
-                hits[index].blocks = blocks
+            for await (index, blocks, images) in group {
+                if blocks?.isEmpty == false { hits[index].blocks = blocks }
+                if !images.isEmpty { hits[index].images = images }
             }
         }
         return hits
+    }
+
+    /// Abbildungen eines Artikels über die Medien-Schnittstelle (mit Bildunterschriften).
+    static func mediaImages(title: String, lang: String, pageURL: String,
+                            userAgent: String = SourceHTTP.apiUserAgent) async -> [PageImage] {
+        let path = title.replacingOccurrences(of: " ", with: "_")
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? title
+        guard let url = URL(string: "https://\(lang).wikipedia.org/api/rest_v1/page/media-list/\(path)"),
+              let json = try? await SourceHTTP.json(url, userAgent: userAgent) as? [String: Any],
+              let items = json["items"] as? [[String: Any]] else { return [] }
+        return items.compactMap { item -> PageImage? in
+            guard item["type"] as? String == "image", item["showInGallery"] as? Bool != false,
+                  let srcset = item["srcset"] as? [[String: Any]] else { return nil }
+            let sources = srcset.compactMap { $0["src"] as? String }
+            // Vorschaubilder (…/thumb/…) statt Originale: kleiner und auch für SVG als PNG gerendert.
+            guard let src = sources.last(where: { $0.contains("/thumb/") }) ?? sources.first else { return nil }
+            let caption = ContentExtractor.clean(((item["caption"] as? [String: Any])?["text"] as? String) ?? "")
+            return PageImage(url: src.hasPrefix("//") ? "https:" + src : src, pageURL: pageURL,
+                             caption: String(caption.prefix(300)), alt: "")
+        }
     }
 
     /// Voller Artikeltext ohne Markup (action=query&prop=extracts&explaintext).
@@ -143,7 +183,7 @@ nonisolated struct EuropePMCSource: SearchSource {
 
     func search(_ query: String, limit: Int) async throws -> [SearchHit] {
         guard let url = SourceHTTP.url("https://www.ebi.ac.uk/europepmc/webservices/rest/search", [
-            "query": query + " AND HAS_ABSTRACT:y", "format": "json", "resultType": "core",
+            "query": ResearchImages.textQuery(query) + " AND HAS_ABSTRACT:y", "format": "json", "resultType": "core",
             "pageSize": String(max(1, min(limit, 10))),
         ]), let json = try await SourceHTTP.json(url, userAgent: userAgent) as? [String: Any],
               let results = (json["resultList"] as? [String: Any])?["result"] as? [[String: Any]] else { return [] }
@@ -157,15 +197,28 @@ nonisolated struct EuropePMCSource: SearchSource {
             else if let id = item["id"] as? String, let src = item["source"] as? String { link = "https://europepmc.org/article/\(src)/\(id)" }
             else { return nil }
             let journal = ((item["journalInfo"] as? [String: Any])?["journal"] as? [String: Any])?["title"] as? String
+            let pmcid = (item["isOpenAccess"] as? String == "Y") ? item["pmcid"] as? String : nil
             let abstractBlocks = ContentExtractor.extractHTML("<html><body><p>\(abstract)</p></body></html>", url: link).blocks
             let cleanTitle = ContentExtractor.clean(title.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
             var blocks = ["# " + cleanTitle]
             if let journal { blocks.append("Journal: \(journal)") }
             blocks += abstractBlocks
-            return SearchHit(source: .europePMC, title: cleanTitle, url: link,
-                             snippet: String(abstract.prefix(300)), published: item["firstPublicationDate"] as? String ?? item["pubYear"] as? String,
-                             blocks: blocks, rank: index)
+            var hit = SearchHit(source: .europePMC, title: cleanTitle, url: link,
+                                snippet: String(abstract.prefix(300)), published: item["firstPublicationDate"] as? String ?? item["pubYear"] as? String,
+                                blocks: blocks, rank: index)
+            // Merker für die Abbildungen (Open Access): die PMC-Artikelseite.
+            if let pmcid { hit.figurePage = "https://pmc.ncbi.nlm.nih.gov/articles/\(pmcid)/" }
+            return hit
         }
+    }
+
+    /// Abbildungen samt Legende aus der PMC-Artikelseite (nur Open Access).
+    static func figures(articlePage: String) async -> [PageImage] {
+        guard let url = URL(string: articlePage),
+              let page = try? await WebFetcher(timeout: 15, maxBytes: 6 * 1_048_576).fetch(url) else { return [] }
+        let document = ContentExtractor.extractHTML(ContentExtractor.decode(page.data, encodingName: page.textEncodingName),
+                                                    url: articlePage)
+        return document.images.filter { !$0.caption.isEmpty }
     }
 }
 
@@ -216,6 +269,8 @@ nonisolated struct StackExchangeSource: SearchSource {
             "pagesize": String(max(1, min(limit, 10))), "filter": "withbody",
         ]), let json = try await SourceHTTP.json(url, userAgent: userAgent) as? [String: Any],
               let items = json["items"] as? [[String: Any]] else { return [] }
+        // Stack Exchange verlangt per `backoff` (Sekunden) eine Pause – sonst droht eine Sperre.
+        if let backoff = json["backoff"] as? Int { await HostPacing.shared.pause(host: "api.stackexchange.com", seconds: TimeInterval(backoff)) }
 
         let questions = items.prefix(4)
         let ids = questions.compactMap { $0["question_id"] as? Int }.map(String.init).joined(separator: ";")

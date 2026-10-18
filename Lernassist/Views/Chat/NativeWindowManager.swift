@@ -58,18 +58,20 @@ class NativeWindowManager {
         // Vollbild-Artefakte inkl. SwiftUI-Inhalt) blieb nach dem Schließen dauerhaft im
         // Speicher. Der Token wird jetzt im Handler selbst entfernt und der Window-Capture
         // ist weak.
-        var closeObserver: NSObjectProtocol?
-        closeObserver = NotificationCenter.default.addObserver(
+        // Token in einer Box, damit der Handler ihn nach dem Zuweisen sicher entfernen kann.
+        let box = WindowObserverBox()
+        box.token = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: window, queue: .main
         ) { [weak window] _ in
-            if let window {
-                activeWindows.removeAll { $0 === window }
+            MainActor.assumeIsolated {
+                if let window {
+                    activeWindows.removeAll { $0 === window }
+                }
             }
-            if let closeObserver {
-                NotificationCenter.default.removeObserver(closeObserver)
+            if let token = box.token {
+                NotificationCenter.default.removeObserver(token)
             }
         }
-        _ = closeObserver // Token lebt in der Closure (Remove im Handler), hier nur zur Klarheit
         
         // Zentriere das Fenster auf dem Bildschirm
         window.center()
@@ -81,4 +83,10 @@ class NativeWindowManager {
         // Um sicherzugehen, dass das Fenster auch über der aktuellen App schwebt und nicht im Hintergrund landet
         NSApp.activate(ignoringOtherApps: true)
     }
+}
+
+
+/// Hält den Beobachter-Token, damit der Schließen-Handler ihn nach dem Zuweisen entfernen kann.
+private final class WindowObserverBox: @unchecked Sendable {
+    var token: NSObjectProtocol?
 }

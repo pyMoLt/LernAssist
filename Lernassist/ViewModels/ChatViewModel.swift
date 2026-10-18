@@ -25,6 +25,44 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     /// oder archiviert) landet zuerst hier, bevor es wirklich unwiderruflich wird.
     @Published var trashedSessions: [ChatSession] = []
     @Published var customArchiveFolders: [String] = []
+    /// Aktive Chats nach so vielen Tagen ohne Aktivität archivieren (0 = nie).
+    @Published var autoArchiveDays: Int = 7
+    /// Preserve Thinking: Thinking früherer Antworten unverändert an das Modell zurückgeben.
+    @Published var preserveThinking: Bool = true
+    /// Schwierigkeit der Abfragen im Chat – steht als feste Zeile in den Tool-Regeln.
+    @Published var quizDifficulty: StudyDifficulty = .medium {
+        didSet { ToolRegistry.shared.quizDifficulty = quizDifficulty }
+    }
+    /// Schwierigkeit erzeugter Karteikarten (Generierungs-Auftrag).
+    @Published var flashcardDifficulty: StudyDifficulty = .medium
+    /// Python-Downloads (coding_sandbox → downloads): Größenlimit und dauerhaft erlaubte Domains.
+    @Published var pythonDownloadMaxMB: Int = 25 {
+        didSet { CodingEnvironment.shared.limits.downloadMaxMB = pythonDownloadMaxMB }
+    }
+    @Published var downloadAllowedDomains: [String] = []
+    @Published var pythonInternetEnabled: Bool = true {
+        didSet { CodingEnvironment.shared.limits.internetEnabled = pythonInternetEnabled }
+    }
+    @Published var pythonMaxDownloadsPerRun: Int = 10 {
+        didSet { CodingEnvironment.shared.limits.maxDownloadsPerRun = pythonMaxDownloadsPerRun }
+    }
+    @Published var pythonDownloadTypes: [DownloadFileType] = DownloadFileType.defaults {
+        didSet { CodingEnvironment.shared.limits.downloadTypes = pythonDownloadTypes }
+    }
+    /// Ziel-Behaltensrate der Karteikarten-Wiederholung (FSRS), 0,80–0,97.
+    @Published var flashcardRetention: Double = 0.9
+    /// Einrichtungs-Assistent abgeschlossen.
+    @Published var setupCompleted: Bool = false
+    /// Fehlerlog: falsche Quizantworten und vergessene Karten (siehe MistakeLog.swift).
+    @Published var mistakes: [MistakeEntry] = MistakeStore.load()
+    /// Anzahl fälliger Karteikarten – zwischengespeichert statt bei jedem Neuzeichnen über alle
+    /// Chats inkl. Archiv zu zählen (siehe refreshFlashcardIndex()).
+    @Published var dueFlashcardsCount = 0
+    /// Kurzer Hinweis nach „Als Karte merken“ (mit Rückgängig).
+    @Published var flashcardNotice: FlashcardNotice?
+    /// Zeitpunkte, zu denen Karten fällig werden – für den Zähler ohne Durchlauf aller Chats.
+    var flashcardDueDates: [Date] = []
+    var flashcardRefreshTimer: Timer?
     @Published var activeSessionId: UUID
     @Published var isStreaming: Bool = false {
         didSet {
@@ -103,6 +141,28 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     /// Max. Zeichen, die ein YouTube-Transkript in den Chat-Kontext einbringt.
     @Published var youtubeTranscriptCharLimit: Int = 30_000
 
+    // MARK: - Erweiterte Parameter (Tools, Recherche, Lernen, Modelle, Dokumente)
+    @Published var pythonSandboxTimeout: Double = 150 {
+        didSet { CodingEnvironment.shared.limits.sandboxTimeout = pythonSandboxTimeout }
+    }
+    @Published var pythonMaxOutputCharacters: Int = 10_000 {
+        didSet { CodingEnvironment.shared.limits.maxOutputCharacters = pythonMaxOutputCharacters }
+    }
+    @Published var pythonMaxScriptVersions: Int = 10 {
+        didSet { CodingEnvironment.shared.limits.maxScriptVersions = pythonMaxScriptVersions }
+    }
+    @Published var pythonPlotDpi: Int = 150 {
+        didSet { CodingEnvironment.shared.limits.plotDpi = pythonPlotDpi }
+    }
+    @Published var documentCacheDuration: Double = 600 {
+        didSet { DocumentCache.defaultDuration = documentCacheDuration }
+    }
+    @Published var flashcardAgainDelayMinutes: Int = 10
+    @Published var flashcardCardsPerResponse: Int = 3
+    @Published var titleRefinementTurns: Int = 3
+    @Published var documentImageBudget: Int = 12
+    @Published var inlineExplainRadius: Int = 400
+
     // MARK: - Endpunkt-Profile (Phase 3)
     @Published var profiles: [EndpointProfile] = []
     @Published var activeProfileID: UUID?
@@ -115,8 +175,14 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     @Published var hotkeys: [HotkeyAction: Hotkey] = Dictionary(
         uniqueKeysWithValues: Hotkey.defaultMap.map { ($0.key, $0.value) }
     )
+    /// Live-Telemetrie in einem eigenen ObservableObject: Der 5-Hz-Ticker während des Streamings
+    /// invalidiert so nur die Telemetrie-Kapsel statt der kompletten ChatView.
+    let telemetry = TelemetryStore()
     /// Aktuellste Metriken (Tokens, Tok/s, Cache) aus dem letzten Streaming-Chunk.
-    @Published var currentMetrics: ChatMetrics = .empty
+    var currentMetrics: ChatMetrics {
+        get { telemetry.metrics }
+        set { telemetry.metrics = newValue }
+    }
     /// Statusnachricht für Hintergrund-Jobs (z.B. "Prozessiere Bilder..."), nil wenn inaktiv
     @Published var backgroundJobStatus: String?
     /// LM Studio Verbindungs-/Lade-Status für UI-Badge (nur bei lokalem LM Studio-Profil relevant)
@@ -189,9 +255,17 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     var thinkingBuffer = ""
     var updateTimer: AnyCancellable?
 
-    // Client-seitige TPS-Messung (Fallback wenn Server keine Tok/s liefert)
+    // Client-seitige TPS-Messung & Live-Telemetrie-Sampling (5 Hz)
     var streamStartTime: Date?
     var firstTokenTime: Date?
+    var streamedCharCount: Int = 0
+    var lastSampleCharCount: Int = 0
+    /// Ticks ohne neue Zeichen in Folge (z. B. während oMLX einen Tool-Aufruf puffert).
+    var telemetrySilentTicks = 0
+    /// Gleitendes Zeitfenster für geglättete Live-Tokenrate (letzte 3–5 Sekunden)
+    var rollingTokenSamples: [(time: Date, charCount: Int)] = []
+    /// Gecachte Modell-Listen je Endpunkt-Profil (wird bei Start, Profilwechsel und Ping befüllt).
+    @Published var cachedModelsByProfile: [UUID: [(id: String, contextWindow: Int?)]] = [:]
 
     // Persistenz: Autosave & Termination-Flush
     var autosaveCancellable: AnyCancellable?
@@ -203,6 +277,7 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     var lastAutosavedActiveId: UUID?
     var terminationObserver: Any?
     var themeCancellable: AnyCancellable?
+    var flashcardIndexCancellable: AnyCancellable?
     var contextWindowCancellable: AnyCancellable?
 
     /// Slash-Befehle dieser Instanz (Audit M13): keine geteilte Registry mehr – jede Instanz
@@ -237,13 +312,17 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         setupSlashCommands()
         autoArchiveOldSessions()
         applyAppTheme()
-        themeCancellable = $appTheme.dropFirst().sink { [weak self] _ in self?.applyAppTheme() }
+        // @Published feuert in willSet: den neuen Wert direkt übergeben, sonst wirkt der Wechsel
+        // erst beim zweiten Klick (applyAppTheme würde noch den alten Wert lesen).
+        themeCancellable = $appTheme.dropFirst().removeDuplicates().sink { [weak self] theme in self?.applyAppTheme(theme) }
+        flashcardIndexCancellable = setupFlashcardIndex()
 
         // Kontextfenster-Größe automatisch abfragen statt der festen 8192-Annahme in der
         // MetricsBar: einmal beim Start, danach bei jedem Profilwechsel. Kein manuelles
         // "Modelle laden" in den Settings mehr nötig.
         refreshContextWindowForActiveProfile()
-        contextWindowCancellable = $activeProfileID.dropFirst().sink { [weak self] _ in
+        // Ebenfalls willSet: erst im nächsten Runloop-Durchlauf lesen, sonst trifft es das alte Profil.
+        contextWindowCancellable = $activeProfileID.dropFirst().receive(on: RunLoop.main).sink { [weak self] _ in
             self?.refreshContextWindowForActiveProfile()
         }
 
@@ -331,6 +410,27 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             changedSignal($youtubeSubtitleLanguage),
             changedSignal($youtubeTranscriptCharLimit),
             changedSignal($customArchiveFolders),
+            changedSignal($autoArchiveDays),
+            changedSignal($flashcardRetention),
+            changedSignal($preserveThinking),
+            changedSignal($quizDifficulty),
+            changedSignal($flashcardDifficulty),
+            changedSignal($pythonDownloadMaxMB),
+            changedSignal($downloadAllowedDomains),
+            changedSignal($pythonInternetEnabled),
+            changedSignal($pythonMaxDownloadsPerRun),
+            changedSignal($pythonDownloadTypes),
+            changedSignal($setupCompleted),
+            changedSignal($pythonSandboxTimeout),
+            changedSignal($pythonMaxOutputCharacters),
+            changedSignal($pythonMaxScriptVersions),
+            changedSignal($pythonPlotDpi),
+            changedSignal($documentCacheDuration),
+            changedSignal($flashcardAgainDelayMinutes),
+            changedSignal($flashcardCardsPerResponse),
+            changedSignal($titleRefinementTurns),
+            changedSignal($documentImageBudget),
+            changedSignal($inlineExplainRadius),
         ]
         settingsAutosaveCancellable = Publishers.MergeMany(settingsChanged)
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
@@ -351,7 +451,15 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
                 // Kompakt-Chip nicht veralten lassen (Perf-Audit K3): Der Füllstand gehört zum
                 // jeweils aktiven Chat – ohne diesen Refresh blieb ein Angebot aus einem vollen
                 // Chat nach dem Wechsel auf einen leeren stehen (und "komprimierte" dann den falschen).
-                self.refreshCompactionHint()
+                // willSet: activeSessionId ist hier noch alt → erst danach neu bewerten.
+                DispatchQueue.main.async { self.refreshCompactionHint() }
+                // Telemetrie gehört zur letzten Antwort: In einem anderen (z. B. neuen) Chat
+                // nicht die Werte des vorherigen zeigen. Kontextgröße bleibt (gehört zum Modell).
+                if !self.isStreaming {
+                    var fresh = ChatMetrics.empty
+                    fresh.contextWindowSize = self.currentMetrics.contextWindowSize
+                    self.currentMetrics = fresh
+                }
             }
         // Profil-Änderungen (Endpunkt-URL, API-Key, Parameter, Modell) automatisch sichern.
         // Vorher wurden Edits erst beim Klick auf "Fertig" oder beim App-Beenden persistiert –
@@ -449,6 +557,40 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         let sessionTitle: String
         let setId: UUID
         let setTitle: String
+        var sessionSubject: String? = nil
+    }
+
+    /// Auswahl für „Frei üben“: Quelle und Kartenart. Freies Üben ändert die FSRS-Planung nicht.
+    struct PracticeOptions: Equatable {
+        enum Source: Equatable {
+            case currentChat
+            case all
+            case subjects(Set<String>)
+            case chats(Set<UUID>)
+        }
+        var source: Source = .all
+        var onlyMistakes = false
+        /// nil = alle passenden Karten.
+        var limit: Int? = 20
+    }
+
+    /// Karten für eine freie Übungsrunde, gemischt. `activeSessionId` gilt für `.currentChat`.
+    static func practiceCards(from cards: [DueFlashcard], options: PracticeOptions,
+                              activeSessionId: UUID?) -> [DueFlashcard] {
+        var pool = cards.filter { item in
+            switch options.source {
+            case .currentChat: return item.sessionId == activeSessionId
+            case .all: return true
+            case .subjects(let subjects): return item.sessionSubject.map(subjects.contains) ?? false
+            case .chats(let ids): return ids.contains(item.sessionId)
+            }
+        }
+        if options.onlyMistakes {
+            pool = pool.filter { $0.card.lapses > 0 }
+        }
+        pool.shuffle()
+        if let limit = options.limit { pool = Array(pool.prefix(limit)) }
+        return pool
     }
 
     var allFlashcardsWithContext: [DueFlashcard] {
@@ -458,7 +600,7 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             for set in sets {
                 for card in set.cards {
                     result.append(DueFlashcard(card: card, sessionId: session.id, sessionTitle: session.title,
-                                                setId: set.id, setTitle: set.title))
+                                                setId: set.id, setTitle: set.title, sessionSubject: session.subject))
                 }
             }
         }
@@ -473,7 +615,6 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             .sorted { $0.card.dueDate < $1.card.dueDate }
     }
 
-    var dueFlashcardsCount: Int { dueFlashcards.count }
 
     /// Bewertet eine Karte (Nochmal/Schwer/Gut/Einfach), aktualisiert ihr SRS-Intervall und
     /// persistiert die Änderung – egal ob die Karte zu einem aktiven oder archivierten Chat gehört.
@@ -482,7 +623,14 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             guard let setIdx = sets.firstIndex(where: { $0.id == setId }),
                   let cardIdx = sets[setIdx].cards.firstIndex(where: { $0.id == cardId })
             else { return false }
-            sets[setIdx].cards[cardIdx].applyReview(rating)
+            let before = sets[setIdx].cards[cardIdx]
+            sets[setIdx].cards[cardIdx].applyReview(rating, scheduler: FSRS(desiredRetention: flashcardRetention), againDelayMinutes: flashcardAgainDelayMinutes)
+            // Vergessene Karten (nicht ganz neue) wandern ins Fehlerlog.
+            if rating == .again, !before.isNew {
+                recordMistake(MistakeEntry(kind: .flashcard, sessionId: sessionId,
+                                           subject: (sessions + archivedSessions).first { $0.id == sessionId }?.subject,
+                                           question: before.front, correctAnswer: before.back, flashcardId: before.id))
+            }
             return true
         }
 
@@ -497,10 +645,12 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         }
     }
     
-    /// Archiviert alle aktiven Sessions, deren letzte Aktivität älter als 7 Tage ist
+    /// Archiviert alle aktiven Sessions, deren letzte Aktivität älter als `autoArchiveDays` ist
+    /// (einstellbar unter Erweitert, 0 = nie).
     func autoArchiveOldSessions() {
+        guard autoArchiveDays > 0 else { return }
         let now = Date()
-        let threshold = now.addingTimeInterval(-7 * 24 * 60 * 60) // 7 Tage
+        let threshold = now.addingTimeInterval(-Double(autoArchiveDays) * 24 * 60 * 60)
         
         let toArchive = sessions.filter { session in
             // Neuen, leeren Chat nicht sofort archivieren
@@ -576,6 +726,7 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         for i in 0..<archivedSessions.count {
             if archivedSessions[i].archiveFolder == name {
                 archivedSessions[i].archiveFolder = nil
+                SessionStore.shared.archive(archivedSessions[i]) // Zuordnung auch auf Platte lösen
             }
         }
     }
@@ -593,10 +744,25 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Fach-Etikett setzen oder entfernen (leer = entfernen).
+    func setSubject(id: UUID, subject: String) {
+        let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let idx = sessions.firstIndex(where: { $0.id == id }) {
+            sessions[idx].subject = trimmed.isEmpty ? nil : trimmed
+            sessions[idx].subjectSetByUser = !trimmed.isEmpty
+        } else if let idx = archivedSessions.firstIndex(where: { $0.id == id }) {
+            archivedSessions[idx].subject = trimmed.isEmpty ? nil : trimmed
+            archivedSessions[idx].subjectSetByUser = !trimmed.isEmpty
+            SessionStore.shared.save(archivedSessions[idx], archived: true)
+        }
+    }
+
     func renameSession(id: UUID, newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[idx].title = trimmed
+        // Selbst gewählter Titel wird nicht mehr automatisch nachgeschärft.
+        sessions[idx].titleRefined = true
     }
 
     func createNewChat() {
@@ -653,6 +819,7 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         blockedToolInvocationSignatures.removeAll()
         contentBuffer = ""
         thinkingBuffer = ""
+        currentMetrics.isPrefilling = false
         backgroundJobStatus = nil
     }
     
@@ -715,12 +882,6 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
                 await describeImage(sessionId: sessionId, messageId: userMsgId, base64: b64)
             }
         }
-
-        // Jede Nachricht, die NICHT mehr die aktuell hervorgehobene (letzte) ist, wird für ihren
-        // Bildkontext ein für alle Mal eingefroren – siehe ChatMessage.frozenImageContext für die
-        // Begründung (KV-Cache-Stabilität: ein sich änderndes Prompt-Präfix invalidiert bei
-        // llama.cpp-basierten Servern den kompletten Cache ab dieser Stelle).
-        freezeImageContextForOlderMessages(sessionIdx: idx, excluding: userMsgId)
 
         guard let profile = activeProfile else {
             addSystemMessage(text: "Kein aktives Endpunkt-Profil konfiguriert – bitte in den Einstellungen anlegen.")

@@ -3,11 +3,19 @@ import Foundation
 /// Zentrale Pfade für die lokale Ablage von Einstellungen, Chats und Bildern.
 /// Alles liegt unter `~/Library/Application Support/LernAssist/` – reine JSON-/PNG-Dateien,
 /// bewusst ohne Datenbank, damit es unkompliziert bleibt und einfach zu inspizieren/sichern ist.
-enum AppStorageLocation {
+nonisolated enum AppStorageLocation {
     static let root: URL = {
         // Test-/Demo-Ablage: Mit LERNASSIST_DATA_DIR läuft die App komplett getrennt von den echten Chats.
         if let custom = ProcessInfo.processInfo.environment["LERNASSIST_DATA_DIR"], !custom.isEmpty {
             let dir = URL(fileURLWithPath: custom, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        // Unit-Tests laufen im App-Prozess (Test-Host): nie in die echte Ablage schreiben – sonst
+        // landen Test-Chats und Einstellungen in den Daten des Nutzers.
+        if isRunningUnitTests {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("LernAssist-UnitTests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }
@@ -19,6 +27,13 @@ enum AppStorageLocation {
     }()
 
     static let settingsFile = root.appendingPathComponent("settings.json")
+
+    /// Läuft der Prozess als Host für XCTest?
+    static var isRunningUnitTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+    }
 
     static let sessionsDir: URL = {
         let dir = root.appendingPathComponent("sessions", isDirectory: true)

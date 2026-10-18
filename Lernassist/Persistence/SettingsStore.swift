@@ -62,6 +62,23 @@ struct PersistedSettings: Codable {
     var research: ResearchSettings = ResearchSettings()
     /// coding_sandbox: Python-Pakete ohne Rückfrage installieren.
     var autoInstallPythonPackages: Bool = false
+    /// Aktive Chats nach so vielen Tagen ohne Aktivität archivieren (0 = nie).
+    var autoArchiveDays: Int = 7
+    /// Thinking früherer Antworten an das Modell zurückgeben (Preserve Thinking).
+    var preserveThinking: Bool = true
+    /// Schwierigkeit der Abfragen im Chat und der erzeugten Karteikarten.
+    var quizDifficulty: StudyDifficulty = .medium
+    /// Python-Downloads: Höchstgröße pro Datei und dauerhaft erlaubte Domains.
+    var pythonDownloadMaxMB: Int = 25
+    var pythonInternetEnabled: Bool = true
+    var pythonMaxDownloadsPerRun: Int = 10
+    var pythonDownloadTypes: [DownloadFileType] = DownloadFileType.defaults
+    var downloadAllowedDomains: [String] = []
+    var flashcardDifficulty: StudyDifficulty = .medium
+    /// Ziel-Behaltensrate für die Karteikarten-Wiederholung (FSRS).
+    var flashcardRetention: Double = 0.9
+    /// Einrichtungs-Assistent abgeschlossen (sonst erscheint er beim Start).
+    var setupCompleted: Bool = false
     /// Bevorzugte Untertitel-Sprache für den YouTube-Import (BCP-47-Kurzcode, z.B. "de").
     /// Leer = erste verfügbare Spur.
     var youtubeSubtitleLanguage: String
@@ -72,6 +89,17 @@ struct PersistedSettings: Codable {
     /// in-memory; Ordner tauchten nach Neustart nur rekonstruiert aus Sessions auf, leere
     /// Ordner und ihre Position gingen verloren).
     var customArchiveFolders: [String]
+    // Erweiterte Einstellungen (Timeouts, Budgets, Grenzwerte):
+    var pythonSandboxTimeout: Double = 150
+    var pythonMaxOutputCharacters: Int = 10_000
+    var pythonMaxScriptVersions: Int = 10
+    var pythonPlotDpi: Int = 150
+    var documentCacheDuration: Double = 600
+    var flashcardAgainDelayMinutes: Int = 10
+    var flashcardCardsPerResponse: Int = 3
+    var titleRefinementTurns: Int = 3
+    var documentImageBudget: Int = 12
+    var inlineExplainRadius: Int = 400
 
     static let defaults: PersistedSettings = {
         let local = EndpointProfile(name: "Lokal", baseURL: "http://127.0.0.1:1234", model: "local-model", isRemote: false)
@@ -107,7 +135,17 @@ struct PersistedSettings: Codable {
             compactKeepLastMessages: 2,
             youtubeSubtitleLanguage: "de",
             youtubeTranscriptCharLimit: 30_000,
-            customArchiveFolders: []
+            customArchiveFolders: [],
+            pythonSandboxTimeout: 150,
+            pythonMaxOutputCharacters: 10_000,
+            pythonMaxScriptVersions: 10,
+            pythonPlotDpi: 150,
+            documentCacheDuration: 600,
+            flashcardAgainDelayMinutes: 10,
+            flashcardCardsPerResponse: 3,
+            titleRefinementTurns: 3,
+            documentImageBudget: 12,
+            inlineExplainRadius: 400
         )
     }()
 
@@ -140,7 +178,17 @@ struct PersistedSettings: Codable {
         compactKeepLastMessages: Int = 2,
         youtubeSubtitleLanguage: String = "de",
         youtubeTranscriptCharLimit: Int = 30_000,
-        customArchiveFolders: [String] = []
+        customArchiveFolders: [String] = [],
+        pythonSandboxTimeout: Double = 150,
+        pythonMaxOutputCharacters: Int = 10_000,
+        pythonMaxScriptVersions: Int = 10,
+        pythonPlotDpi: Int = 150,
+        documentCacheDuration: Double = 600,
+        flashcardAgainDelayMinutes: Int = 10,
+        flashcardCardsPerResponse: Int = 3,
+        titleRefinementTurns: Int = 3,
+        documentImageBudget: Int = 12,
+        inlineExplainRadius: Int = 400
     ) {
         self.profiles = profiles
         self.activeProfileID = activeProfileID
@@ -150,7 +198,7 @@ struct PersistedSettings: Codable {
         self.searchEnabled = searchEnabled
         self.searxngURL = searxngURL
         self.maxBrowseCharacters = maxBrowseCharacters
-        self.maxToolRounds = min(max(maxToolRounds, 1), 12)
+        self.maxToolRounds = min(max(maxToolRounds, 1), 25)
         self.keepMultipleImagesInHistory = keepMultipleImagesInHistory
         self.hotkeys = hotkeys
         self.toolStates = toolStates
@@ -171,6 +219,16 @@ struct PersistedSettings: Codable {
         self.youtubeSubtitleLanguage = youtubeSubtitleLanguage
         self.youtubeTranscriptCharLimit = youtubeTranscriptCharLimit
         self.customArchiveFolders = customArchiveFolders
+        self.pythonSandboxTimeout = min(600, max(10, pythonSandboxTimeout))
+        self.pythonMaxOutputCharacters = min(50_000, max(1_000, pythonMaxOutputCharacters))
+        self.pythonMaxScriptVersions = min(50, max(3, pythonMaxScriptVersions))
+        self.pythonPlotDpi = min(300, max(100, pythonPlotDpi))
+        self.documentCacheDuration = min(3600, max(60, documentCacheDuration))
+        self.flashcardAgainDelayMinutes = min(60, max(1, flashcardAgainDelayMinutes))
+        self.flashcardCardsPerResponse = min(5, max(1, flashcardCardsPerResponse))
+        self.titleRefinementTurns = min(10, max(2, titleRefinementTurns))
+        self.documentImageBudget = min(50, max(0, documentImageBudget))
+        self.inlineExplainRadius = min(1200, max(100, inlineExplainRadius))
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -183,7 +241,12 @@ struct PersistedSettings: Codable {
         // Phase H – konfigurierbare Werte der neuen Features:
         case autoCompactSuggestionsEnabled, autoCompactThreshold, youtubeSubtitleLanguage, youtubeTranscriptCharLimit
         case compactSummaryTokens, compactKeepLastMessages, research, autoInstallPythonPackages
-        case customArchiveFolders
+        case customArchiveFolders, autoArchiveDays, flashcardRetention, setupCompleted, preserveThinking
+        case quizDifficulty, flashcardDifficulty
+        case pythonDownloadMaxMB, downloadAllowedDomains
+        case pythonInternetEnabled, pythonMaxDownloadsPerRun, pythonDownloadTypes
+        case pythonSandboxTimeout, pythonMaxOutputCharacters, pythonMaxScriptVersions, pythonPlotDpi, documentCacheDuration
+        case flashcardAgainDelayMinutes, flashcardCardsPerResponse, titleRefinementTurns, documentImageBudget, inlineExplainRadius
         // Legacy (Phase-2-Flachformat):
         case legacyApiEndpoint = "apiEndpoint"
         case legacyApiKey = "apiKey"
@@ -197,7 +260,7 @@ struct PersistedSettings: Codable {
         searchEnabled = try c.decodeIfPresent(Bool.self, forKey: .searchEnabled) ?? false
         searxngURL = try c.decodeIfPresent(String.self, forKey: .searxngURL) ?? PersistedSettings.defaults.searxngURL
         maxBrowseCharacters = try c.decodeIfPresent(Int.self, forKey: .maxBrowseCharacters) ?? 10000
-        maxToolRounds = min(max(try c.decodeIfPresent(Int.self, forKey: .maxToolRounds) ?? 8, 1), 12)
+        maxToolRounds = min(max(try c.decodeIfPresent(Int.self, forKey: .maxToolRounds) ?? 8, 1), 25)
         keepMultipleImagesInHistory = try c.decodeIfPresent(Bool.self, forKey: .keepMultipleImagesInHistory) ?? false
         let defaultHotkeyMap = Dictionary(
             uniqueKeysWithValues: Hotkey.defaultMap.map { ($0.key.rawValue, $0.value) }
@@ -238,9 +301,32 @@ struct PersistedSettings: Codable {
         compactKeepLastMessages = try c.decodeIfPresent(Int.self, forKey: .compactKeepLastMessages) ?? 2
         research = (try? c.decodeIfPresent(ResearchSettings.self, forKey: .research)) ?? ResearchSettings()
         autoInstallPythonPackages = try c.decodeIfPresent(Bool.self, forKey: .autoInstallPythonPackages) ?? false
+        autoArchiveDays = try c.decodeIfPresent(Int.self, forKey: .autoArchiveDays) ?? 7
+        preserveThinking = try c.decodeIfPresent(Bool.self, forKey: .preserveThinking) ?? true
+        quizDifficulty = (try? c.decodeIfPresent(StudyDifficulty.self, forKey: .quizDifficulty)) ?? .medium
+        pythonDownloadMaxMB = min(200, max(1, try c.decodeIfPresent(Int.self, forKey: .pythonDownloadMaxMB) ?? 25))
+        downloadAllowedDomains = try c.decodeIfPresent([String].self, forKey: .downloadAllowedDomains) ?? []
+        pythonInternetEnabled = try c.decodeIfPresent(Bool.self, forKey: .pythonInternetEnabled) ?? true
+        pythonMaxDownloadsPerRun = min(50, max(1, try c.decodeIfPresent(Int.self, forKey: .pythonMaxDownloadsPerRun) ?? 10))
+        pythonDownloadTypes = (try? c.decodeIfPresent([String].self, forKey: .pythonDownloadTypes))
+            .map { $0.compactMap(DownloadFileType.init(rawValue:)) } ?? DownloadFileType.defaults
+        flashcardDifficulty = (try? c.decodeIfPresent(StudyDifficulty.self, forKey: .flashcardDifficulty)) ?? .medium
+        flashcardRetention = min(0.97, max(0.8, try c.decodeIfPresent(Double.self, forKey: .flashcardRetention) ?? 0.9))
+        // Bestehende Installationen (settings.json ohne das Feld, aber mit Profilen) gelten als eingerichtet.
+        setupCompleted = try c.decodeIfPresent(Bool.self, forKey: .setupCompleted) ?? c.contains(.profiles)
         youtubeSubtitleLanguage = try c.decodeIfPresent(String.self, forKey: .youtubeSubtitleLanguage) ?? "de"
         youtubeTranscriptCharLimit = try c.decodeIfPresent(Int.self, forKey: .youtubeTranscriptCharLimit) ?? 30_000
         customArchiveFolders = try c.decodeIfPresent([String].self, forKey: .customArchiveFolders) ?? []
+        pythonSandboxTimeout = min(600, max(10, try c.decodeIfPresent(Double.self, forKey: .pythonSandboxTimeout) ?? 150))
+        pythonMaxOutputCharacters = min(50_000, max(1_000, try c.decodeIfPresent(Int.self, forKey: .pythonMaxOutputCharacters) ?? 10_000))
+        pythonMaxScriptVersions = min(50, max(3, try c.decodeIfPresent(Int.self, forKey: .pythonMaxScriptVersions) ?? 10))
+        pythonPlotDpi = min(300, max(100, try c.decodeIfPresent(Int.self, forKey: .pythonPlotDpi) ?? 150))
+        documentCacheDuration = min(3600, max(60, try c.decodeIfPresent(Double.self, forKey: .documentCacheDuration) ?? 600))
+        flashcardAgainDelayMinutes = min(60, max(1, try c.decodeIfPresent(Int.self, forKey: .flashcardAgainDelayMinutes) ?? 10))
+        flashcardCardsPerResponse = min(5, max(1, try c.decodeIfPresent(Int.self, forKey: .flashcardCardsPerResponse) ?? 3))
+        titleRefinementTurns = min(10, max(2, try c.decodeIfPresent(Int.self, forKey: .titleRefinementTurns) ?? 3))
+        documentImageBudget = min(50, max(0, try c.decodeIfPresent(Int.self, forKey: .documentImageBudget) ?? 12))
+        inlineExplainRadius = min(1200, max(100, try c.decodeIfPresent(Int.self, forKey: .inlineExplainRadius) ?? 400))
 
         if let decodedProfiles = try c.decodeIfPresent([EndpointProfile].self, forKey: .profiles), !decodedProfiles.isEmpty {
             profiles = decodedProfiles
@@ -292,6 +378,27 @@ struct PersistedSettings: Codable {
         try c.encode(youtubeSubtitleLanguage, forKey: .youtubeSubtitleLanguage)
         try c.encode(youtubeTranscriptCharLimit, forKey: .youtubeTranscriptCharLimit)
         try c.encode(customArchiveFolders, forKey: .customArchiveFolders)
+        try c.encode(autoArchiveDays, forKey: .autoArchiveDays)
+        try c.encode(preserveThinking, forKey: .preserveThinking)
+        try c.encode(quizDifficulty, forKey: .quizDifficulty)
+        try c.encode(pythonDownloadMaxMB, forKey: .pythonDownloadMaxMB)
+        try c.encode(downloadAllowedDomains, forKey: .downloadAllowedDomains)
+        try c.encode(pythonInternetEnabled, forKey: .pythonInternetEnabled)
+        try c.encode(pythonMaxDownloadsPerRun, forKey: .pythonMaxDownloadsPerRun)
+        try c.encode(pythonDownloadTypes.map(\.rawValue), forKey: .pythonDownloadTypes)
+        try c.encode(flashcardDifficulty, forKey: .flashcardDifficulty)
+        try c.encode(flashcardRetention, forKey: .flashcardRetention)
+        try c.encode(setupCompleted, forKey: .setupCompleted)
+        try c.encode(pythonSandboxTimeout, forKey: .pythonSandboxTimeout)
+        try c.encode(pythonMaxOutputCharacters, forKey: .pythonMaxOutputCharacters)
+        try c.encode(pythonMaxScriptVersions, forKey: .pythonMaxScriptVersions)
+        try c.encode(pythonPlotDpi, forKey: .pythonPlotDpi)
+        try c.encode(documentCacheDuration, forKey: .documentCacheDuration)
+        try c.encode(flashcardAgainDelayMinutes, forKey: .flashcardAgainDelayMinutes)
+        try c.encode(flashcardCardsPerResponse, forKey: .flashcardCardsPerResponse)
+        try c.encode(titleRefinementTurns, forKey: .titleRefinementTurns)
+        try c.encode(documentImageBudget, forKey: .documentImageBudget)
+        try c.encode(inlineExplainRadius, forKey: .inlineExplainRadius)
     }
 }
 

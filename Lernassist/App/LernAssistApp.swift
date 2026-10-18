@@ -57,6 +57,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var cancellables = Set<AnyCancellable>()
     /// Fenster des Berechtigungs-Assistenten (erster Start + erneut über Einstellungen).
     var permissionOnboardingWindow: NSWindow?
+    /// Fenster des Einrichtungs-Assistenten (erster Start + Einstellungen → Erweitert).
+    var setupAssistantWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let vm = ChatViewModel()
@@ -67,6 +69,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // App gar keine eigene System-Menüleiste zeigt (activation policy .accessory).
         setupMainMenu()
         setupGlobalKeyboardShortcutFallback()
+        ScrollChaining.shared.install()
 
         // Dock-Icon (isMenuBarApp) und Menüleisten-Symbol (showMenuBarIcon) sind bewusst zwei
         // unabhängige Einstellungen – vorher war das Menüleisten-Symbol zwingend an "kein
@@ -152,9 +155,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Hotkey still nichts tut. „Fertig“ merkt sich den Abschluss; „Später“ zeigt das
         // Fenster beim nächsten Start erneut. Auch jederzeit aus den Einstellungen reopenbar.
         // „Später“ pausiert den Assistenten 14 Tage statt ihn bei jedem Start zu zeigen.
+        // Neue Installation: Einrichtungs-Assistent (enthält auch die Berechtigungen).
+        // Bestehende Installationen: wie bisher nur der Berechtigungs-Assistent.
         let snoozedUntil = UserDefaults.standard.object(forKey: "permissionOnboardingSnoozedUntil") as? Date ?? .distantPast
-        if !UserDefaults.standard.bool(forKey: "hasCompletedPermissionOnboarding"), snoozedUntil < Date() {
+        if !vm.setupCompleted, snoozedUntil < Date() {
+            showSetupAssistant()
+        } else if !UserDefaults.standard.bool(forKey: "hasCompletedPermissionOnboarding"), snoozedUntil < Date() {
             showPermissionOnboarding()
+        }
+        NotificationCenter.default.addObserver(forName: .showSetupAssistant, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showSetupAssistant() }
         }
 
         // Debug-Affordance (Layout-Reproduktion): Lernassist --open-settings-tab=<Tab>
@@ -162,8 +172,47 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // automatisierte UI-Tests und Reproduktion von Tab-spezifischen Layout-Bugs.
         if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--open-settings-tab=") }) {
             let tab = String(arg.dropFirst("--open-settings-tab=".count))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 NotificationCenter.default.post(name: .openSettingsRequested, object: nil, userInfo: ["tab": tab])
+            }
+        }
+        if let arg = CommandLine.arguments.first(where: { $0.hasPrefix("--select-session=") }) {
+            let query = String(arg.dropFirst("--select-session=".count)).lowercased()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak vm] in
+                guard let vm else { return }
+                if let match = vm.sessions.first(where: { $0.title.lowercased().contains(query) }) {
+                    vm.activeSessionId = match.id
+                }
+            }
+        }
+        if CommandLine.arguments.contains("--welcome") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak vm] in
+                vm?.activeSessionId = UUID()
+            }
+        }
+        if CommandLine.arguments.contains("--mock-telemetry") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak vm] in
+                guard let vm else { return }
+                vm.currentMetrics = ChatMetrics(
+                    promptTokens: 1840,
+                    completionTokens: 512,
+                    cachedTokens: 920,
+                    tokensPerSecond: 68.4,
+                    prefillTokensPerSecond: 418.0,
+                    timeToFirstToken: 0.42,
+                    totalDuration: 7.9,
+                    contextWindowSize: 32768,
+                    isPrefilling: false,
+                    prefillElapsed: 0.42,
+                    tpsHistory: [48, 55, 61, 64, 63, 66, 69, 71, 68, 65, 67, 70, 72, 69, 66, 68, 71, 69, 67, 68.4]
+                )
+                for p in vm.profiles where (vm.cachedModelsByProfile[p.id] ?? []).isEmpty {
+                    vm.cachedModelsByProfile[p.id] = [
+                        (id: p.model, contextWindow: p.contextSizeOverride ?? 32768),
+                        (id: "Qwen3-30B-A3B-Instruct-8bit", contextWindow: 32768),
+                        (id: "Qwen2.5-VL-7B-Instruct-8bit", contextWindow: 16384)
+                    ]
+                }
             }
         }
         // Debug-Affordance (Erweitert-Hang-Reproduktion): --settings-then-tab=<Tab> öffnet die
@@ -218,6 +267,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             panel.setFrame(frame, display: true)
             step += 1
         }
+    }
+
+    // MARK: - Einrichtungs-Assistent
+
+    func showSetupAssistant() {
+        guard let viewModel else { return }
+        if let existing = setupAssistantWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "LernAssist einrichten"
+        window.isReleasedWhenClosed = false
+        window.level = .floating
+        window.isMovableByWindowBackground = false
+        window.center()
+        window.contentView = NSHostingView(rootView: SetupAssistantView(viewModel: viewModel) { [weak self] in
+            self?.setupAssistantWindow?.orderOut(nil)
+            // „Später“ ohne Abschluss: in zwei Wochen erneut fragen.
+            if self?.viewModel?.setupCompleted != true {
+                UserDefaults.standard.set(Date().addingTimeInterval(14 * 86_400), forKey: "permissionOnboardingSnoozedUntil")
+            }
+        })
+        setupAssistantWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Berechtigungs-Assistent
@@ -279,9 +356,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(withTitle: "Über LernAssist", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
+        let settingsItem = appMenu.addItem(withTitle: "Einstellungen …", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "LernAssist ausblenden", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "Andere ausblenden", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Alle einblenden", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "LernAssist beenden", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        // Ablage: Fenster zurückholen (das Panel ist sonst nur per Hotkey/Dock erreichbar) und
+        // neuer Chat per ⌘N.
+        let fileMenuItem = NSMenuItem()
+        mainMenu.addItem(fileMenuItem)
+        let fileMenu = NSMenu(title: "Ablage")
+        fileMenuItem.submenu = fileMenu
+        let newChat = fileMenu.addItem(withTitle: "Neuer Chat", action: #selector(newChatFromMenu), keyEquivalent: "n")
+        newChat.target = self
+        let showItem = fileMenu.addItem(withTitle: "LernAssist-Fenster zeigen", action: #selector(showWindowFromMenu), keyEquivalent: "0")
+        showItem.target = self
 
         // Bearbeiten-Menü: OHNE dieses Menü brechen Cmd+C/V/X/A/Z in JEDEM Textfeld der App
         // komplett – AppKit routet diese Standard-Editierbefehle über die Key-Equivalents der
@@ -324,11 +418,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// In beiden Fällen wird der Event durch `return nil` konsumiert, damit er nicht zusätzlich
     /// noch über das Bearbeiten-Menü ein zweites Mal verarbeitet wird (kein Doppel-Paste).
     func setupGlobalKeyboardShortcutFallback() {
-        localKeyboardShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        localKeyboardShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard event.modifierFlags.contains(.command) else { return event }
             switch event.charactersIgnoringModifiers?.lowercased() {
             case "q":
                 NSApp.terminate(nil)
+                return nil
+            case "n" where !event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.option):
+                self?.newChatFromMenu()
+                return nil
+            case "," where !event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.option):
+                self?.openSettingsFromMenu()
                 return nil
             case "v":
                 NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
@@ -648,6 +748,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc func showWindowFromMenu() { showWindow() }
+
+    @objc func openSettingsFromMenu() {
+        showWindow()
+        NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
+    }
+
+    @objc func newChatFromMenu() {
+        showWindow()
+        viewModel?.createNewChat()
+    }
+
     func showWindow() {
         guard let window else { return }
         window.makeKeyAndOrderFront(nil)
@@ -676,6 +788,8 @@ extension Notification.Name {
     static let studyDocumentRequested     = Notification.Name("StudyDocumentRequested")
     /// Öffnet den Berechtigungs-Assistenten (Erweitert-Tab; erster Start macht das automatisch).
     static let showPermissionOnboarding  = Notification.Name("ShowPermissionOnboarding")
+    /// Öffnet den Einrichtungs-Assistenten (Einstellungen → Erweitert).
+    static let showSetupAssistant = Notification.Name("ShowSetupAssistant")
     /// Schließt das Settings-Scene-Redirect-Fenster zuverlässig (Cmd+,).
     static let closeSettingsRedirectWindow = Notification.Name("CloseSettingsRedirectWindow")
     /// Debug (Erweitert-Hang-Reproduktion): schaltet das offene Settings-Sheet auf einen Tab.

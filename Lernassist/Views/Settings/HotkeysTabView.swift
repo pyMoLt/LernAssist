@@ -8,24 +8,31 @@ struct HotkeysTabView: View {
     @ObservedObject var viewModel: ChatViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xl) {
-            settingsSection(icon: "keyboard", title: "Tastenkombinationen") {
+        VStack(alignment: .leading, spacing: DS.Space.l) {
+            settingsSection(
+                icon: "keyboard.fill",
+                title: "Globale Tastenkürzel",
+                tint: DS.Accent.rose,
+                trailing: {
+                    Button("Auf Standard zurücksetzen") {
+                        for action in HotkeyAction.allCases {
+                            if let def = Hotkey.defaultMap[action] {
+                                viewModel.updateHotkey(def, for: action)
+                            }
+                        }
+                    }
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
+                }
+            ) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
-                    Text("Drücke auf ein Feld und halte danach die gewünschte Tastenkombination gedrückt.")
+                    Text("Klicke auf ein Kürzel-Feld und drücke die gewünschte Tastenkombination (mindestens ⌘, ⌥ oder ⌃).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .padding(.bottom, 4)
 
-                    ForEach(HotkeyAction.allCases) { action in
-                        Divider()
+                    ForEach(Array(HotkeyAction.allCases.enumerated()), id: \.element.id) { idx, action in
+                        if idx > 0 { SettingsHairline() }
                         HotkeyRow(action: action, viewModel: viewModel)
-                    }
-                }
-            }
-
-            Button("Alle zurücksetzen", role: .destructive) {
-                for action in HotkeyAction.allCases {
-                    if let def = Hotkey.defaultMap[action] {
-                        viewModel.updateHotkey(def, for: action)
                     }
                 }
             }
@@ -39,10 +46,6 @@ private struct HotkeyRow: View {
     let action: HotkeyAction
     @ObservedObject var viewModel: ChatViewModel
 
-    /// Name einer ANDEREN Aktion mit identischem Hotkey, falls vorhanden. GlobalHotkeyManager
-    /// verwirft eine solche Kollision beim Registrieren still (nur eine Aktion "gewinnt") – vorher
-    /// gab es dafür keinerlei sichtbaren Hinweis in der UI, obwohl settings.json beide Werte klaglos
-    /// speichert und es so aussieht, als wäre die Zuweisung erfolgreich.
     private var collidingActionName: String? {
         guard let mine = viewModel.hotkeys[action], mine.hasModifiers else { return nil }
         return HotkeyAction.allCases.first { other in
@@ -51,34 +54,31 @@ private struct HotkeyRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Label(action.label, systemImage: action.icon)
-                    .frame(width: 220, alignment: .leading)
-                    .help(action.hint ?? "")
-
-                Spacer()
-
+        VStack(alignment: .leading, spacing: 4) {
+            SettingsRow(
+                title: action.label,
+                subtitle: action.hint,
+                icon: action.icon,
+                tint: DS.Accent.indigo
+            ) {
                 HotkeyRecorderField(
                     current: viewModel.hotkeys[action] ?? Hotkey(keyCode: -1, modifiers: 0),
                     onRecorded: { viewModel.updateHotkey($0, for: action) }
                 )
+                .frame(width: 140, height: 28)
             }
 
             if let collidingActionName {
-                Text("⚠️ Kollidiert mit „\(collidingActionName)“ – nur eine der beiden Aktionen wird tatsächlich ausgelöst.")
+                Text("⚠️ Kollidiert mit „\(collidingActionName)“ – nur eine der beiden Aktionen wird ausgelöst.")
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(DS.Accent.amber)
             }
         }
-        .padding(.vertical, 4)
     }
 }
 
 // MARK: - Recorder-Feld (NSViewRepresentable)
 
-/// Ein NSTextField-Wrapper, der Tastenereignisse abfängt und als Hotkey interpretiert.
-/// Kein Polling, kein Timer — einzig ein `becomeFirstResponder`-gesteuerter keyDown-Handler.
 struct HotkeyRecorderField: NSViewRepresentable {
     var current: Hotkey
     var onRecorded: (Hotkey) -> Void
@@ -119,11 +119,12 @@ final class HotkeyTextField: NSTextField {
         isEditable = false
         isSelectable = false
         alignment = .center
-        font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-        isBordered = true
-        bezelStyle = .roundedBezel
+        font = .monospacedSystemFont(ofSize: 12.5, weight: .semibold)
+        isBordered = false
+        drawsBackground = false
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = 8
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.07).cgColor
     }
 
     // Klick → Aufnahme-Modus starten

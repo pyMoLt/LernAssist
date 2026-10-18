@@ -242,6 +242,17 @@ nonisolated struct EndpointProfile: Identifiable, Codable, Equatable, Sendable {
         self.backgroundJobModelLMStudioId = backgroundJobModelLMStudioId
     }
 
+    /// Kopie mit fester ID (z. B. Einrichtungs-Assistent: Entwurf testen, dann übernehmen).
+    init(copying other: EndpointProfile, id: UUID) {
+        self.init(id: id, name: other.name, baseURL: other.baseURL, apiKey: other.apiKey, model: other.model,
+                  params: other.params, isRemote: other.isRemote, contextSizeOverride: other.contextSizeOverride,
+                  provider: other.provider, backgroundJobModel: other.backgroundJobModel,
+                  lmStudioModelId: other.lmStudioModelId, backgroundJobModelLMStudioId: other.backgroundJobModelLMStudioId)
+        requestTimeout = other.requestTimeout
+        thinkingMode = other.thinkingMode
+        thinkingBudget = other.thinkingBudget
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id, name, baseURL, apiKey, model, params, isRemote, contextSizeOverride
         case provider, useNativeMetricsEndpoint, backgroundJobModel
@@ -254,9 +265,9 @@ nonisolated struct EndpointProfile: Identifiable, Codable, Equatable, Sendable {
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         baseURL = try c.decode(String.self, forKey: .baseURL)
-        apiKey = try c.decode(String.self, forKey: .apiKey)
+        apiKey = try c.decodeIfPresent(String.self, forKey: .apiKey) ?? ""
         model = try c.decode(String.self, forKey: .model)
-        params = try c.decode(ModelParams.self, forKey: .params)
+        params = (try? c.decodeIfPresent(ModelParams.self, forKey: .params)) ?? .empty
         isRemote = try c.decode(Bool.self, forKey: .isRemote)
         contextSizeOverride = try c.decodeIfPresent(Int.self, forKey: .contextSizeOverride)
         backgroundJobModel = try c.decodeIfPresent(String.self, forKey: .backgroundJobModel) ?? ""
@@ -325,8 +336,8 @@ nonisolated struct EndpointProfile: Identifiable, Codable, Equatable, Sendable {
         return p
     }
 
-    /// „oMLX remote“: oMLX auf dem MacBook Pro über Tailscale (MagicDNS `macbook-pro`).
-    static func omlxRemote(host: String = "macbook-pro") -> EndpointProfile {
+    /// „oMLX remote“: oMLX auf einem anderen Rechner im Netzwerk (z. B. per Tailscale-Hostname).
+    static func omlxRemote(host: String = "server") -> EndpointProfile {
         var p = EndpointProfile(name: "oMLX remote", baseURL: "http://\(host):8072",
                                 model: recommendedOMLXModel, params: qwenThinkingParams,
                                 isRemote: true, provider: .omlx)
@@ -342,7 +353,7 @@ nonisolated struct EndpointProfile: Identifiable, Codable, Equatable, Sendable {
         ("Ollama (lokal)",       .ollama,            "http://localhost:11434",         "llama3.2"),
         ("MLX (lokal)",          .mlx,               "http://localhost:8080",          "mlx-community/Llama-3.2-3B-Instruct-4bit"),
         ("oMLX lokal",           .omlx,              "http://127.0.0.1:8072",          recommendedOMLXModel),
-        ("oMLX remote (Tailscale)", .omlx,           "http://macbook-pro:8072",        recommendedOMLXModel),
+        ("oMLX remote",             .omlx,           "http://server:8072",             recommendedOMLXModel),
         ("OpenAI",               .openAICompatible,  "https://api.openai.com",        "gpt-4o"),
         ("Groq",                 .openAICompatible,  "https://api.groq.com/openai",   "llama-3.3-70b-versatile"),
         ("Together AI",          .openAICompatible,  "https://api.together.ai",       "meta-llama/Llama-3.3-70B-Instruct-Turbo"),

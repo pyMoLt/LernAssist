@@ -31,67 +31,21 @@ struct InputArea: View {
     private let maxInputHeight: CGFloat = 160
 
     var body: some View {
-        VStack(spacing: 8) {
-            // Screenshot-Vorschau – Klick öffnet das Markup-Tool (Kreise/Pfeile/Rechtecke
-            // einzeichnen), OHNE den schnellen "Screenshot → Chat"-Weg zu verändern: Der
-            // Screenshot landet weiterhin sofort unkommentiert hier und kann direkt gesendet
-            // werden; Markup ist ein rein optionaler Zwischenschritt auf Wunsch.
-            if let image = lastCapturedImage {
-                HStack(alignment: .top, spacing: DS.Space.s) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 72)
-                        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                                .stroke(DS.Ink.hairline, lineWidth: 0.5)
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture { isShowingMarkup = true }
-                        .accessibilityLabel("Screenshot-Vorschau")
-                        .accessibilityAddTraits(.isButton)
-                        .help("Klicken zum Markieren (Kreise, Pfeile, Rechtecke)")
-                    GlassEffectContainer(spacing: DS.Space.xs) {
-                        VStack(spacing: DS.Space.xs) {
-                            Button { isShowingMarkup = true } label: {
-                                Image(systemName: "pencil.tip.crop.circle")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.circle)
-                            .help("Markieren oder Ausschnitt wählen")
-                            .accessibilityLabel("Screenshot markieren")
-                            Button { lastCapturedImage = nil } label: {
-                                Image(systemName: "xmark")
-                                    .frame(width: 24, height: 24)
-                            }
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.circle)
-                            .help("Screenshot entfernen")
-                            .accessibilityLabel("Screenshot entfernen")
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.top, 8)
-            }
-            
-            // Warteschlange: Folgefragen/Screenshots, die während der laufenden Generierung
-            // abgeschickt wurden und automatisch nachgereicht werden, sobald diese fertig ist.
+        VStack(spacing: 6) {
+            // Warteschlange: Folgefragen/Screenshots während laufender Generierung
             if !viewModel.queuedMessages.isEmpty {
                 HStack {
                     Button(action: { showQueuedMessages.toggle() }) {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 5) {
                             Image(systemName: "text.badge.plus")
+                                .font(.system(size: 11, weight: .semibold))
                             Text("\(viewModel.queuedMessages.count) in Warteschlange")
-                                .font(.caption)
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         }
-                        .padding(.horizontal, 8)
+                        .foregroundStyle(DS.Accent.brand)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(DS.Ink.accent.opacity(0.12))
-                        .cornerRadius(6)
+                        .background(Capsule().fill(DS.Accent.brand.opacity(0.12)))
                     }
                     .buttonStyle(.plain)
                     .help("Wartende Nachrichten anzeigen")
@@ -103,163 +57,250 @@ struct InputArea: View {
                     }
                     Spacer()
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, DS.Space.xl)
             }
 
             // Document Processing Status
             if docProcessor.currentStatus.isProcessing {
-                HStack {
+                HStack(spacing: 8) {
                     ProgressView()
-                        .scaleEffect(0.5)
+                        .scaleEffect(0.55)
                         .frame(width: 16, height: 16)
                     Text(docProcessor.currentStatus.statusText)
-                        .font(.caption)
+                        .font(.system(size: 11.5, design: .rounded))
                         .foregroundStyle(.secondary)
                     Spacer()
                     if docProcessor.currentStatus.estimatedTokens > 0 {
                         Text("~ \(docProcessor.currentStatus.estimatedTokens) Tokens")
-                            .font(.caption)
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, DS.Space.xl)
             }
 
-            HStack(spacing: 10) {
-                // Screenshot-Button (GUI-Neubau: Glas-Kreis statt flacher Button)
-                Button(action: capture) {
-                    Image(systemName: "camera.viewfinder")
-                        .symbolEffect(.bounce, value: lastCapturedImage != nil)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular, in: Circle())
-                .help("Screenshot aufnehmen (Interaktiv)")
-                .accessibilityLabel("Screenshot aufnehmen")
-                .disabled(docProcessor.currentStatus.isProcessing)
-                
-                // Datei-Button (Büroklammer, Glas-Kreis)
-                Button(action: { showFilePicker = true }) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular, in: Circle())
-                .help("Datei hochladen (PDF, TXT, MD)")
-                .accessibilityLabel("Datei anhängen")
-                .disabled(viewModel.isStreaming || docProcessor.currentStatus.isProcessing)
-                .fileImporter(
-                    isPresented: $showFilePicker,
-                    allowedContentTypes: Self.allowedDocumentTypes,
-                    allowsMultipleSelection: true
-                ) { result in
-                    switch result {
-                    case .success(let urls):
-                        processFiles(urls)
-                    case .failure(let error):
-                        AppLog.ui.error("Fehler beim Dateiauswählen: \(error.localizedDescription)")
+            // Slash-Befehle: eingebettete Vorschlagsliste direkt über der Eingabe (statt Popover,
+            // das auf macOS bei sofort gesetztem Text mit Höhe 0 erschien).
+            if showSlashCommands && !matchedCommands.isEmpty {
+                SlashCommandList(
+                    commands: matchedCommands,
+                    selectedIndex: $selectedCommandIndex,
+                    onSelect: { cmd in insertCommand(cmd) }
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                        .fill(DS.Surface.pill)
+                        .shadow(color: .black.opacity(0.08), radius: 10, y: 3)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
+                        .stroke(DS.Ink.hairline, lineWidth: 0.75)
+                )
+                .padding(.horizontal, DS.Space.xl)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
+            // ── Einheitliche, schwebende Composer-Insel ──────────────────────
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                // Integrierte Screenshot-Vorschau oben in der Composer-Insel
+                if let image = lastCapturedImage {
+                    HStack(alignment: .top, spacing: DS.Space.s) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(height: 68)
+                            .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
+                                    .stroke(DS.Ink.hairline, lineWidth: 0.75)
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { isShowingMarkup = true }
+                            .accessibilityLabel("Screenshot-Vorschau")
+                            .accessibilityAddTraits(.isButton)
+                            .help("Klicken zum Markieren (Kreise, Pfeile, Rechtecke)")
+
+                        VStack(spacing: 5) {
+                            Button { isShowingMarkup = true } label: {
+                                Image(systemName: "pencil.tip.crop.circle")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(DS.Accent.brand)
+                                    .frame(width: 26, height: 26)
+                                    .background(Circle().fill(DS.Accent.brand.opacity(0.12)))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Markieren oder Ausschnitt wählen")
+                            .accessibilityLabel("Screenshot markieren")
+
+                            Button { lastCapturedImage = nil } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 26, height: 26)
+                                    .background(Circle().fill(DS.Surface.control))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Screenshot entfernen")
+                            .accessibilityLabel("Screenshot entfernen")
+                        }
+                        Spacer()
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 4)
                 }
 
-                // Ein NSTextView bricht lange Zeilen zuverlässig um. TextField(axis: .vertical)
-                // blieb in diesem NSPanel trotz ScrollView einzeilig und scrollte den Text
-                // horizontal. Der Editor misst seine umbrochene Texthöhe, wächst bis maxInputHeight
-                // und bekommt danach einen nativen vertikalen Scrollbalken.
-                ZStack(alignment: .topLeading) {
-                    GrowingTextEditor(
-                        text: $inputText,
-                        height: $inputFieldHeight,
-                        minHeight: minInputHeight,
-                        maxHeight: maxInputHeight,
-                        onSubmit: handleInputSubmit
-                    )
-                    if inputText.isEmpty {
-                        Text("Frage stellen oder Screenshot senden...")
-                            .font(.system(size: NSFont.systemFontSize))
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 3)
-                            .padding(.top, 4)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .frame(height: min(max(inputFieldHeight, minInputHeight), maxInputHeight))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, DS.Space.m)
-                    .padding(.vertical, DS.Space.s)
-                    // Composer als Liquid-Glass-Fläche (Phase G): Der Composer ist Steuerfläche,
-                    // nicht Content – genau dort gehört Glass hin.
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: DS.Radius.extraLarge, style: .continuous))
-                    .onChange(of: inputText) { newValue in
-                        if newValue.hasPrefix("/") {
-                            matchedCommands = viewModel.slashCommandRegistry.matching(prefix: newValue)
-                            showSlashCommands = !matchedCommands.isEmpty
-                            selectedCommandIndex = 0
-                        } else {
-                            showSlashCommands = false
+                // Haupt-Eingabezeile: Kamera + Anhang links integriert, Textfeld mittig, Senden/Stopp rechts integriert
+                HStack(alignment: .bottom, spacing: 6) {
+                    HStack(spacing: 2) {
+                        ComposerIconButton(
+                            systemImage: "camera.viewfinder",
+                            help: "Screenshot aufnehmen (Interaktiv)",
+                            accessibilityLabel: "Screenshot aufnehmen",
+                            tint: DS.Accent.brand,
+                            disabled: docProcessor.currentStatus.isProcessing,
+                            action: capture
+                        )
+
+                        ComposerIconButton(
+                            systemImage: "paperclip",
+                            help: "Datei hochladen (PDF, TXT, MD)",
+                            accessibilityLabel: "Datei anhängen",
+                            tint: DS.Accent.blue,
+                            disabled: viewModel.isStreaming || docProcessor.currentStatus.isProcessing,
+                            action: { showFilePicker = true }
+                        )
+                        .fileImporter(
+                            isPresented: $showFilePicker,
+                            allowedContentTypes: Self.allowedDocumentTypes,
+                            allowsMultipleSelection: true
+                        ) { result in
+                            switch result {
+                            case .success(let urls):
+                                processFiles(urls)
+                            case .failure(let error):
+                                AppLog.ui.error("Fehler beim Dateiauswählen: \(error.localizedDescription)")
+                            }
                         }
                     }
-                    .popover(isPresented: $showSlashCommands, attachmentAnchor: .point(.top), arrowEdge: .top) {
-                        SlashCommandList(
-                            commands: matchedCommands,
-                            selectedIndex: $selectedCommandIndex,
-                            onSelect: { cmd in
-                                inputText = "/" + cmd.id + " "
-                                showSlashCommands = false
-                            }
+                    .padding(.bottom, 1)
+
+                    ZStack(alignment: .topLeading) {
+                        GrowingTextEditor(
+                            text: $inputText,
+                            height: $inputFieldHeight,
+                            minHeight: minInputHeight,
+                            maxHeight: maxInputHeight,
+                            onSubmit: handleInputSubmit,
+                            onCommand: handleEditorCommand
                         )
+                        // Graue Parameter-Platzhalter hinter dem eingefügten Befehl („/quiz ▏[Anzahl] …“).
+                        // Gleiche Schrift und Einrückung wie das Textfeld, damit der Hinweis direkt
+                        // hinter der Einfügemarke steht; verschwindet Stück für Stück beim Tippen.
+                        if let hint = parameterGhost {
+                            (Text(inputText).foregroundColor(.clear) + Text(hint).foregroundColor(Color(nsColor: .tertiaryLabelColor)))
+                                .font(Font(NSFont.systemFont(ofSize: NSFont.systemFontSize)))
+                                .lineLimit(1)
+                                .padding(.leading, GrowingTextEditor.textInset.width + GrowingTextEditor.linePadding)
+                                .padding(.top, GrowingTextEditor.textInset.height)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                        if inputText.isEmpty {
+                            Text("Frage stellen oder Screenshot senden…")
+                                .font(.system(size: 13.5, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 4)
+                                .padding(.top, 3)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(height: min(max(inputFieldHeight, minInputHeight), maxInputHeight))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 3)
+                    .onChange(of: inputText) { _, newValue in
+                        // Vorschläge nur, solange der Befehlsname getippt wird (bis zum ersten Leerzeichen).
+                        if newValue.hasPrefix("/"), !newValue.contains(" ") {
+                            let matches = viewModel.slashCommandRegistry.matching(prefix: newValue)
+                            withAnimation(.snappy(duration: 0.18)) {
+                                matchedCommands = matches
+                                showSlashCommands = !matchedCommands.isEmpty
+                            }
+                            selectedCommandIndex = 0
+                        } else if showSlashCommands {
+                            withAnimation(.snappy(duration: 0.18)) { showSlashCommands = false }
+                        }
                     }
                     .disabled(docProcessor.currentStatus.isProcessing)
 
-                // Senden / Stopp / Zur Warteschlange hinzufügen
-                if viewModel.isStreaming {
-                    Button(action: cancel) {
-                        Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(.red).interactive(), in: Circle())
-                    .help("Generierung abbrechen")
-                    .accessibilityLabel("Generierung abbrechen")
-                }
+                    // Rechts in der Kapsel: Stopp / Queue / Senden
+                    HStack(spacing: 6) {
+                        if viewModel.isStreaming {
+                            Button(action: cancel) {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 30, height: 30)
+                                    .background(Circle().fill(DS.Accent.rose))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Generierung abbrechen")
+                            .accessibilityLabel("Generierung abbrechen")
 
-                if viewModel.isStreaming {
-                    // Während der Stream läuft, killt ein direktes sendMessage() den laufenden
-                    // Request und den KV-Cache-Vorteil der Konversation – deshalb landet die
-                    // Eingabe hier in der Warteschlange und wird erst nachgereicht, sobald die
-                    // aktuelle Antwort fertig ist (siehe ChatViewModel.isStreaming didSet).
-                    Button(action: handleSend) {
-                        Image(systemName: "text.badge.plus")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(canSend ? Color.primary : Color.secondary.opacity(0.4))
-                            .frame(width: 32, height: 32)
+                            if canSend {
+                                Button(action: handleSend) {
+                                    Image(systemName: "text.badge.plus")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(DS.Accent.brand)
+                                        .frame(width: 30, height: 30)
+                                        .background(Circle().fill(DS.Accent.brand.opacity(0.14)))
+                                }
+                                .buttonStyle(.plain)
+                                .help("Zur Warteschlange hinzufügen – wird nach der aktuellen Antwort automatisch gesendet")
+                            }
+                        } else {
+                            Button(action: handleSend) {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 13.5, weight: .bold))
+                                    .foregroundStyle(canSend ? Color.white : Color.secondary.opacity(0.5))
+                                    .frame(width: 30, height: 30)
+                                    .background(
+                                        Circle()
+                                            .fill(
+                                                canSend
+                                                    ? AnyShapeStyle(DS.Accent.brandGradient)
+                                                    : AnyShapeStyle(Color.primary.opacity(0.07))
+                                            )
+                                    )
+                                    .shadow(color: canSend ? DS.Accent.brand.opacity(0.28) : .clear, radius: 5, x: 0, y: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canSend)
+                            .help("Senden (Return)")
+                            .accessibilityLabel("Senden")
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular, in: Circle())
-                    .disabled(!canSend)
-                    .help("Zur Warteschlange hinzufügen – wird nach der aktuellen Antwort automatisch gesendet")
-                } else {
-                    Button(action: handleSend) {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.tint(.blue).interactive(), in: Circle())
-                    .opacity(canSend ? 1 : 0.4)
-                    .disabled(!canSend)
-                    .help("Senden (Return)")
-                    .accessibilityLabel("Senden")
+                    .padding(.bottom, 1)
                 }
             }
-            .padding(.horizontal, DS.Space.l)
-            .padding(.top, DS.Space.xs)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(DS.Surface.pill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(
+                        (!inputText.isEmpty || lastCapturedImage != nil)
+                            ? DS.Accent.brand.opacity(0.28)
+                            : DS.Ink.hairline,
+                        lineWidth: 0.85
+                    )
+            )
+            .shadow(color: .black.opacity(0.05), radius: 12, x: 0, y: 3)
+            .frame(maxWidth: 1100)
+            .padding(.horizontal, DS.Space.xl)
+            .padding(.top, 2)
             .padding(.bottom, DS.Space.m)
         }
         // Kein opaker Balken mehr: Der Composer schwebt als Glas auf dem Chat-Hintergrund.
@@ -305,6 +346,7 @@ struct InputArea: View {
                     },
                     onCancel: { isShowingMarkup = false }
                 )
+                .frame(minWidth: 480, idealWidth: 680, minHeight: 380, idealHeight: 520)
             }
         }
     }
@@ -317,12 +359,65 @@ struct InputArea: View {
 
     private func handleInputSubmit() {
         if showSlashCommands && !matchedCommands.isEmpty {
-            let command = matchedCommands[selectedCommandIndex]
-            inputText = "/" + command.id + " "
-            showSlashCommands = false
+            insertCommand(matchedCommands[min(selectedCommandIndex, matchedCommands.count - 1)])
             return
         }
         handleSend()
+    }
+
+    /// Übernimmt einen Befehl aus der Liste ins Eingabefeld, ohne ihn auszuführen. Die möglichen
+    /// Parameter erscheinen danach als grauer Platzhalter (siehe `parameterGhost`).
+    private func insertCommand(_ command: SlashCommand) {
+        inputText = "/" + command.id + " "
+        withAnimation(.snappy(duration: 0.18)) { showSlashCommands = false }
+    }
+
+    /// Pfeiltasten, Tab und Escape steuern die Befehlsliste, solange sie offen ist.
+    private func handleEditorCommand(_ selector: Selector) -> Bool {
+        guard showSlashCommands, !matchedCommands.isEmpty else { return false }
+        switch selector {
+        case #selector(NSResponder.moveDown(_:)):
+            selectedCommandIndex = (selectedCommandIndex + 1) % matchedCommands.count
+        case #selector(NSResponder.moveUp(_:)):
+            selectedCommandIndex = (selectedCommandIndex - 1 + matchedCommands.count) % matchedCommands.count
+        case #selector(NSResponder.insertTab(_:)):
+            insertCommand(matchedCommands[min(selectedCommandIndex, matchedCommands.count - 1)])
+        case #selector(NSResponder.cancelOperation(_:)):
+            withAnimation(.snappy(duration: 0.18)) { showSlashCommands = false }
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Noch nicht ausgefüllte Parameter des getippten Befehls, z. B. „[Stufe] [Thema]“ nach „/quiz 10 “.
+    private var parameterGhost: String? {
+        guard inputText.hasPrefix("/"), inputText.hasSuffix(" "), !inputText.contains("\n") else { return nil }
+        let parts = inputText.dropFirst().split(separator: " ")
+        guard let name = parts.first?.lowercased(),
+              let command = viewModel.slashCommandRegistry.commands.first(where: { $0.id == name || $0.aliases.contains(name) }),
+              let hint = command.paramHint else { return nil }
+        return Self.remainingParameters(hint: hint, typedArguments: parts.count - 1)
+    }
+
+    /// Zerlegt „[Anzahl] [Stufe] <Thema>“ in Platzhalter und lässt die bereits getippten weg.
+    static func remainingParameters(hint: String, typedArguments: Int) -> String? {
+        var tokens: [String] = []
+        var current = ""
+        var depth = 0
+        for char in hint {
+            if char == "[" || char == "<" { depth += 1 }
+            if char == " " && depth == 0 {
+                if !current.isEmpty { tokens.append(current) }
+                current = ""
+                continue
+            }
+            current.append(char)
+            if char == "]" || char == ">" { depth = max(0, depth - 1) }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        guard typedArguments < tokens.count else { return nil }
+        return tokens[typedArguments...].joined(separator: " ")
     }
 
     /// Muss mit den von `DocumentProcessor` tatsächlich unterstützten Formaten übereinstimmen.
@@ -392,6 +487,12 @@ private struct GrowingTextEditor: NSViewRepresentable {
     let minHeight: CGFloat
     let maxHeight: CGFloat
     let onSubmit: () -> Void
+    /// Tastenbefehle (Pfeile, Tab, Escape) zuerst an die Eingabe – true = verarbeitet.
+    var onCommand: (Selector) -> Bool = { _ in false }
+
+    /// Innenabstand und Zeilen-Padding des Textfelds (für exakt ausgerichtete Platzhalter).
+    static let textInset = NSSize(width: 2, height: 4)
+    static let linePadding: CGFloat = 5
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -417,7 +518,8 @@ private struct GrowingTextEditor: NSViewRepresentable {
         textView.usesFontPanel = false
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textColor = .labelColor
-        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.textContainerInset = Self.textInset
+        textView.textContainer?.lineFragmentPadding = Self.linePadding
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.minSize = NSSize(width: 0, height: 0)
@@ -469,6 +571,7 @@ private struct GrowingTextEditor: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if parent.onCommand(commandSelector) { return true }
             guard commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
             if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
                 return false
@@ -508,29 +611,57 @@ struct SlashCommandList: View {
     let commands: [SlashCommand]
     @Binding var selectedIndex: Int
     let onSelect: (SlashCommand) -> Void
-    
+
+    /// Etwa acht Zeilen sichtbar, der Rest scrollt – alle Befehle ohne /help im Blick.
+    private let maxListHeight: CGFloat = 260
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(commands.enumerated()), id: \.element.id) { index, cmd in
-                Button(action: { onSelect(cmd) }) {
-                    HStack {
-                        Text("/\(cmd.id)").font(.system(.body, design: .monospaced)).bold()
-                        if let hint = cmd.paramHint {
-                            Text(hint).font(.caption).foregroundStyle(.secondary)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(commands.enumerated()), id: \.element.id) { index, cmd in
+                        Button(action: { onSelect(cmd) }) {
+                            HStack(spacing: DS.Space.s) {
+                                Text("/\(cmd.id)")
+                                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(index == selectedIndex ? DS.Ink.accent : .primary)
+                                if let hint = cmd.paramHint {
+                                    Text(hint)
+                                        .font(.system(size: 11, design: .rounded))
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                }
+                                Spacer(minLength: DS.Space.m)
+                                Text(cmd.description)
+                                    .font(.system(size: 11.5, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                            }
+                            .padding(.horizontal, DS.Space.m)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: DS.Radius.small, style: .continuous)
+                                    .fill(index == selectedIndex ? DS.Surface.selection : Color.clear)
+                            )
+                            .contentShape(Rectangle())
                         }
-                        Spacer()
-                        Text(cmd.description).font(.caption).foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
+                        .id(index)
+                        .accessibilityLabel("/\(cmd.id): \(cmd.description)")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(index == selectedIndex ? DS.Ink.accent.opacity(0.2) : Color.clear)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .padding(DS.Space.xs)
+            }
+            .scrollIndicators(.automatic)
+            .frame(maxHeight: maxListHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: selectedIndex) { _, index in
+                withAnimation(.snappy(duration: 0.12)) { proxy.scrollTo(index) }
             }
         }
-        .padding(.vertical, 4)
-        .frame(minWidth: 300)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -573,3 +704,34 @@ struct QueuedMessagesList: View {
         .frame(minWidth: 280, maxWidth: 360)
     }
 }
+
+// MARK: - ComposerIconButton (Integrierter Button links in der Composer-Kapsel)
+
+private struct ComposerIconButton: View {
+    let systemImage: String
+    let help: String
+    let accessibilityLabel: String
+    var tint: Color = DS.Accent.brand
+    var disabled: Bool = false
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isHovered && !disabled ? tint : .secondary)
+                .frame(width: 28, height: 28)
+                .background(
+                    Circle()
+                        .fill(isHovered && !disabled ? tint.opacity(0.12) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help(help)
+        .accessibilityLabel(accessibilityLabel)
+        .onHover { isHovered = $0 }
+    }
+}
+

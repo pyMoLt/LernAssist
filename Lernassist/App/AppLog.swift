@@ -3,7 +3,7 @@ import os
 
 /// Zentrales, kategorisiertes Logging (ersetzt die verstreuten `print`-Aufrufe).
 /// Log-Level im Konsole.app-Filter: subsystem "com.pymolt.LernAssist".
-enum AppLog {
+nonisolated enum AppLog {
     static let subsystem = "com.pymolt.LernAssist"
 
     /// Chat-Pipeline: Senden, Streaming, Tool-Continuation, Cancel.

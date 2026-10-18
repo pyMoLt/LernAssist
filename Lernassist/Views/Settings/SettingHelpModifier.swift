@@ -62,7 +62,7 @@ struct SettingHelpModifier: ViewModifier {
                 // Hässlichen weißen Rand in Darkmode verstecken
                 .background(Color(NSColor.windowBackgroundColor))
             }
-            .onChange(of: isHelpModeActive) { active in
+            .onChange(of: isHelpModeActive) { _, active in
                 if !active { isHovered = false }
             }
     }

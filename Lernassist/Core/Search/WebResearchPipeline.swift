@@ -18,6 +18,8 @@ nonisolated struct ResearchResult: Equatable, Sendable {
     var consultedSources: [ResearchSource]
     var usedReranker: Bool
     var notes: [String]
+    /// Abbildungen, die das Modell mit [B#] zeigen kann (lokale Nummern 1…n).
+    var images: [ResearchImageRef] = []
 
     /// Text für das Modell – nummerierte Belege `[W1]…` mit Titel, Domain, Datum, URL.
     var modelText: String {
@@ -39,8 +41,8 @@ nonisolated struct ResearchResult: Equatable, Sendable {
             lines.append(group.map(\.text).joined(separator: "\n[…]\n"))
             lines.append("")
         }
-        lines.append("Nutze diese Belege für Fakten aus der Suche und zitiere sie mit [W1], [W2] … Wenn sie die Frage nicht beantworten, sag das.")
-        return lines.joined(separator: "\n")
+        lines.append("Nutze diese Belege für Fakten aus der Suche und zitiere sie mit ihrer Nummer in eckigen Klammern, z. B. [W3]. Wenn sie die Frage nicht beantworten, sag das.")
+        return lines.joined(separator: "\n") + ResearchImages.modelText(for: images)
     }
 }
 
@@ -61,6 +63,16 @@ nonisolated struct WebResearchPipeline: Sendable {
     /// Für Tests austauschbar.
     var sourceOverride: [SearchSource]? = nil
     var fetchDocument: (@Sendable (SearchHit, ResearchSettings) async -> [String]?)? = nil
+    /// Für Tests austauschbar: Bilder laden und prüfen.
+    var downloadImages: (@Sendable ([PageImage]) async -> [ResearchImageRef])? = nil
+    /// Für Tests austauschbar: Abbildungen einer PMC-Artikelseite.
+    var fetchFigures: (@Sendable (String) async -> [PageImage])? = nil
+
+    /// Volltext und Abbildungen einer Seite.
+    struct FetchedContent: Sendable {
+        var blocks: [String]
+        var images: [PageImage]
+    }
 
     func run(_ rawQuery: String) async -> ResearchResult {
         let query = String(rawQuery.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
@@ -80,8 +92,12 @@ nonisolated struct WebResearchPipeline: Sendable {
             for await (id, result) in group {
                 consulted.append(id)
                 switch result {
-                case .success(let found): hits += found
-                case .failure(let error): notes.append("\(id.label): \(error.localizedDescription)")
+                case .success(let found):
+                    hits += found
+                    if sourceOverride == nil { ResearchUsage.record(id) }
+                case .failure(let error):
+                    notes.append("\(id.label): \(error.localizedDescription)")
+                    if sourceOverride == nil { ResearchUsage.record(id, error: error.localizedDescription) }
                 }
             }
         }
@@ -97,8 +113,10 @@ nonisolated struct WebResearchPipeline: Sendable {
                 do {
                     hits += try await exa.search(query, limit: settings.exaResults)
                     consulted.append(.exa)
+                    if sourceOverride == nil { ResearchUsage.record(.exa) }
                 } catch {
                     notes.append("Exa: \(error.localizedDescription)")
+                    if sourceOverride == nil { ResearchUsage.record(.exa, error: error.localizedDescription) }
                 }
             }
         }
@@ -121,14 +139,20 @@ nonisolated struct WebResearchPipeline: Sendable {
             let b = snippetScores[$1] + settings.tierBonus(of: needText[$1].element.domain) * 3 - Double(needText[$1].element.rank) * 0.05
             return a > b
         }.prefix(settings.fullTextPages)
-        let fetcher = fetchDocument ?? Self.fetchBlocks
-        await withTaskGroup(of: (Int, [String]?).self) { group in
+        let fetcher: @Sendable (SearchHit, ResearchSettings) async -> FetchedContent?
+        if let fetchDocument {
+            fetcher = { hit, settings in await fetchDocument(hit, settings).map { FetchedContent(blocks: $0, images: []) } }
+        } else {
+            fetcher = Self.fetchContent
+        }
+        await withTaskGroup(of: (Int, FetchedContent?).self) { group in
             for position in fetchOrder {
                 let (index, hit) = needText[position]
                 group.addTask { (index, await fetcher(hit, settings)) }
             }
-            for await (index, blocks) in group {
-                if let blocks, !blocks.isEmpty { unique[index].blocks = blocks }
+            for await (index, content) in group {
+                if let content, !content.blocks.isEmpty { unique[index].blocks = content.blocks }
+                if let content, !content.images.isEmpty { unique[index].images = content.images }
             }
         }
 
@@ -153,7 +177,7 @@ nonisolated struct WebResearchPipeline: Sendable {
             queryTokens.isEmpty || PassageRanker.coverage(of: candidates[$0].tokens, query: queryTokens) >= minCoverage
         }
         window.sort { lexical[$0] > lexical[$1] }
-        window = Array(window.prefix(60))
+        window = Array(window.prefix(max(1, settings.rerankerWindow)))
         let topLexical = window.map { lexical[$0] }.max() ?? 1
 
         // 7. Optional Reranker
@@ -199,8 +223,37 @@ nonisolated struct WebResearchPipeline: Sendable {
                                           source: candidate.hit.source, text: candidate.passage.text, score: score))
         }
         chosen.sort { $0.number != $1.number ? $0.number < $1.number : $0.score > $1.score }
+
+        // 9. Abbildungen: alle gefundenen Seiten mit Bildern (zitierte zuerst), zur Frage ranken,
+        //    prüfen und laden. Über die Relevanz entscheidet die Rangfolge, nicht das Zitat.
+        var images: [ResearchImageRef] = []
+        if settings.imagesEnabled {
+            let cited = unique.filter { numberBySource[$0.key] != nil }
+            let others = unique.filter { numberBySource[$0.key] == nil }
+            var candidates: [(image: PageImage, pageTitle: String)] = (cited + others).flatMap { hit in
+                (hit.images ?? []).map { (image: $0, pageTitle: hit.title) }
+            }
+            // Fachartikel (Open Access): Abbildungen mit Legende nur für die zwei bestplatzierten.
+            let figurePages = cited.compactMap { hit in hit.figurePage.map { (page: $0, title: hit.title) } }.prefix(2)
+            if !figurePages.isEmpty {
+                let loadFigures = fetchFigures ?? { await EuropePMCSource.figures(articlePage: $0) }
+                await withTaskGroup(of: [(image: PageImage, pageTitle: String)].self) { group in
+                    for item in figurePages {
+                        group.addTask { await loadFigures(item.page).map { (image: $0, pageTitle: item.title) } }
+                    }
+                    for await found in group { candidates += found }
+                }
+            }
+            let picked = await ResearchImages.rank(candidates, query: query,
+                                                   reranker: settings.rerankerMode == .auto ? reranker : nil,
+                                                   limit: ResearchImages.maxPerSearch + 3)
+            if !picked.isEmpty {
+                let load = downloadImages ?? { await ResearchImages.downloadAll($0) }
+                images = Array(await load(picked).prefix(ResearchImages.maxPerSearch))
+            }
+        }
         return ResearchResult(query: query, passages: chosen, consultedSources: consulted.sorted { $0.rawValue < $1.rawValue },
-                              usedReranker: rerankScores != nil, notes: notes)
+                              usedReranker: rerankScores != nil, notes: notes, images: images)
     }
 
     func defaultSources(including exa: Bool) -> [SearchSource] {
@@ -210,10 +263,17 @@ nonisolated struct WebResearchPipeline: Sendable {
             list.append(SearXNGSource(baseURL: searxngURL))
         }
         let agent = settings.apiUserAgent
-        if enabled.contains(.wikipedia) { list.append(WikipediaSource(userAgent: agent, language: settings.wikipediaLanguage)) }
+        if enabled.contains(.wikipedia) {
+            list.append(WikipediaSource(userAgent: agent, language: settings.wikipediaLanguage, withImages: settings.imagesEnabled))
+        }
         if enabled.contains(.europePMC) { list.append(EuropePMCSource(userAgent: agent)) }
         if enabled.contains(.arxiv) { list.append(ArxivSource(userAgent: agent)) }
         if enabled.contains(.stackExchange) { list.append(StackExchangeSource(userAgent: agent, sites: settings.stackExchangeSites)) }
+        // Zusätzliche Quellen bekommen die anonyme Kennung (keine Kontakt-E-Mail).
+        if enabled.contains(.openAlex) { list.append(OpenAlexSource()) }
+        if enabled.contains(.semanticScholar) { list.append(SemanticScholarSource()) }
+        if enabled.contains(.medlinePlus) { list.append(MedlinePlusSource()) }
+        if enabled.contains(.openFDA) { list.append(OpenFDASource()) }
         if exa, enabled.contains(.exa) { list.append(ExaSource(apiKey: exaAPIKey)) }
         return list
     }
@@ -221,16 +281,25 @@ nonisolated struct WebResearchPipeline: Sendable {
     /// Volltext einer Webseite: Abruf mit Limits, Extraktion, Bot-Seiten verwerfen.
     /// Wikipedia-Links gehen über die API (sauberer Text).
     @Sendable static func fetchBlocks(_ hit: SearchHit, _ settings: ResearchSettings) async -> [String]? {
+        await fetchContent(hit, settings)?.blocks
+    }
+
+    /// Volltext samt Abbildungen. Wikipedia-Links gehen über die API (Text + Medienliste).
+    @Sendable static func fetchContent(_ hit: SearchHit, _ settings: ResearchSettings) async -> FetchedContent? {
         if let host = URL(string: hit.url)?.host, host.hasSuffix("wikipedia.org"),
            let title = URL(string: hit.url)?.lastPathComponent.removingPercentEncoding {
             let lang = host.components(separatedBy: ".").first ?? "de"
-            if let blocks = try? await WikipediaSource.article(title: title, lang: lang, userAgent: settings.apiUserAgent), !blocks.isEmpty { return blocks }
+            async let images = settings.imagesEnabled
+                ? WikipediaSource.mediaImages(title: title, lang: lang, pageURL: hit.url, userAgent: settings.apiUserAgent) : []
+            if let blocks = try? await WikipediaSource.article(title: title, lang: lang, userAgent: settings.apiUserAgent), !blocks.isEmpty {
+                return FetchedContent(blocks: blocks, images: await images)
+            }
         }
         guard let url = URL(string: hit.url) else { return nil }
         let fetcher = WebFetcher(timeout: settings.fetchTimeout, maxBytes: Int(settings.maxDownloadMB * 1_048_576))
         guard let page = try? await fetcher.fetch(url),
               let document = try? ContentExtractor.extract(page),
               !ContentExtractor.looksLikeBotPage(document) else { return nil }
-        return document.blocks
+        return FetchedContent(blocks: document.blocks, images: settings.imagesEnabled ? document.images : [])
     }
 }

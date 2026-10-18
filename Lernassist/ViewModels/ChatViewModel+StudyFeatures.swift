@@ -99,7 +99,7 @@ extension ChatViewModel {
     private var activeContextFillRate: Double? {
         guard let profile = activeProfile,
               let idx = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return nil }
-        let window = max(profile.contextSizeOverride ?? currentMetrics.contextWindowSize ?? 8192, 2048)
+        let window = max(profile.contextSizeOverride ?? currentMetrics.contextWindowSize ?? Self.fallbackContextWindow, 2048)
         var chars = 0
         for msg in sessions[idx].messages {
             if msg.role == "document" {
@@ -197,6 +197,13 @@ extension ChatViewModel {
         card.selectedIndex = optionIndex
         card.freeTextAnswer = freeText
         sessions[sIdx].messages[mIdx].quizCard = card
+        // Falsche Antwort → Fehlerlog (für „Training aus Fehlern“).
+        if let optionIndex, let correct = card.correctIndex, optionIndex != correct,
+           card.options.indices.contains(optionIndex), card.options.indices.contains(correct) {
+            recordMistake(MistakeEntry(kind: .quiz, sessionId: sessions[sIdx].id, subject: sessions[sIdx].subject,
+                                       question: card.question, givenAnswer: card.options[optionIndex],
+                                       correctAnswer: card.options[correct], explanation: card.explanation))
+        }
         let text = Self.quizAnswerText(card: card, optionIndex: optionIndex, freeText: freeText)
         if isStreaming { enqueueMessage(text: text) } else { sendMessage(text: text) }
     }
@@ -215,24 +222,140 @@ extension ChatViewModel {
 
     // MARK: - Anklickbare Belege [W#]
 
-    /// Quellen-URLs der Websuchen, die zu einer Antwort gehören (alle Tool-Aufrufe seit der
-    /// letzten Nutzernachricht). Bei mehreren Suchen gilt die jüngste Zuordnung je Nummer.
+    /// Quellen-URLs der [W#]-Belege, die eine Antwort zitieren kann. Die Nummern sind im ganzen Chat
+    /// eindeutig (`renumberCitations`), daher reicht eine Suche über alle früheren Websuchen. Bei
+    /// älteren Chats mit Nummern pro Suche gewinnt die nächstgelegene Suche.
     func citationLinks(for messageID: UUID) -> [String: String] {
         guard let session = sessions.first(where: { $0.messages.contains { $0.id == messageID } }),
               let index = session.messages.firstIndex(where: { $0.id == messageID }) else { return [:] }
         var links: [String: String] = [:]
-        var i = index
-        while i >= 0 {
-            let msg = session.messages[i]
-            if msg.role == "user" { break }
+        for msg in session.messages[...index].reversed() {
             for call in msg.toolCalls ?? [] where call.name == "web_search" {
                 for source in ToolCallPresentation(call: call).sources where links[source.number] == nil && !source.url.isEmpty {
                     links[source.number] = source.url
                 }
             }
-            i -= 1
         }
         return links
+    }
+
+    /// Fortlaufende Belegnummern über den ganzen Chat: Neue Websuchen zählen dort weiter, wo die
+    /// bisherigen aufgehört haben, und dieselbe Seite behält ihre Nummer. Parallele Suchen einer
+    /// Runde werden in Aufruf-Reihenfolge nummeriert. Läuft einmal, bevor die Ergebnisse ans Modell
+    /// gehen – danach ändern sie sich nie mehr (Prefix-Cache).
+    static func renumberCitations(in calls: [ToolCallInfo], after earlier: [ToolCallInfo]) -> [ToolCallInfo] {
+        var numberByKey: [String: Int] = [:]
+        var highest = 0
+        for call in earlier where call.name == "web_search" {
+            for source in ToolCallPresentation(call: call).sources {
+                guard let number = Int(source.number.dropFirst()) else { continue }
+                highest = max(highest, number)
+                if !source.url.isEmpty, numberByKey[SearchHit.normalizedKey(source.url)] == nil {
+                    numberByKey[SearchHit.normalizedKey(source.url)] = number
+                }
+            }
+        }
+        var result = calls
+        for index in result.indices where result[index].name == "web_search" {
+            guard let text = result[index].result else { continue }
+            var mapping: [String: Int] = [:]
+            for source in ToolCallPresentation(call: result[index]).sources where mapping[source.number] == nil {
+                let key = SearchHit.normalizedKey(source.url)
+                if !source.url.isEmpty, let existing = numberByKey[key] {
+                    mapping[source.number] = existing
+                } else {
+                    highest += 1
+                    mapping[source.number] = highest
+                    if !source.url.isEmpty { numberByKey[key] = highest }
+                }
+            }
+            guard !mapping.isEmpty else { continue }
+            result[index].result = text.components(separatedBy: "\n").map { line in
+                guard line.hasPrefix("[W"), let close = line.firstIndex(of: "]"),
+                      let number = mapping[String(line[line.index(after: line.startIndex)..<close])] else { return line }
+                return "[W\(number)]" + line[line.index(after: close)...]
+            }.joined(separator: "\n")
+        }
+        return renumberImages(in: result, after: earlier)
+    }
+
+    /// Wie bei den Belegen: Abbildungen [B#] fortlaufend im ganzen Chat, gleiches Bild = gleiche Nummer.
+    static func renumberImages(in calls: [ToolCallInfo], after earlier: [ToolCallInfo]) -> [ToolCallInfo] {
+        var numberByKey: [String: Int] = [:]
+        var highest = 0
+        for ref in earlier.flatMap({ $0.researchImages ?? [] }) {
+            highest = max(highest, ref.number)
+            numberByKey[SearchHit.normalizedKey(ref.sourceURL)] = numberByKey[SearchHit.normalizedKey(ref.sourceURL)] ?? ref.number
+        }
+        var result = calls
+        for index in result.indices {
+            guard var refs = result[index].researchImages, !refs.isEmpty else { continue }
+            var mapping: [Int: Int] = [:]
+            for position in refs.indices {
+                let key = SearchHit.normalizedKey(refs[position].sourceURL)
+                let number: Int
+                if let existing = numberByKey[key] {
+                    number = existing
+                } else {
+                    highest += 1
+                    number = highest
+                    numberByKey[key] = number
+                }
+                mapping[refs[position].number] = number
+                refs[position].number = number
+            }
+            result[index].researchImages = refs
+            if let text = result[index].result {
+                result[index].result = text.components(separatedBy: "\n").map { line in
+                    guard line.hasPrefix("[B"), let close = line.firstIndex(of: "]"),
+                          let old = Int(line[line.index(line.startIndex, offsetBy: 2)..<close]),
+                          let number = mapping[old] else { return line }
+                    return "[B\(number)]" + line[line.index(after: close)...]
+                }.joined(separator: "\n")
+            }
+        }
+        return result
+    }
+
+    /// Abbildungen, die eine Antwort mit [B#] zeigen kann (im ganzen Chat eindeutig).
+    func researchImages(for messageID: UUID) -> [Int: ResearchImageRef] {
+        guard let session = sessions.first(where: { $0.messages.contains { $0.id == messageID } }),
+              let index = session.messages.firstIndex(where: { $0.id == messageID }) else { return [:] }
+        var images: [Int: ResearchImageRef] = [:]
+        for msg in session.messages[...index].reversed() {
+            for call in msg.toolCalls ?? [] {
+                for ref in call.researchImages ?? [] where images[ref.number] == nil { images[ref.number] = ref }
+            }
+        }
+        return images
+    }
+
+    /// Setzt Abbildungen ein: Eine Zeile nur mit [B3] wird zum Bild mit Beschriftung und Quelle;
+    /// [B3] mitten im Satz wird zum Link auf die Quellseite. Code-Blöcke bleiben unberührt.
+    static func embedResearchImages(in markdown: String, images: [Int: ResearchImageRef]) -> String {
+        guard !images.isEmpty, markdown.contains("[B") else { return markdown }
+        var inCode = false
+        var lines: [String] = []
+        for line in markdown.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { inCode.toggle() }
+            guard !inCode else { lines.append(line); continue }
+            let bare = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "*_.:"))
+            if let match = bare.range(of: #"^\[B(\d+)\]$"#, options: .regularExpression),
+               let number = Int(bare[match].dropFirst(2).dropLast()), let ref = images[number] {
+                let caption = ref.caption.replacingOccurrences(of: "]", with: ")").replacingOccurrences(of: "[", with: "(")
+                lines.append("![\(caption)](lernassist-image://\(ref.imageID.uuidString))")
+                lines.append("")
+                lines.append("*\(caption)* · [Quelle: \(ref.domain)](\(ref.pageURL))")
+                continue
+            }
+            var converted = line
+            for (number, ref) in images {
+                converted = converted.replacingOccurrences(of: "[B\(number)]", with: "[Abb. B\(number)](\(ref.pageURL))")
+            }
+            lines.append(converted)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Ersetzt [W1] bzw. [W1, W3] durch Markdown-Links auf die Quellen.

@@ -83,11 +83,19 @@ extension ChatViewModel {
         ))
 
         registry.register(command: SlashCommand(
-            id: "quiz", aliases: ["q", "abfragen"], description: "Lass dich abfragen (interaktive Karten)", paramHint: "[Thema]",
+            id: "quiz", aliases: ["q", "abfragen", "test"], description: "Lass dich abfragen (Quizkarten im Chat)", paramHint: "[Anzahl] [leicht|mittel|schwer|sehr schwer] [Thema]",
+            action: { [weak self] arg in
+                let quiz = Self.parseQuizArguments(arg)
+                self?.sendMessage(text: Self.quizPrompt(count: quiz.count, topic: quiz.topic, difficulty: quiz.difficulty),
+                                  displayText: "/quiz" + (arg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " " + arg.trimmingCharacters(in: .whitespacesAndNewlines)))
+            }
+        ))
+
+        registry.register(command: SlashCommand(
+            id: "fall", aliases: ["case", "aufgabe", "uebung"], description: "Fall oder Übungsaufgabe zum Thema, Schritt für Schritt", paramHint: "[Thema]",
             action: { [weak self] arg in
                 let topic = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-                let focus = topic.isEmpty ? "zum Stoff dieses Chats" : "zu „\(topic)“"
-                self?.sendMessage(text: "Frag mich \(focus) ab: Stelle jede Frage einzeln als `quiz_card` (nie als reinen Text), warte jeweils auf meine Antwort, gib kurzes Feedback und stelle dann die nächste Frage wieder als `quiz_card`.", displayText: "/quiz" + (arg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " " + arg.trimmingCharacters(in: .whitespacesAndNewlines)))
+                self?.sendMessage(text: Self.casePrompt(topic: topic), displayText: "/fall" + (topic.isEmpty ? "" : " " + topic))
             }
         ))
 
@@ -99,10 +107,10 @@ extension ChatViewModel {
         ))
 
         registry.register(command: SlashCommand(
-            id: "summary", aliases: ["sum", "lernzettel"], description: "Lernzusammenfassung des Chats", paramHint: "[Fokus]",
+            id: "summary", aliases: ["sum", "lernzettel", "zettel"], description: "Lernzettel zum Chat (exportierbar als PDF/Markdown)", paramHint: "[Fokus]",
             action: { [weak self] arg in
                 let focus = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-                self?.sendMessage(text: "Erstelle eine kompakte Lernzusammenfassung dieses Chats: Kernbegriffe, wichtigste Zusammenhänge, Merksätze und typische Prüfungsfragen\(focus.isEmpty ? "" : " mit Fokus auf „\(focus)“").", displayText: "/summary" + (arg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " " + arg.trimmingCharacters(in: .whitespacesAndNewlines)))
+                self?.sendMessage(text: Self.studySheetPrompt(focus: focus), displayText: "/summary" + (focus.isEmpty ? "" : " " + focus))
             }
         ))
 
@@ -110,7 +118,7 @@ extension ChatViewModel {
             id: "diagram", aliases: ["diagramm", "mermaid"], description: "Ablauf als Diagramm darstellen", paramHint: "[Thema]",
             action: { [weak self] arg in
                 let topic = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-                self?.sendMessage(text: "Stelle \(topic.isEmpty ? "das zuletzt besprochene Thema" : "„\(topic)“") als übersichtliches Mermaid-Diagramm dar (```mermaid-Codeblock, flowchart oder sequenceDiagram) und erkläre es kurz.", displayText: "/diagram" + (arg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " " + arg.trimmingCharacters(in: .whitespacesAndNewlines)))
+                self?.sendMessage(text: "Stelle \(topic.isEmpty ? "das zuletzt besprochene Thema" : "„\(topic)“") als übersichtliches Mermaid-Diagramm dar (```mermaid-Codeblock, flowchart oder sequenceDiagram; Knotentexte immer in Anführungszeichen, z. B. A[\"Thrombin (IIa)\"], Zeilenumbruch mit <br>, keine festen Farben) und erkläre es kurz.", displayText: "/diagram" + (arg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " " + arg.trimmingCharacters(in: .whitespacesAndNewlines)))
             }
         ))
 
@@ -155,6 +163,77 @@ extension ChatViewModel {
                 self.addSystemMessage(text: "**Verfügbare Slash-Befehle:**\n" + lines.joined(separator: "\n"))
             }
         ))
+    }
+
+    // MARK: - Prompts für /quiz, /fall, /summary
+
+    /// „/quiz 5 Citratzyklus“ → (5, "Citratzyklus"); „/quiz Niere“ → (nil, "Niere").
+    /// „/quiz 10 schwer Niere“: Anzahl und Schwierigkeit in beliebiger Reihenfolge am Anfang,
+    /// der Rest ist das Thema.
+    nonisolated static func parseQuizArguments(_ raw: String) -> (count: Int?, difficulty: StudyDifficulty?, topic: String) {
+        var words = raw.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var count: Int?
+        var difficulty: StudyDifficulty?
+        while let first = words.first {
+            if count == nil, let n = Int(first), (1...30).contains(n) {
+                count = n
+                words.removeFirst()
+            } else if difficulty == nil, words.count >= 2, let level = StudyDifficulty.parse(first + " " + words[1]) {
+                difficulty = level
+                words.removeFirst(2)
+            } else if difficulty == nil, let level = StudyDifficulty.parse(first) {
+                difficulty = level
+                words.removeFirst()
+            } else {
+                break
+            }
+        }
+        return (count, difficulty, words.joined(separator: " "))
+    }
+
+    /// Ohne angegebene Schwierigkeit gilt die Standard-Stufe aus den Tool-Regeln im System-Prompt.
+    nonisolated static func quizPrompt(count: Int?, topic: String, difficulty: StudyDifficulty? = nil) -> String {
+        let focus = topic.isEmpty ? "zum Stoff dieses Chats" : "zu „\(topic)“"
+        let amount = count.map { "Stelle insgesamt \($0) Fragen" } ?? "Stelle so lange Fragen, bis ich aufhöre"
+        let ending = count.map { _ in " Nach der letzten Frage: kurze Auswertung (wie viele richtig, was ich wiederholen sollte)." } ?? ""
+        let level = difficulty.map { " Schwierigkeit für dieses Quiz: \($0.label) – \($0.quizGuidance)" } ?? ""
+        return """
+        Frag mich \(focus) ab. \(amount), jede einzeln als `quiz_card` (nie als reinen Text): meist Multiple Choice \
+        mit 4 Optionen und richtiger Lösung, gelegentlich eine Freitextfrage. Verschiedene Aspekte, keine \
+        Wiederholungen.\(level) Warte jeweils auf meine Antwort, gib kurzes Feedback mit Begründung und stelle \
+        dann die nächste Frage wieder als `quiz_card`.\(ending)
+        """
+    }
+
+    /// /fall passt sich dem Fach des Chats an: klinischer Fall, Informatik- oder Matheaufgabe.
+    nonisolated static func casePrompt(topic: String) -> String {
+        let focus = topic.isEmpty ? "dem Thema dieses Chats" : "„\(topic)“"
+        return """
+        Erstelle zu \(focus) eine größere, zusammenhängende Übung, die zum Fach des Chats passt, und führe mich \
+        Schritt für Schritt hindurch:
+        - Medizin/Biowissenschaften: ein klinischer Fall (Patientenvorstellung → Anamnese → Untersuchung → Labor/Bildgebung → \
+        Differenzialdiagnose → Diagnose → Therapie). Decke immer nur den nächsten Schritt auf.
+        - Informatik: eine Aufgabe in Etappen (z. B. Problem verstehen → Datenstruktur/Ansatz wählen → Algorithmus oder Code \
+        schreiben → Fehler finden/Komplexität bestimmen). Code zum Ausprobieren darf über `coding_sandbox` laufen.
+        - Mathematik/Physik/Chemie: eine mehrteilige Aufgabe mit Teilaufgaben a), b), c) …, aufeinander aufbauend.
+        - Andere Fächer: ein realistisches Anwendungsszenario mit mehreren Entscheidungsschritten.
+        Stelle mir bei jedem Schritt eine konkrete Frage oder Entscheidung – bei Auswahlmöglichkeiten als `quiz_card`, \
+        sonst als Freitext – und warte auf meine Antwort. Gib dann kurzes Feedback (was stimmt, was fehlt) und gehe weiter. \
+        Verrate die Lösung eines Schritts erst nach meiner Antwort. Am Ende: kurze Auswertung mit den wichtigsten Lernpunkten.
+        """
+    }
+
+    nonisolated static func studySheetPrompt(focus: String) -> String {
+        """
+        Erstelle einen Lernzettel zu diesem Chat\(focus.isEmpty ? "" : " mit Fokus auf „\(focus)“"), gut gegliedert in Markdown:
+        # Titel des Themas
+        ## Kernaussagen – 5 bis 10 Stichpunkte, präzise
+        ## Begriffe – Tabelle (Begriff | Bedeutung)
+        ## Zusammenhänge – ein Mermaid-Diagramm (flowchart, Knotentexte in Anführungszeichen, keine festen Farben)
+        ## Merksätze / typische Fallstricke
+        ## Prüfungsfragen – 5 Fragen, jeweils mit kurzer Antwort darunter
+        Nur Inhalte aus diesem Chat (Screenshots/Folien eingeschlossen), nichts erfinden. Keine Einleitung, keine Schlussfloskel.
+        """
     }
 
     /// Schickt einen Slash-Befehl mit Pflichtargument als Prompt; ohne Argument ein Hinweis.
@@ -273,7 +352,7 @@ Antworte NUR mit der Zusammenfassung, ohne Einleitung:
             // dann bleibt der alte Chat unverändert.
             // Bewusst KEIN max_tokens: Die Zielgröße steht nur als Anweisung im Prompt. Eine harte
             // Grenze würde die Zusammenfassung mitten im Satz abschneiden (bei Thinking-Modellen
-            // zählen auch die Denk-Tokens mit) – Nutzer, 12.10.2026.
+            // zählen auch die Denk-Tokens mit) – Entscheidung vom 12.10.2026.
             guard let summary = await sendInvisiblePrompt(summaryRequest, context: []) else {
                 await MainActor.run {
                     addSystemMessage(text: "Zusammenfassung fehlgeschlagen – Endpunkt nicht erreichbar. Der Chat bleibt unverändert.")

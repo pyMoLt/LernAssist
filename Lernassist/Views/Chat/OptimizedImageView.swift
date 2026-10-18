@@ -8,24 +8,23 @@ struct OptimizedImageView: View {
     let imageID: UUID
     let base64: String? // Fallback für Erstladung
     @State private var image: NSImage? = nil
+    @State private var loadFailed: Bool = false
 
     var body: some View {
         Group {
             if let img = image {
                 ZStack(alignment: .topTrailing) {
-                    // Höhere Initialhöhe, damit Bilder direkt groß genug für die 300 DPI sind
-                    ResizableContainer(initialHeight: 400, minHeight: 200) {
-                        InteractiveImageView(image: img, externalZoom: .constant(1.0))
-                    }
+                    // Seitenrichtig ohne Leerraum (vorher fester 400-pt-Container → Streifen über
+                    // breiten Plots). Zoomen/Verschieben bietet das Vollbild-Fenster.
+                    Image(nsImage: img)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(img.size.width > 0 && img.size.height > 0 ? img.size.width / img.size.height : 1.5, contentMode: .fit)
+                        .frame(maxHeight: 560)
+                        .onTapGesture(count: 2) { openLarge() }
                     
                     Button {
-                        let w = min(max(img.size.width, 800), 1600)
-                        let h = min(max(img.size.height, 600), 1200)
-                        NativeWindowManager.openWindow(
-                            for: NativeImageWindowView(image: img).frame(minWidth: 600, idealWidth: w, maxWidth: .infinity, minHeight: 400, idealHeight: h, maxHeight: .infinity),
-                            title: "Bild betrachten",
-                            initialSize: CGSize(width: w, height: h)
-                        )
+                        openLarge()
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                             .font(.caption2)
@@ -37,9 +36,26 @@ struct OptimizedImageView: View {
                     .padding(8)
                     .help("Vollbild / Größer anzeigen")
                 }
+            } else if loadFailed {
+                HStack(spacing: DS.Space.s) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Bild nicht mehr lokal verfügbar")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text("Archivierter Anhang")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, DS.Space.m)
+                .padding(.vertical, DS.Space.s)
+                .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.control))
             } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.08))
+                RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
+                    .fill(DS.Surface.control)
                     .frame(width: 200, height: 120)
                     .overlay(ProgressView().controlSize(.small))
             }
@@ -52,11 +68,79 @@ struct OptimizedImageView: View {
         }
     }
 
+    /// Vollbild mit dem Original (die Chat-Ansicht zeigt nur eine verkleinerte Fassung).
+    private func openLarge() {
+        Task {
+            var full = ImageStore.shared.getImage(for: imageID)
+            if full == nil, let b64 = base64 {
+                full = await Task.detached(priority: .userInitiated) {
+                    Data(base64Encoded: b64).flatMap { NSImage(data: $0) }
+                }.value
+            }
+            if full == nil { full = await ImageStore.shared.loadFromDisk(for: imageID) }
+            if let full { openLarge(full) }
+        }
+    }
+
+    private func openLarge(_ img: NSImage) { Self.openImageWindow(img) }
+
+    /// Bild groß im eigenen Fenster (auch für Abbildungen aus der Recherche).
+    static func openImageWindow(_ img: NSImage) {
+        let w = min(max(img.size.width, 800), 1600)
+        let h = min(max(img.size.height, 600), 1200)
+        NativeWindowManager.openWindow(
+            for: NativeImageWindowView(image: img).frame(minWidth: 600, idealWidth: w, maxWidth: .infinity, minHeight: 400, idealHeight: h, maxHeight: .infinity),
+            title: "Bild betrachten",
+            initialSize: CGSize(width: w, height: h)
+        )
+    }
+
+    /// Verkleinerte Fassungen für den Chat (Schlüssel: Bild-ID).
+    private static let displayCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 60
+        return cache
+    }()
+
+    /// Längste Seite der Chat-Fassung in Pixeln. Screenshots haben oft 3000 px und mehr – sie bei
+    /// jedem Bild in voller Auflösung zu skalieren, ließ das Scrollen über Bildern ruckeln.
+    static let displayMaxPixels: CGFloat = 1_600
+
+    /// Verkleinert ein Bild (Hintergrund-Thread) – Seitenverhältnis und Punktgröße bleiben gleich.
+    nonisolated static func displayVersion(of image: NSImage, maxPixels: CGFloat = displayMaxPixels) -> NSImage {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return image }
+        let longest = CGFloat(max(cg.width, cg.height))
+        guard longest > maxPixels else { return image }
+        let scale = maxPixels / longest
+        let width = Int(CGFloat(cg.width) * scale), height = Int(CGFloat(cg.height) * scale)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        context.interpolationQuality = .high
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let small = context.makeImage() else { return image }
+        return NSImage(cgImage: small, size: image.size)
+    }
+
     private func loadImageAsync() async {
+        loadFailed = false
+        if let shown = Self.displayCache.object(forKey: imageID.uuidString as NSString) {
+            image = shown
+            return
+        }
+        guard let full = await loadFullImage() else {
+            loadFailed = true
+            return
+        }
+        let shown = await Task.detached(priority: .userInitiated) { Self.displayVersion(of: full) }.value
+        Self.displayCache.setObject(shown, forKey: imageID.uuidString as NSString)
+        image = shown
+    }
+
+    private func loadFullImage() async -> NSImage? {
         // 1. Cache prüfen (synchron, kein Overhead)
         if let cached = ImageStore.shared.getImage(for: imageID) {
-            image = cached
-            return
+            return cached
         }
         // 2. Vom Base64 dekodieren (Hintergrund-Thread, nie Main Thread blockieren)
         if let b64 = base64 {
@@ -65,13 +149,12 @@ struct OptimizedImageView: View {
             }.value
             if let img = decoded {
                 ImageStore.shared.setImage(img, for: imageID)
-                image = img
-                return
+                return img
             }
         }
         // 3. Fallback: Bild wurde persistiert, Base64 aber nicht mehr im Message-Objekt
         //    (wiederhergestellter Chat aus einem früheren App-Start) → von Platte laden.
-        image = await ImageStore.shared.loadFromDisk(for: imageID)
+        return await ImageStore.shared.loadFromDisk(for: imageID)
     }
 }
 
