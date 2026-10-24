@@ -127,7 +127,7 @@ nonisolated final class CodingEnvironment {
         // Python-Iteration). Vorher wurde der komplette Ordner geleert; das überschrieb außerdem
         // jede Skript-Version (Audit N23), was die Datei-Kollisionen paralleler Calls maskierte.
         if let files = try? fileManager.contentsOfDirectory(atPath: chatOutputDirectory.path) {
-            for file in files where !(file.hasSuffix(".py") || file == "sandbox.sb") {
+            for file in files where !(file.hasSuffix(".py") || file == "sandbox.sb" || file == HTMLArtifactFiles.folderName) {
                 try? fileManager.removeItem(at: chatOutputDirectory.appendingPathComponent(file))
             }
         }
@@ -203,7 +203,8 @@ nonisolated final class CodingEnvironment {
         // Konfigurierbares Timeout: standardmäßig 150 s, großzügig für normale Datenanalyse,
         // verhindert aber ein für immer hängendes Skript.
         let timeout = max(10, limits.sandboxTimeout)
-        let result = try await runProcess(process, timeout: timeout, extraTime: { proxy?.waitingTime ?? 0 })
+        let runProxy = proxy
+        let result = try await runProcess(process, timeout: timeout, extraTime: { runProxy?.waitingTime ?? 0 })
         var output = result.output
         // Internet-Protokoll und Prüfung der neuen Dateien (Programme, Installer, Skripte raus).
         if let proxy, !proxy.eventLog.isEmpty {
@@ -266,18 +267,54 @@ nonisolated final class CodingEnvironment {
                     self.close()
                     raise PermissionError(f"LernAssist: Die Datei ist größer als {_la_max // 1048576} MB.")
         _la_http.HTTPResponse.begin = _la_checked_begin
+    import builtins as _la_builtins
+    def _la_input(prompt=''):
+        print(str(prompt) + '[LernAssist: input() ist hier nicht verfügbar – leere Eingabe verwendet]')
+        return ''
+    _la_builtins.input = _la_input
+    try:
+        import ast as _la_ast, importlib as _la_importlib, sys as _la_sys
+        _la_tree = _la_ast.parse(open(_la_sys.argv[0], encoding='utf-8').read())
+        _la_used = {n.id for n in _la_ast.walk(_la_tree) if isinstance(n, _la_ast.Name)}
+        _la_bound = {n.id for n in _la_ast.walk(_la_tree) if isinstance(n, _la_ast.Name) and isinstance(n.ctx, _la_ast.Store)}
+        _la_bound |= {(a.asname or a.name).split('.')[0] for n in _la_ast.walk(_la_tree) if isinstance(n, (_la_ast.Import, _la_ast.ImportFrom)) for a in n.names}
+        _la_bound |= {n.name for n in _la_ast.walk(_la_tree) if isinstance(n, (_la_ast.FunctionDef, _la_ast.ClassDef, _la_ast.AsyncFunctionDef))}
+        for _la_alias, _la_module in {'np': 'numpy', 'pd': 'pandas', 'plt': 'matplotlib.pyplot', 'sns': 'seaborn', 'nx': 'networkx', 'sm': 'statsmodels.api', 'stats': 'scipy.stats', 'math': 'math', 'random': 'random', 'json': 'json', 're': 're', 'os': 'os', 'time': 'time', 'datetime': 'datetime'}.items():
+            if _la_alias in _la_used and _la_alias not in _la_bound:
+                try: globals()[_la_alias] = _la_importlib.import_module(_la_module)
+                except Exception: pass
+    except Exception:
+        pass
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
+        import matplotlib.figure as _la_mfig
+        import atexit as _la_atexit
         import glob
         plt.rcParams['figure.dpi'] = \(dpi)
         plt.rcParams['figure.figsize'] = (10, 6)
         plt.rcParams['font.size'] = 12
+        _la_cwd = _la_os.path.realpath(_la_os.getcwd())
+        _la_orig_savefig = _la_mfig.Figure.savefig
+        def _la_savefig(self, fname, *args, **kwargs):
+            if isinstance(fname, (str, bytes, _la_os.PathLike)):
+                _la_p = _la_os.fspath(fname)
+                if isinstance(_la_p, str):
+                    _la_abs = _la_os.path.realpath(_la_os.path.abspath(_la_p))
+                    if not _la_abs.startswith(_la_cwd + _la_os.sep) and _la_abs != _la_cwd:
+                        fname = _la_os.path.join(_la_cwd, _la_os.path.basename(_la_p) or 'output_plot.png')
+            return _la_orig_savefig(self, fname, *args, **kwargs)
+        _la_mfig.Figure.savefig = _la_savefig
         def custom_show(*args, **kwargs):
             if not (glob.glob('*.png') + glob.glob('*.jpg') + glob.glob('*.jpeg')):
                 plt.savefig('output_auto_plot.png', bbox_inches='tight')
         plt.show = custom_show
+        def _la_autosave():
+            if not (glob.glob('*.png') + glob.glob('*.jpg') + glob.glob('*.jpeg')) and plt.get_fignums():
+                for _la_i, _la_num in enumerate(plt.get_fignums(), 1):
+                    plt.figure(_la_num).savefig(f'output_auto_plot_{_la_i}.png', bbox_inches='tight')
+        _la_atexit.register(_la_autosave)
     except ImportError:
         pass
     """
@@ -329,7 +366,37 @@ nonisolated final class CodingEnvironment {
             }
         }
 
-        return code
+        return repairCommonMistakes(code)
+    }
+
+    /// Kleinigkeiten aus Modell-Code, die Python sonst mit einem Fehler beantwortet. Die Zeilenzahl
+    /// bleibt gleich, damit Traceback-Zeilen weiter zum Code des Modells passen.
+    /// - geschützte Leerzeichen und unsichtbare Zeichen → normale Leerzeichen bzw. weg
+    /// - Einrückung mit Tabs UND Leerzeichen gemischt → Tabs zu 4 Leerzeichen
+    /// - IPython-Befehle (`%matplotlib inline`, `!pip install …`) → Kommentar
+    static func repairCommonMistakes(_ code: String) -> String {
+        var text = code.replacingOccurrences(of: "\u{00A0}", with: " ")
+        for invisible in ["\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}"] {
+            text = text.replacingOccurrences(of: invisible, with: "")
+        }
+        var lines = text.components(separatedBy: "\n")
+        let indents = lines.compactMap { line -> Character? in line.first == "\t" || line.first == " " ? line.first : nil }
+        let mixedIndent = indents.contains("\t") && indents.contains(" ")
+        lines = lines.map { line in
+            var line = line
+            if mixedIndent {
+                let leading = line.prefix { $0 == "\t" || $0 == " " }
+                line = leading.replacingOccurrences(of: "\t", with: "    ") + line.dropFirst(leading.count)
+            }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("%") || trimmed.hasPrefix("!pip") || trimmed.hasPrefix("!conda") || trimmed.hasPrefix("!python") {
+                let indent = line.prefix { $0 == " " || $0 == "\t" }
+                // `pass` statt reinem Kommentar: Der Befehl kann die einzige Zeile eines Blocks sein.
+                line = indent + "pass  # (von LernAssist entfernt: " + trimmed + ")"
+            }
+            return line
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Begrenztes Terminal
@@ -714,7 +781,7 @@ nonisolated final class CodingEnvironment {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Installieren")
             alert.addButton(withTitle: "Abbrechen")
-            return alert.runModal() == .alertFirstButtonReturn
+            return ModalActivity.run({ alert.runModal() }) == .alertFirstButtonReturn
         }
     }
 

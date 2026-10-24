@@ -6,13 +6,45 @@ import WebKit
 struct MarkdownView: View {
     let markdown: String
     var fontScale: Double = 1.0
+    /// Schlüssel für den Höhen-Speicher (z. B. Nachrichten-ID). In der Lazy-Chatliste entstehen
+    /// Zeilen beim Scrollen neu – mit der gemerkten Höhe stimmt das Layout sofort (kein Springen).
+    var heightKey: String? = nil
+    var onRepairDiagram: ((String, String) -> Void)? = nil
     var onExplainSelection: ((String) -> Void)? = nil
 
-    @State private var webViewHeight: CGFloat = 30
+    @State private var webViewHeight: CGFloat
+
+    init(markdown: String, fontScale: Double = 1.0, heightKey: String? = nil,
+         onRepairDiagram: ((String, String) -> Void)? = nil, onExplainSelection: ((String) -> Void)? = nil) {
+        self.markdown = markdown
+        self.fontScale = fontScale
+        self.heightKey = heightKey
+        self.onRepairDiagram = onRepairDiagram
+        self.onExplainSelection = onExplainSelection
+        _webViewHeight = State(initialValue: heightKey.flatMap { RenderedHeightCache.shared.height(for: $0) } ?? 30)
+    }
 
     var body: some View {
-        MarkdownWebView(markdown: markdown, fontScale: fontScale, dynamicHeight: $webViewHeight, onExplainSelection: onExplainSelection)
+        MarkdownWebView(markdown: markdown, fontScale: fontScale, dynamicHeight: $webViewHeight,
+                        onExplainSelection: onExplainSelection, onRepairDiagram: onRepairDiagram)
             .frame(height: max(webViewHeight, 30))
+            .onChange(of: webViewHeight) { _, height in
+                if let heightKey { RenderedHeightCache.shared.store(height, for: heightKey) }
+            }
+    }
+}
+
+/// Zuletzt gemessene Höhen gerenderter Inhalte (Antworten, interaktive Ausgaben), nur im RAM.
+@MainActor
+final class RenderedHeightCache {
+    static let shared = RenderedHeightCache()
+    private var heights: [String: CGFloat] = [:]
+
+    func height(for key: String) -> CGFloat? { heights[key] }
+
+    func store(_ height: CGFloat, for key: String) {
+        if heights.count > 2_000 { heights.removeAll(keepingCapacity: true) }
+        heights[key] = height
     }
 }
 
@@ -40,6 +72,7 @@ struct MarkdownWebView: NSViewRepresentable {
     var fontScale: Double = 1.0
     @Binding var dynamicHeight: CGFloat
     var onExplainSelection: ((String) -> Void)?
+    var onRepairDiagram: ((String, String) -> Void)? = nil
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -48,6 +81,18 @@ struct MarkdownWebView: NSViewRepresentable {
         config.userContentController.add(context.coordinator, name: "linkClicked")
         config.userContentController.add(context.coordinator, name: "explainSelection")
         config.userContentController.add(context.coordinator, name: "runHTML")
+        config.userContentController.add(context.coordinator, name: "copyText")
+        config.userContentController.add(context.coordinator, name: "repairDiagram")
+        // Texte im Renderer in der App-Sprache.
+        let uiTexts: [String: String] = [
+            "diagramFailed": L("Diagramm konnte nicht gezeichnet werden – Quelltext:"), "repair": L("Reparieren lassen"),
+            "repairing": L("Wird repariert …"), "copy": L("Kopieren"), "copied": L("Kopiert"),
+            "simulation": L("Als Simulation anzeigen"),
+        ]
+        if let json = try? JSONSerialization.data(withJSONObject: uiTexts), let text = String(data: json, encoding: .utf8) {
+            config.userContentController.addUserScript(WKUserScript(source: "window._ui = \(text);",
+                                                                    injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         // Abbildungen aus der Recherche kommen über ein eigenes Schema direkt aus dem App-Speicher.
         config.setURLSchemeHandler(ResearchImageSchemeHandler(), forURLScheme: ResearchImageSchemeHandler.scheme)
 
@@ -274,6 +319,18 @@ struct MarkdownWebView: NSViewRepresentable {
                 if let dict = message.body as? [String: Any], let text = dict["text"] as? String {
                     DispatchQueue.main.async {
                         self.parent.onExplainSelection?(text)
+                    }
+                }
+            case "repairDiagram":
+                if let dict = message.body as? [String: Any], let source = dict["source"] as? String {
+                    let error = dict["error"] as? String ?? ""
+                    DispatchQueue.main.async { self.parent.onRepairDiagram?(source, error) }
+                }
+            case "copyText":
+                if let text = message.body as? String {
+                    DispatchQueue.main.async {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
                     }
                 }
             case "runHTML":

@@ -14,6 +14,8 @@ nonisolated enum WebFetchError: LocalizedError, Equatable {
     case invalidURL
     case blockedAddress(String)
     case httpStatus(Int)
+    /// Rate-Limit (429, oder 503 mit Retry-After): Wartezeit laut Server, falls angegeben.
+    case rateLimited(Int, TimeInterval?)
     case unsupportedContent(String)
 
     var errorDescription: String? {
@@ -21,6 +23,7 @@ nonisolated enum WebFetchError: LocalizedError, Equatable {
         case .invalidURL:                return "Ungültige oder nicht erlaubte URL (nur http/https)."
         case .blockedAddress(let host):  return "Adresse \(host) ist gesperrt (lokales/privates Netz)."
         case .httpStatus(let code):      return "Die Seite antwortete mit HTTP \(code)."
+        case .rateLimited(let code, _):  return "Anfragegrenze erreicht (HTTP \(code))."
         case .unsupportedContent(let t): return "Inhaltstyp \(t) wird nicht gelesen."
         }
     }
@@ -52,7 +55,7 @@ nonisolated struct WebFetcher: Sendable {
         return URLSession(configuration: config)
     }()
 
-    func fetch(_ url: URL, accept: String = "text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5") async throws -> FetchedPage {
+    func fetch(_ url: URL, accept: String = "text/html,application/xhtml+xml,application/pdf,text/plain;q=0.9,*/*;q=0.5", headers: [String: String] = [:]) async throws -> FetchedPage {
         try await Self.validate(url)
         // Höflicher Abstand pro Host (Fach-APIs, Volltexte) – siehe HostPacing.
         if let host = url.host { try await HostPacing.shared.waitTurn(host: host) }
@@ -60,6 +63,9 @@ nonisolated struct WebFetcher: Sendable {
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(accept, forHTTPHeaderField: "Accept")
         request.setValue("de-DE,de;q=0.9,en;q=0.8", forHTTPHeaderField: "Accept-Language")
+        for (key, value) in headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
 
         let guardDelegate = RedirectGuard(maxRedirects: maxRedirects)
         // Download in eine temporäre Datei statt Byte-für-Byte über AsyncBytes: Letzteres brauchte
@@ -79,9 +85,12 @@ nonisolated struct WebFetcher: Sendable {
         if let error = guardDelegate.error { throw error }
         guard let http = response as? HTTPURLResponse else { throw WebFetchError.invalidURL }
         guard (200...299).contains(http.statusCode) else {
-            if http.statusCode == 429 || http.statusCode == 503, let host = url.host {
-                let retry = (http.value(forHTTPHeaderField: "Retry-After")).flatMap(TimeInterval.init) ?? 30
-                await HostPacing.shared.pause(host: host, seconds: retry)
+            // Rate-Limit: 429 immer, 503 nur mit Retry-After (sonst ist es ein Ausfall des Dienstes).
+            // Der Host wird pausiert – Folgeanfragen werden dann sofort übersprungen statt zu warten.
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            if http.statusCode == 429 || (http.statusCode == 503 && retryAfter != nil) {
+                if let host = url.host { await HostPacing.shared.pause(host: host, seconds: retryAfter ?? 60) }
+                throw WebFetchError.rateLimited(http.statusCode, retryAfter)
             }
             throw WebFetchError.httpStatus(http.statusCode)
         }

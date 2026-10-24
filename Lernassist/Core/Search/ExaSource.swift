@@ -59,3 +59,62 @@ nonisolated struct ExaSource: SearchSource {
         String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
     }
 }
+
+/// Brave Search über die offizielle REST-API (`https://api.search.brave.com/res/v1/web/search`).
+/// Standardmäßig aus; wird von der Pipeline nur als Fallback gefragt, wenn sowohl die Quelle `.brave`
+/// aktiviert als auch ein nicht-leerer `apiKey` (Header `X-Subscription-Token`) hinterlegt ist.
+nonisolated struct BraveSearchSource: SearchSource {
+    var apiKey: String = ""
+    var userAgent: String = SourceHTTP.apiUserAgent
+    var id: ResearchSource { .brave }
+
+    static let endpoint = "https://api.search.brave.com/res/v1/web/search"
+
+    func search(_ query: String, limit: Int) async throws -> [SearchHit] {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return [] }
+        guard let url = SourceHTTP.url(Self.endpoint, [
+            "q": query,
+            "count": String(max(1, min(limit, 20))),
+            "extra_snippets": "true",
+        ]) else { return [] }
+        let json = try await SourceHTTP.json(url, userAgent: userAgent, headers: ["X-Subscription-Token": trimmedKey])
+        return Self.parse(json)
+    }
+
+    static func parse(_ json: Any) -> [SearchHit] {
+        guard let root = json as? [String: Any],
+              let web = root["web"] as? [String: Any],
+              let results = web["results"] as? [[String: Any]] else { return [] }
+        return results.enumerated().compactMap { index, item in
+            guard let rawURL = item["url"] as? String, !rawURL.isEmpty else { return nil }
+            let rawTitle = (item["title"] as? String) ?? rawURL
+            let title = stripHTML(rawTitle)
+            let description = stripHTML((item["description"] as? String) ?? "")
+            let published = (item["page_age"] as? String) ?? (item["age"] as? String)
+            let extraSnippets = (item["extra_snippets"] as? [String] ?? [])
+                .map(stripHTML)
+                .filter { $0.count >= 20 }
+            var blocks: [String]? = nil
+            if !extraSnippets.isEmpty {
+                var combined = ["# " + (title.isEmpty ? rawURL : title)]
+                if description.count >= 20 { combined.append(description) }
+                combined.append(contentsOf: extraSnippets)
+                blocks = combined
+            }
+            return SearchHit(
+                source: .brave,
+                title: title.isEmpty ? rawURL : title,
+                url: rawURL,
+                snippet: String(description.prefix(300)),
+                published: published,
+                blocks: blocks,
+                rank: index
+            )
+        }
+    }
+
+    private static func stripHTML(_ text: String) -> String {
+        ContentExtractor.clean(text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression))
+    }
+}

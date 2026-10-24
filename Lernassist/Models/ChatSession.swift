@@ -92,10 +92,10 @@ enum FlashcardRating: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .again: return "Nochmal"
-        case .hard:  return "Schwer"
-        case .good:  return "Gut"
-        case .easy:  return "Einfach"
+        case .again: return L("Nochmal")
+        case .hard:  return L("Schwer")
+        case .good:  return L("Gut")
+        case .easy:  return L("Einfach")
         }
     }
 
@@ -180,6 +180,11 @@ struct ChatSession: Identifiable, Codable {
     var titleRefined: Bool?
     /// Fach wurde von Hand gesetzt – die KI überschreibt es dann nicht mehr.
     var subjectSetByUser: Bool?
+
+    /// Lokalisierter Anzeigetitel: Unbenannte Chats heißen je nach Sprache „New Chat“ oder „Neuer Chat“.
+    var displayTitle: String {
+        (title == "Neuer Chat" || title == "New Chat") ? L("Neuer Chat") : title
+    }
 
     // Gibt das Datum der letzten Aktivität zurück (die letzte Nachricht oder das Erstelldatum)
     var lastActivityDate: Date {

@@ -40,6 +40,22 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         didSet { CodingEnvironment.shared.limits.downloadMaxMB = pythonDownloadMaxMB }
     }
     @Published var downloadAllowedDomains: [String] = []
+    @Published var htmlLibraryDomains: [String] = []
+    /// Darstellung (Version 4). `Theme.current` spiegelt sie für die DS-Farben.
+    @Published var appearance = AppearanceSettings() {
+        didSet { Theme.current = appearance }
+    }
+    /// Einstellungen pro Modell (Reiter „Modelle“). Die Registry spiegelt sie für den Request-Builder.
+    @Published var modelSettings: [String: ModelSettings] = [:] {
+        didSet { ModelSettingsRegistry.shared.update(modelSettings) }
+    }
+    /// Sprache der Oberfläche. `Loc.current` spiegelt sie für `L(…)`.
+    @Published var appLanguage: AppLanguage = .english {
+        didSet {
+            Loc.current = appLanguage
+            NotificationCenter.default.post(name: .appLanguageChanged, object: nil)
+        }
+    }
     @Published var pythonInternetEnabled: Bool = true {
         didSet { CodingEnvironment.shared.limits.internetEnabled = pythonInternetEnabled }
     }
@@ -60,6 +76,8 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     @Published var dueFlashcardsCount = 0
     /// Kurzer Hinweis nach „Als Karte merken“ (mit Rückgängig).
     @Published var flashcardNotice: FlashcardNotice?
+    /// Grund, warum der letzte unsichtbare Prompt (Karten, Quiz, Zusammenfassung …) scheiterte.
+    var lastInvisiblePromptError: String?
     /// Zeitpunkte, zu denen Karten fällig werden – für den Zähler ohne Durchlauf aller Chats.
     var flashcardDueDates: [Date] = []
     var flashcardRefreshTimer: Timer?
@@ -86,7 +104,21 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     /// Websuche via Tool-Calling aktivieren
     @Published var searchEnabled: Bool = false
     /// SearXNG-Basis-URL (auf diesem Mac z.B. http://127.0.0.1:8082)
-    @Published var searxngURL: String = "http://127.0.0.1:8082"
+    @Published var searxngURL: String = "http://127.0.0.1:8082" {
+        didSet {
+            // Adresse des aktiven Katalog-Eintrags mitführen (z. B. aus dem Einrichtungs-Assistenten).
+            guard searxngURL != oldValue,
+                  let index = searxngServers.firstIndex(where: { $0.id == activeSearXNGServerID }),
+                  searxngServers[index].url != searxngURL else { return }
+            searxngServers[index].url = searxngURL
+        }
+    }
+    /// Katalog der Such-Server; der aktive liefert `searxngURL` und die Anmeldung.
+    @Published var searxngServers: [SearXNGServer] = []
+    @Published var activeSearXNGServerID: UUID?
+    /// Verbindungswächter (Einstellungen → Erweitert).
+    @Published var connectionWatchEnabled = true
+    @Published var connectionWatchSystemNotices = true
     /// Maximale Zeichenanzahl für das browse_url Tool (Standard 10.000)
     @Published var maxBrowseCharacters: Int = 10000
     /// Maximale aufeinanderfolgende Tool-Runden pro Modell-Turn (konfigurierbar, Standard 8).
@@ -95,7 +127,6 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     @Published var autoLabelingEnabled: Bool = true
     @Published var autoImageToTextEnabled: Bool = true
     @Published var extractImagesFromPDF: Bool = true
-    @Published var isSemanticSearchEnabled: Bool = false
     @Published var imageExtractionDetail: String = "Normal"
     @Published var appTheme: String = "System"
     /// Schriftgrößen-Multiplikator (0.8...1.5) für den Chat-Inhalt, stufenlos per Slider.
@@ -133,6 +164,14 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         didSet {
             guard exaAPIKey != oldValue else { return }
             KeychainStore.setSecret(exaAPIKey, account: "exa")
+            syncResearchConfiguration()
+        }
+    }
+    /// Brave-Search-API-Key (Schlüsselbund). Erforderlich, damit die Quelle `.brave` aktiv wird.
+    @Published var braveAPIKey: String = KeychainStore.secret(account: "brave") {
+        didSet {
+            guard braveAPIKey != oldValue else { return }
+            KeychainStore.setSecret(braveAPIKey, account: "brave")
             syncResearchConfiguration()
         }
     }
@@ -253,6 +292,9 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
     // Performance: Throttling für Streaming-Updates
     var contentBuffer = ""
     var thinkingBuffer = ""
+    /// Tool-Call-Deltas wie Text gepuffert (Version 4): Anbieter, die den Code eines Tool-Aufrufs
+    /// live streamen, lösten sonst pro Token einen Neuaufbau der Chat-Ansicht aus.
+    var toolDeltaBuffer: [ToolCallInfo] = []
     var updateTimer: AnyCancellable?
 
     // Client-seitige TPS-Messung & Live-Telemetrie-Sampling (5 Hz)
@@ -387,6 +429,10 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             changedSignal($customPrompts),
             changedSignal($searchEnabled),
             changedSignal($searxngURL),
+            changedSignal($searxngServers),
+            changedSignal($activeSearXNGServerID),
+            changedSignal($connectionWatchEnabled),
+            changedSignal($connectionWatchSystemNotices),
             changedSignal($maxBrowseCharacters),
             changedSignal($maxToolRounds),
             changedSignal($keepMultipleImagesInHistory),
@@ -394,7 +440,6 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             changedSignal($autoLabelingEnabled),
             changedSignal($autoImageToTextEnabled),
             changedSignal($extractImagesFromPDF),
-            changedSignal($isSemanticSearchEnabled),
             changedSignal($imageExtractionDetail),
             changedSignal($appTheme),
             changedSignal($chatFontSize),
@@ -417,6 +462,10 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
             changedSignal($flashcardDifficulty),
             changedSignal($pythonDownloadMaxMB),
             changedSignal($downloadAllowedDomains),
+            changedSignal($htmlLibraryDomains),
+            changedSignal($appearance),
+            changedSignal($appLanguage),
+            changedSignal($modelSettings),
             changedSignal($pythonInternetEnabled),
             changedSignal($pythonMaxDownloadsPerRun),
             changedSignal($pythonDownloadTypes),
@@ -654,7 +703,7 @@ class ChatViewModel: ObservableObject, @unchecked Sendable {
         
         let toArchive = sessions.filter { session in
             // Neuen, leeren Chat nicht sofort archivieren
-            if session.messages.isEmpty && session.title == "Neuer Chat" { return false }
+            if session.messages.isEmpty && (session.title == "Neuer Chat" || session.title == "New Chat") { return false }
             return session.lastActivityDate < threshold
         }
         

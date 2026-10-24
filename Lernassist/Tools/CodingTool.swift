@@ -9,7 +9,8 @@ final class CodingTool: AppTool {
 Führt Code aus und zeigt das Ergebnis direkt im Chat – für Datenauswertung, Berechnungen, Grafiken \
 und interaktive Darstellungen. language "python" (Python 3.12 mit numpy, pandas, scipy, sympy, matplotlib, \
 seaborn, statsmodels, networkx, openpyxl, requests): Berechnungen, Datenauswertung (angehängte Dateien liegen im \
-Arbeitsordner), Plots (Bilder erscheinen automatisch). Fehlt ein Paket, nenne es in `install_packages`. \
+Arbeitsordner), Plots (speichere Grafiken mit plt.savefig('plot.png') oder plt.show(); du erhältst im Ergebnis eine \
+[B#]-Nummer und kannst die Grafik mit [B#] allein in einer Zeile an der passenden Stelle deiner Antwort einbinden). Fehlt ein Paket, nenne es in `install_packages`. \
 language "html": interaktive Erklärungen, Simulationen und Animationen als EINE selbstständige HTML-Datei \
 mit inline JS/CSS, SVG oder Canvas (keine externen Skripte/CDNs). Keine GUI-Fenster (tkinter, pygame). \
 Python darf Daten aus dem Internet laden, nur über https (ganz normal mit requests, urllib oder \
@@ -61,18 +62,7 @@ korrigierte Vollversion.
         }
         
         if language.lowercased() == "html" {
-            let cleanCode = Self.sanitizeHTMLCode(code)
-            if let externalResource = Self.blockedExternalResource(in: cleanCode) {
-                return .failure("Die HTML-Ausgabe enthält eine externe Ressource (\(externalResource)). Diese Chat-Ansicht blockiert externe Skripte/Styles/Ressourcen. Verwende eine vollständig selbstständige HTML-Datei mit inline-JavaScript, inline-CSS, SVG oder Canvas.")
-            }
-            // Wird von ChatViewModel direkt als eigene, sandboxed gerenderte Chat-Nachricht
-            // eingefügt (siehe ToolArtifact.html) – nicht mehr als Markdown/iframe-Text, da
-            // markdown-it html:false gesetzt hat und rohes HTML dort nur als escapter Text
-            // erschien (nie tatsächlich gerendert wurde).
-            return ToolResult(
-                content: "Interaktive HTML-Ausgabe wurde direkt im Chat angezeigt.\n\n" + Self.explainReminder,
-                artifacts: [.html(cleanCode)]
-            )
+            return await runHTML(Self.sanitizeHTMLCode(code))
         }
         
         // Ohne eingerichtete Umgebung gibt es nur kryptische Sandbox-Fehler (execvp …). Klar melden,
@@ -129,20 +119,40 @@ korrigierte Vollversion.
                 if !CodingEnvironment.shared.limits.internetEnabled, Self.looksLikeNetworkAttempt(result.output) {
                     finalOutput += "\nInternet für Python ist in den Einstellungen ausgeschaltet. Arbeite ohne Online-Daten oder nutze web_search."
                 }
+                if result.output.contains("was never closed") || result.output.contains("unexpected EOF")
+                    || result.output.contains("expected an indented block") && code.hasSuffix(":") {
+                    finalOutput += "\nDer Code wirkt abgeschnitten – sende ihn vollständig."
+                }
                 finalOutput += "\nKorrigiere den Fehler und sende eine vollständige, korrigierte Version an coding_sandbox."
             }
 
-            // Bilder werden NICHT als Base64 in `content` gepackt (füllt sonst bei jeder
-            // Folgeanfrage erneut den Modell-Kontext), sondern als eigene Artefakte direkt im
-            // Chat angezeigt. Das Modell bekommt nur eine kurze Erwähnung als Text.
-            var artifacts: [ToolArtifact] = []
+            // Erzeugte Grafiken werden wie Recherche-Bilder im Bildspeicher der App abgelegt und
+            // bekommen eine fortlaufende [B#]-Nummer (in ChatViewModel.renumberImages eindeutig
+            // über Websuche, URL-Lesen und Python-Plots hinweg). So kann das Modell sie mit [B#]
+            // exakt an der passenden Stelle im Text einbinden, ohne den Prefix-Cache zu belasten.
+            var plotRefs: [ResearchImageRef] = []
             for path in result.imagePaths {
-                if let imgData = try? Data(contentsOf: URL(fileURLWithPath: path)) {
-                    artifacts.append(.image(base64: imgData.base64EncodedString()))
-                }
+                guard let imgData = try? Data(contentsOf: URL(fileURLWithPath: path)), !imgData.isEmpty else { continue }
+                let id = UUID()
+                try? FileManager.default.createDirectory(at: AppStorageLocation.imagesDir, withIntermediateDirectories: true)
+                guard (try? imgData.write(to: AppStorageLocation.imageFile(id: id), options: .atomic)) != nil else { continue }
+                let fileName = URL(fileURLWithPath: path).lastPathComponent
+                let caption = (fileName == "output_auto_plot.png" || fileName.hasPrefix("output_auto_plot_"))
+                    ? "Python-Plot"
+                    : fileName
+                plotRefs.append(ResearchImageRef(
+                    number: plotRefs.count + 1,
+                    imageID: id,
+                    caption: caption,
+                    sourceURL: "lernassist-plot://\(id.uuidString)",
+                    pageURL: "",
+                    domain: "Python-Plot"
+                ))
             }
-            if !artifacts.isEmpty {
-                finalOutput += "\n\n(\(artifacts.count) Bild(er) wurden erzeugt und dem Nutzer direkt im Chat angezeigt.)"
+            let artifacts: [ToolArtifact] = plotRefs.isEmpty ? [] : [.researchImages(plotRefs)]
+            if !plotRefs.isEmpty {
+                let lines = plotRefs.map { "[B\($0.number)] Erzeugte Grafik (\($0.caption))" }.joined(separator: "\n")
+                finalOutput += "\n\nAbbildungen (schreibe [B#] allein in eine Zeile direkt vor oder nach dem Absatz, auf den sich die Grafik bezieht, um sie dort einzubetten):\n" + lines
             }
             if result.timedOut || result.exitCode != 0 {
                 return ToolResult(content: finalOutput, isError: true, errorKind: .fatal, artifacts: artifacts)
@@ -160,6 +170,44 @@ korrigierte Vollversion.
                        "Max retries exceeded", "Network is unreachable", "nodename nor servname",
                        "socket.error", "Failed to establish a new connection", "PermissionError: [Errno 1]"]
         return markers.contains { output.contains($0) }
+    }
+
+    static let htmlScriptErrorPrefix = "Die interaktive HTML-Ausgabe wird angezeigt, das Skript meldet beim Laden aber Fehler:"
+
+    /// HTML-Ausgabe: bekannte Bibliotheken kommen lokal aus der App, andere externe Domains gibt
+    /// der Nutzer frei (Einmal / Immer / Ablehnen). Ein kurzer, unsichtbarer Probelauf meldet
+    /// Skriptfehler im Tool-Ergebnis – das Modell kann dann eine korrigierte Fassung schicken.
+    /// Wird von ChatViewModel als eigene, sandboxed gerenderte Chat-Nachricht eingefügt.
+    private func runHTML(_ html: String) async -> ToolResult {
+        var html = html
+        let rewrite = HTMLLibraries.rewrite(html)
+        var allowedHosts: [String] = []
+        if !rewrite.unknownHosts.isEmpty {
+            let hosts = rewrite.unknownHosts
+            guard let granted = await MainActor.run(body: { HTMLLibraryPermissions.shared.requestPermission(hosts: hosts) }) else {
+                return .failure("Die HTML-Ausgabe lädt Dateien von \(hosts.joined(separator: ", ")); der Nutzer hat das abgelehnt. Verwende eine vollständig selbstständige HTML-Datei mit inline-JavaScript, inline-CSS, SVG oder Canvas.")
+            }
+            allowedHosts = granted
+        }
+
+        var errors = await HTMLPreflight.errors(in: html, allowedHosts: allowedHosts)
+        // Auto-Korrektur: Skripte im <head>, die zu früh auf Elemente zugreifen, ans Ende verschieben.
+        if HTMLArtifactRuntime.looksLikeEarlyDOMAccess(errors), let moved = HTMLArtifactRuntime.moveHeadScriptsToBodyEnd(html) {
+            let retry = await HTMLPreflight.errors(in: moved, allowedHosts: allowedHosts)
+            if retry.count < errors.count {
+                html = moved
+                errors = retry
+            }
+        }
+
+        var content = "Interaktive HTML-Ausgabe wurde direkt im Chat angezeigt."
+        if !errors.isEmpty {
+            content = Self.htmlScriptErrorPrefix + "\n"
+                + errors.prefix(5).map { "- " + $0 }.joined(separator: "\n")
+                + "\nKorrigiere den Code und sende die vollständige HTML-Datei erneut."
+        }
+        return ToolResult(content: content + "\n\n" + Self.explainReminder,
+                          artifacts: [.html(html, allowedHosts: allowedHosts)])
     }
 
     /// Bereinigt HTML-Code von Code-Block-Markern (```html ... ```), falls ein Modell
@@ -197,16 +245,4 @@ korrigierte Vollversion.
         }.joined(separator: "\n")
     }
 
-    /// Modellgeneriertes HTML bleibt lokal und deterministisch: Die Chat-Ansicht blockiert
-    /// Netzwerkzugriffe per CSP und NavigationDelegate. Frühzeitige Validierung verhindert,
-    /// dass ein CDN-abhängiges Artefakt als scheinbar fertige, aber statische Ausgabe erscheint.
-    private static func blockedExternalResource(in html: String) -> String? {
-        let pattern = #"(?is)<\s*(script|link|img|iframe|video|audio|source)\b[^>]*\b(?:src|href)\s*=\s*[\"']\s*(https?:|//)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
-              let range = Range(match.range(at: 1), in: html) else {
-            return nil
-        }
-        return String(html[range]).lowercased()
-    }
 }

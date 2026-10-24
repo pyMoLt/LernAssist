@@ -5,6 +5,10 @@ import SwiftUI
 /// Darstellung der Tool-Aufrufe (Phase 6): Live-Code aus unvollständigem JSON, Quellen, Code-Läufe.
 final class ToolPresentationTests: XCTestCase {
 
+    // Die Tests prüfen die deutschen Titel; die Oberfläche startet sonst auf Englisch.
+    override func setUp() { Loc.current = .german }
+    override func tearDown() { Loc.current = .english }
+
     func testPartialCodeWhileStreaming() {
         let partial = #"{"language":"python","code":"import numpy as np\nx = np.arange(3)\nprint(\"Hal"#
         let p = ToolCallPresentation(call: ToolCallInfo(id: "1", index: 0, name: "coding_sandbox", arguments: partial))

@@ -99,7 +99,7 @@ extension ChatViewModel {
     private var activeContextFillRate: Double? {
         guard let profile = activeProfile,
               let idx = sessions.firstIndex(where: { $0.id == activeSessionId }) else { return nil }
-        let window = max(profile.contextSizeOverride ?? currentMetrics.contextWindowSize ?? Self.fallbackContextWindow, 2048)
+        let window = max(ModelSettingsRegistry.shared.settings(for: profile.model).contextWindow ?? profile.contextSizeOverride ?? currentMetrics.contextWindowSize ?? Self.fallbackContextWindow, 2048)
         var chars = 0
         for msg in sessions[idx].messages {
             if msg.role == "document" {
@@ -330,32 +330,88 @@ extension ChatViewModel {
         return images
     }
 
-    /// Setzt Abbildungen ein: Eine Zeile nur mit [B3] wird zum Bild mit Beschriftung und Quelle;
-    /// [B3] mitten im Satz wird zum Link auf die Quellseite. Code-Blöcke bleiben unberührt.
-    static func embedResearchImages(in markdown: String, images: [Int: ResearchImageRef]) -> String {
-        guard !images.isEmpty, markdown.contains("[B") else { return markdown }
-        var inCode = false
-        var lines: [String] = []
-        for line in markdown.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") { inCode.toggle() }
-            guard !inCode else { lines.append(line); continue }
-            let bare = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "*_.:"))
-            if let match = bare.range(of: #"^\[B(\d+)\]$"#, options: .regularExpression),
-               let number = Int(bare[match].dropFirst(2).dropLast()), let ref = images[number] {
-                let caption = ref.caption.replacingOccurrences(of: "]", with: ")").replacingOccurrences(of: "[", with: "(")
-                lines.append("![\(caption)](lernassist-image://\(ref.imageID.uuidString))")
-                lines.append("")
-                lines.append("*\(caption)* · [Quelle: \(ref.domain)](\(ref.pageURL))")
-                continue
+    /// Selbstgenerierte Python-Plots dieses Antwort-Turns (`pageURL.isEmpty`), für die Hauptantwort
+    /// des Turns. Vergisst das Modell `[B#]` im Text zu setzen, zeigt `embedResearchImages` sie
+    /// automatisch oben an, damit kein berechneter Plot verloren geht.
+    func turnPlots(for messageID: UUID) -> [ResearchImageRef] {
+        guard let session = sessions.first(where: { $0.messages.contains { $0.id == messageID } }),
+              let index = session.messages.firstIndex(where: { $0.id == messageID }),
+              session.messages[index].role == "assistant" else { return [] }
+        var start = index
+        while start > 0 && session.messages[start - 1].role == "assistant" { start -= 1 }
+        var end = index
+        while end + 1 < session.messages.count && session.messages[end + 1].role == "assistant" { end += 1 }
+        let turnMessages = Array(session.messages[start...end])
+        let primaryID = turnMessages.last(where: WorkStep.hasAnswerText)?.id ?? turnMessages.last?.id
+        guard primaryID == messageID else { return [] }
+        let otherContent = turnMessages.filter { $0.id != messageID }.map(\.content).joined(separator: "\n")
+        var plots: [ResearchImageRef] = []
+        var seen = Set<Int>()
+        for msg in turnMessages {
+            for call in msg.toolCalls ?? [] {
+                for ref in call.researchImages ?? [] where ref.pageURL.isEmpty && seen.insert(ref.number).inserted {
+                    if !otherContent.contains("[B\(ref.number)]") {
+                        plots.append(ref)
+                    }
+                }
             }
-            var converted = line
-            for (number, ref) in images {
-                converted = converted.replacingOccurrences(of: "[B\(number)]", with: "[Abb. B\(number)](\(ref.pageURL))")
-            }
-            lines.append(converted)
         }
-        return lines.joined(separator: "\n")
+        return plots
+    }
+
+    /// Setzt Abbildungen ein: Eine Zeile mit [B3] (allein oder mit nachfolgender Bildunterschrift)
+    /// wird zum Bild; [B3] mitten im Satz wird zum Link bzw. Verweis. Selbstgenerierte Plots des
+    /// aktuellen Turns, die das Modell nicht mit [B#] eingebunden hat, erscheinen automatisch oben.
+    static func embedResearchImages(in markdown: String,
+                                    images: [Int: ResearchImageRef],
+                                    turnPlots: [ResearchImageRef] = []) -> String {
+        guard !images.isEmpty || !turnPlots.isEmpty else { return markdown }
+        var embeddedNumbers = Set<Int>()
+        var lines: [String] = []
+        if !images.isEmpty, markdown.contains("[B") {
+            let lineRegex = try? NSRegularExpression(pattern: #"^[*_\s]*\[B(\d+)\][*_.:—–\-\s]*(.*)$"#)
+            var inCode = false
+            for line in markdown.components(separatedBy: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("```") { inCode.toggle() }
+                guard !inCode else { lines.append(line); continue }
+                let ns = trimmed as NSString
+                if let match = lineRegex?.firstMatch(in: trimmed, range: NSRange(location: 0, length: ns.length)),
+                   let number = Int(ns.substring(with: match.range(at: 1))),
+                   let ref = images[number] {
+                    embeddedNumbers.insert(number)
+                    let trailing = ns.substring(with: match.range(at: 2))
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "*_ ").union(.whitespaces))
+                    let rawCaption = trailing.isEmpty ? ref.caption : trailing
+                    let caption = rawCaption.replacingOccurrences(of: "]", with: ")").replacingOccurrences(of: "[", with: "(")
+                    lines.append("![\(caption)](lernassist-image://\(ref.imageID.uuidString))")
+                    if !ref.pageURL.isEmpty {
+                        lines.append("")
+                        lines.append("*\(caption)* · [Quelle: \(ref.domain)](\(ref.pageURL))")
+                    } else if !trailing.isEmpty {
+                        lines.append("")
+                        lines.append("*\(trailing)*")
+                    }
+                    continue
+                }
+                var converted = line
+                for (number, ref) in images {
+                    let replacement = ref.pageURL.isEmpty ? "(Abb. B\(number))" : "[Abb. B\(number)](\(ref.pageURL))"
+                    converted = converted.replacingOccurrences(of: "[B\(number)]", with: replacement)
+                }
+                lines.append(converted)
+            }
+        } else {
+            lines = [markdown]
+        }
+        let body = lines.joined(separator: "\n")
+        let unreferencedPlots = turnPlots.filter { !embeddedNumbers.contains($0.number) }
+        guard !unreferencedPlots.isEmpty else { return body }
+        let prefix = unreferencedPlots.map { plot in
+            let caption = plot.caption.replacingOccurrences(of: "]", with: ")").replacingOccurrences(of: "[", with: "(")
+            return "![\(caption)](lernassist-image://\(plot.imageID.uuidString))"
+        }.joined(separator: "\n\n")
+        return body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? prefix : prefix + "\n\n" + body
     }
 
     /// Ersetzt [W1] bzw. [W1, W3] durch Markdown-Links auf die Quellen.
@@ -376,6 +432,64 @@ extension ChatViewModel {
             last = match.range.location + match.range.length
         }
         result += ns.substring(from: last)
+        return result
+    }
+}
+
+// MARK: - Interaktive Ausgaben
+
+extension ChatViewModel {
+    /// Klappt eine interaktive Ausgabe ein oder aus (bleibt im Chat gespeichert). Die Nachricht
+    /// geht nicht an das Modell – der Verlauf und damit der Cache bleiben unverändert.
+    func toggleArtifactCollapsed(messageId: UUID) {
+        guard let sIdx = sessions.firstIndex(where: { $0.messages.contains { $0.id == messageId } }),
+              let mIdx = sessions[sIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
+        let collapsed = !(sessions[sIdx].messages[mIdx].artifactCollapsed ?? false)
+        sessions[sIdx].messages[mIdx].artifactCollapsed = collapsed ? true : nil
+        SessionStore.shared.save(sessions[sIdx])
+    }
+
+    /// Datei der Ausgabe im Chat-Ordner (wird bei Bedarf geschrieben, auch für ältere Chats).
+    func artifactFileURL(for message: ChatMessage) -> URL? {
+        guard let html = message.htmlArtifact,
+              let session = sessions.first(where: { $0.messages.contains { $0.id == message.id } }) else { return nil }
+        return HTMLArtifactFiles.save(html, messageID: message.id, sessionID: session.id.uuidString)
+    }
+
+    /// Lässt ein Diagramm, das auch nach der automatischen Reparatur nicht zeichnet, vom Modell
+    /// im Hintergrund korrigieren. Das Ergebnis gilt nur für die Anzeige (`displayFixes`).
+    func repairDiagram(messageId: UUID, source: String, error: String) {
+        Task { @MainActor in
+            let prompt = """
+            Das folgende Mermaid-Diagramm lässt sich nicht zeichnen. Fehlermeldung: \(error.isEmpty ? "unbekannt" : error)
+
+            Korrigiere nur die Syntax und behalte Inhalt und Aufbau. Antworte ausschließlich mit dem korrigierten \
+            Mermaid-Code, ohne Erklärung und ohne ```-Zäune.
+
+            \(source)
+            """
+            guard var fixed = await sendInvisiblePrompt(prompt, context: [], maxTokens: 4_000) else { return }
+            fixed = fixed.replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"^\s*```\s*(mermaid)?\s*"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"\s*```\s*$"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !fixed.isEmpty,
+                  let sIdx = sessions.firstIndex(where: { $0.messages.contains { $0.id == messageId } }),
+                  let mIdx = sessions[sIdx].messages.firstIndex(where: { $0.id == messageId }) else { return }
+            var fixes = sessions[sIdx].messages[mIdx].displayFixes ?? [:]
+            fixes[source] = fixed + (source.hasSuffix("\n") ? "\n" : "")
+            sessions[sIdx].messages[mIdx].displayFixes = fixes
+            SessionStore.shared.save(sessions[sIdx])
+        }
+    }
+
+    /// Inhalt für die Anzeige: reparierte Diagramme eingesetzt.
+    nonisolated static func applyingDisplayFixes(_ content: String, _ fixes: [String: String]?) -> String {
+        guard let fixes, !fixes.isEmpty else { return content }
+        var result = content
+        for (source, fixed) in fixes where !source.isEmpty {
+            result = result.replacingOccurrences(of: source, with: fixed)
+        }
         return result
     }
 }

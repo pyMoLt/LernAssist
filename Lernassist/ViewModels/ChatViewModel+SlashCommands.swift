@@ -284,14 +284,20 @@ extension ChatViewModel {
         case "standard", "default", "auto": mode = .serverDefault
         default: mode = nil
         }
+        // Version 4.0: Denken hängt am Modell (Reiter „Modelle“), nicht mehr am Profil.
+        let model = profiles[idx].model
+        let key = ModelSettings.key(for: model)
         guard let mode else {
-            addSystemMessage(text: "Thinking für „\(profiles[idx].name)“: **\(profiles[idx].thinkingMode.label)**. Ändern mit `/think an`, `/think aus` oder `/think standard`.")
+            let current = modelSettings[key]?.thinking ?? .serverDefault
+            addSystemMessage(text: "Thinking für „\(model)“: **\(current.label)**. Ändern mit `/think an`, `/think aus` oder `/think standard`.")
             return
         }
-        profiles[idx].thinkingMode = mode
-        if mode == .on, profiles[idx].thinkingBudget == nil { profiles[idx].thinkingBudget = 4_096 }
+        var entry = modelSettings[key] ?? ModelSettings()
+        entry.thinking = mode == .serverDefault ? nil : mode
+        if mode == .on, entry.thinkingBudget == nil { entry.thinkingBudget = 4_096 }
+        modelSettings[key] = entry.isEmpty ? nil : entry
         saveSettings()
-        addSystemMessage(text: "Thinking für „\(profiles[idx].name)“: **\(mode.label)**")
+        addSystemMessage(text: "Thinking für „\(model)“: **\(mode.label)**")
     }
 
     /// Verwirft die letzte Antwort und erzeugt sie zur selben Frage neu.
@@ -304,7 +310,8 @@ extension ChatViewModel {
         }
         let lastUserMessage = sessions[idx].messages[lastUser]
         sessions[idx].messages.removeSubrange(lastUser...)
-        sendMessage(text: lastUserMessage.content, imageBase64: Self.imagePayloadBase64(for: lastUserMessage))
+        sendMessage(text: lastUserMessage.content, imageBase64: Self.imagePayloadBase64(for: lastUserMessage),
+                    displayText: lastUserMessage.displayText)
     }
 
     // MARK: - /compact
@@ -321,7 +328,7 @@ extension ChatViewModel {
     /// der komplette alte Verlauf als sichtbarer erster User-Turn in den neuen Chat gedumpt.
     ///
     /// `focus`: optionaler Text nach `/compact` (z.B. `/compact konzentriere dich auf die
-    /// Karteikarten-Bugs`) – analog zum `/compact <Hinweis>`-Muster aus der CLI, lenkt die
+    /// Karteikarten-Bugs`) – lenkt die
     /// Zusammenfassung auf das Genannte, statt (wie zuvor) stillschweigend verworfen zu werden.
     private func compact(focus: String) {
         guard let session = activeSession, !session.messages.isEmpty else { return }
@@ -355,7 +362,7 @@ Antworte NUR mit der Zusammenfassung, ohne Einleitung:
             // zählen auch die Denk-Tokens mit) – Entscheidung vom 12.10.2026.
             guard let summary = await sendInvisiblePrompt(summaryRequest, context: []) else {
                 await MainActor.run {
-                    addSystemMessage(text: "Zusammenfassung fehlgeschlagen – Endpunkt nicht erreichbar. Der Chat bleibt unverändert.")
+                    addSystemMessage(text: "Zusammenfassung fehlgeschlagen – \(lastInvisiblePromptError ?? "Endpunkt nicht erreichbar"). Der Chat bleibt unverändert.")
                 }
                 return
             }

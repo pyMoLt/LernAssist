@@ -270,7 +270,12 @@ final class OMLXProviderTests: XCTestCase {
 
     func testThinkingOnSendsBudgetOnlyToOMLX() {
         var profile = EndpointProfile.omlxLocal()
-        profile.thinkingBudget = 2_048
+        // Version 4.0: Denken hängt am Modell (Reiter „Modelle“).
+        var settings = ModelSettings()
+        settings.thinking = .on
+        settings.thinkingBudget = 2_048
+        ModelSettingsRegistry.shared.update([ModelSettings.key(for: profile.model): settings])
+        defer { ModelSettingsRegistry.shared.update([:]) }
         let omlx = ChatRequestBuilder(profile: profile).payload(messages: [], purpose: .chat, stream: true)
         XCTAssertEqual((omlx["chat_template_kwargs"] as? [String: Bool])?["enable_thinking"], true)
         XCTAssertEqual(omlx["thinking_budget"] as? Int, 2_048)
@@ -283,8 +288,11 @@ final class OMLXProviderTests: XCTestCase {
     }
 
     func testThinkingOffDropsBudgetForOMLX() {
-        var profile = EndpointProfile.omlxLocal()
-        profile.thinkingMode = .off
+        let profile = EndpointProfile.omlxLocal()
+        var settings = ModelSettings()
+        settings.thinking = .off
+        ModelSettingsRegistry.shared.update([ModelSettings.key(for: profile.model): settings])
+        defer { ModelSettingsRegistry.shared.update([:]) }
         let payload = ChatRequestBuilder(profile: profile).payload(messages: [], purpose: .chat, stream: true)
         XCTAssertEqual((payload["chat_template_kwargs"] as? [String: Bool])?["enable_thinking"], false)
         XCTAssertNil(payload["thinking_budget"])

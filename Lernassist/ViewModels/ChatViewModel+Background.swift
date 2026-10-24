@@ -37,8 +37,10 @@ extension ChatViewModel {
                              useBackgroundJobModel: Bool = false,
                              maxTokens: Int? = nil,
                              jsonSchema: (name: String, schema: [String: Any])? = nil) async -> String? {
+        lastInvisiblePromptError = nil
         guard let profile = activeProfile else {
             AppLog.chat.error("sendInvisiblePrompt: kein Endpunkt konfiguriert")
+            lastInvisiblePromptError = "kein Endpunkt eingerichtet"
             return nil
         }
 
@@ -55,6 +57,11 @@ extension ChatViewModel {
             messages.append(EndpointManager.userImageMessage(text: effectivePrompt, base64: b64, provider: profile.provider))
         } else {
             messages.append(["role": "user", "content": effectivePrompt])
+        }
+        // Immer mit System-Nachricht: Manche Chat-Vorlagen verlangen eine (z. B. Sage-A1.5 mit
+        // serverseitig eingeschaltetem Verification-Modus – sonst HTTP 400).
+        if !messages.contains(where: { ($0["role"] as? String) == "system" }) {
+            messages.insert(["role": "system", "content": Self.backgroundSystemPrompt], at: 0)
         }
 
         let builder = ChatRequestBuilder(profile: profile)
@@ -95,9 +102,15 @@ extension ChatViewModel {
         } catch {
             // Fehler werden nie zur „Antwort“ (früher landete ein Fehlertext z. B. als Chat-Titel).
             AppLog.chat.error("sendInvisiblePrompt: \(error.localizedDescription) (\(profile.name))")
+            lastInvisiblePromptError = SourceHealth.isConnectionFailure(error)
+                ? "\(profile.name) nicht erreichbar"
+                : "\(profile.name): \(error.localizedDescription)"
             return nil
         }
     }
+
+    /// System-Nachricht für Hintergrund-Aufträge ohne eigene.
+    static let backgroundSystemPrompt = "Du bist LernAssist, ein Lernassistent für das Studium. Halte dich genau an die Anweisung und das verlangte Antwortformat."
 
     /// Zwingt das Modell, seine letzte Antwort aktiv per Websuche zu überprüfen.
     /// Aufrufbar über den "Verifizieren"-Button an einer Nachricht oder den `/verify`-Befehl.
@@ -161,7 +174,7 @@ extension ChatViewModel {
             // Fall ab, dass die erste Runde mehrere Assistant-Textnachrichten enthielt (Tool-Runde
             // mit Zwischentext), bei dem ein exakter `count == 1`-Trigger nie mehr griff.
             let stillDefaultTitle: Bool
-            if session.title == "Neuer Chat" {
+            if session.title == "Neuer Chat" || session.title == "New Chat" {
                 stillDefaultTitle = true
             } else if let firstUser = session.messages.first(where: { $0.role == "user" }) {
                 // Slash-Befehle setzen den Titel aus der kurzen Anzeige (displayText), nicht aus dem Prompt.

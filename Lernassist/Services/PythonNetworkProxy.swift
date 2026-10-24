@@ -229,7 +229,7 @@ nonisolated final class PythonNetworkProxy: @unchecked Sendable {
 }
 
 /// Einmal-Schalter für Fortsetzungen, die von mehreren Zustandswechseln ausgelöst werden könnten.
-private final class OnceFlag: @unchecked Sendable {
+private nonisolated final class OnceFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
     func claim() -> Bool { lock.withLock { if done { return false }; done = true; return true } }

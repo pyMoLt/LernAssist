@@ -11,6 +11,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTab: SettingsTab
     @State private var isHelpModeActive = false
+    @State private var searchText = ""
+    /// Sprungziel der Suche (Titel und Abschnitt in der aktuellen Sprache).
+    @State private var highlight: String? = nil
+    @State private var highlightSection: String? = nil
     @AppStorage("hasSeenHelpIntro") private var hasSeenHelpIntro = false
 
     /// Schließt das eigenständige Einstellungsfenster (nil = als Sheet präsentiert).
@@ -24,114 +28,139 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
-                header
-                HStack(spacing: 0) {
-                    navigation
-                    content
-                }
-                footer
+            HStack(spacing: 0) {
+                navigation
+                content
             }
             helpIntro
         }
-        .background(DS.Surface.canvas)
-        .frame(minWidth: 780, idealWidth: 940, minHeight: 540, idealHeight: 660)
+        .background {
+            ColorFieldBackground(accent: viewModel.appearance.accent, background: viewModel.appearance.background)
+        }
+        .appAppearance(viewModel.appearance, language: viewModel.appLanguage)
+        .frame(minWidth: 820, idealWidth: 1000, minHeight: 560, idealHeight: 700)
         .onReceive(NotificationCenter.default.publisher(for: .debugSwitchSettingsTab)) { note in
             if let rawTab = note.userInfo?["tab"] as? String,
                let tab = SettingsTab(rawValue: rawTab) {
                 selectedTab = tab
             }
         }
+        .onDisappear { viewModel.saveSettings() }
         .environment(\.isHelpModeActive, isHelpModeActive)
     }
 
-    // MARK: Chrome
-
-    private var header: some View {
-        HStack(spacing: DS.Space.m) {
-            LernAssistBrandIcon(size: 36)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Einstellungen")
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
-                Text(selectedTab.navigationSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if isHelpModeActive {
-                Label("Info-Modus: Einstellung überfahren", systemImage: "info.circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(DS.Accent.indigo)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(DS.Surface.selection))
-            }
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    isHelpModeActive.toggle()
-                }
-            } label: {
-                Image(systemName: isHelpModeActive ? "info.circle.fill" : "info.circle")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isHelpModeActive ? DS.Accent.indigo : .secondary)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(isHelpModeActive ? DS.Surface.selection : DS.Surface.control))
-            }
-            .buttonStyle(.plain)
-            .help("Info-Modus: Erklärungen zu jeder Einstellung beim Überfahren")
-            .accessibilityLabel(isHelpModeActive ? "Info-Modus ausschalten" : "Info-Modus einschalten")
-
-            Button(action: finish) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background(Circle().fill(DS.Surface.control))
-            }
-            .buttonStyle(.plain)
-            .help("Einstellungen schließen")
-            .accessibilityLabel("Einstellungen schließen")
-            .accessibilityLabel("Einstellungen schließen")
-        }
-        .padding(.horizontal, DS.Space.xl)
-        .padding(.vertical, DS.Space.m)
-        .background(DS.Surface.canvas)
-    }
+    // MARK: Seitenleiste (Karte wie in der Vorlage)
 
     private var navigation: some View {
-        VStack(alignment: .leading, spacing: DS.Space.l) {
-            navigationGroup("Konfiguration", tabs: [.endpoints, .model, .search, .tools, .learning])
-            navigationGroup("System & App", tabs: [.hotkeys, .appearance, .advanced, .experimental])
-            Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption2)
-                        .foregroundStyle(DS.Accent.emerald)
-                    Text("Lokal gespeichert")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Text(AppVersion.display)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: DS.Space.m) {
+            HStack(spacing: DS.Space.s) {
+                LernAssistBrandIcon(size: 24)
+                Text(L("LernAssist"))
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
             }
             .padding(.horizontal, DS.Space.s)
+            .padding(.bottom, DS.Space.xs)
+
+            searchField
+
+            if searchText.trimmingCharacters(in: .whitespaces).count >= 2 {
+                searchResults
+            } else {
+                navigationGroup(L("Verbindung"), tabs: [.endpoints, .model, .models])
+                navigationGroup(L("Lernen"), tabs: [.learning, .search, .tools])
+                navigationGroup("App", tabs: [.appearance, .hotkeys, .advanced])
+            }
+            Spacer(minLength: 0)
+            Text(AppVersion.display)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .padding(.horizontal, DS.Space.s)
         }
-        .padding(DS.Space.m)
-        .frame(width: 224, alignment: .leading)
-        .background(DS.Surface.sidebar)
+        .padding(.top, 44) // Platz für die Fensterknöpfe
+        .padding(.horizontal, DS.Space.s)
+        .padding(.bottom, DS.Space.m)
+        .frame(width: 236, alignment: .leading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .glassSurface(cornerRadius: 11, elevated: true)
+        .padding(.leading, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    // MARK: Suche
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+            TextField(L("Einstellungen durchsuchen"), text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, design: .rounded))
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L("Suche leeren"))
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(DS.Surface.control))
+        .padding(.bottom, DS.Space.xs)
+    }
+
+    /// Treffer in der aktuellen Sprache (Titel und Untertitel; deutsche Begriffe finden immer).
+    private var matches: [SettingsSearchIndex.Entry] {
+        let words = searchText.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+        return SettingsSearchIndex.entries.filter { entry in
+            let text = (L(dynamic: entry.title) + " " + L(dynamic: entry.subtitle) + " " + entry.title).lowercased()
+            return words.allSatisfy { text.contains($0) }
+        }
+    }
+
+    private var searchResults: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                let found = matches
+                if found.isEmpty {
+                    Text(L("Keine Treffer")).font(.caption).foregroundStyle(.secondary).padding(DS.Space.s)
+                }
+                ForEach(found, id: \.self) { entry in
+                    Button {
+                        jump(to: entry)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(L(dynamic: entry.title))
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(SettingsTab.from(index: entry.tab)?.title ?? "")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, DS.Space.s)
+                        .padding(.vertical, 5)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func jump(to entry: SettingsSearchIndex.Entry) {
+        guard let tab = SettingsTab.from(index: entry.tab) else { return }
+        withAnimation(.snappy(duration: 0.2)) { selectedTab = tab }
+        highlightSection = entry.section.map { L(dynamic: $0) }
+        highlight = L(dynamic: entry.title)
+        searchText = ""
     }
 
     private func navigationGroup(_ title: String, tabs: [SettingsTab]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.tertiary)
                 .padding(.horizontal, DS.Space.s)
                 .padding(.bottom, 2)
@@ -139,48 +168,102 @@ struct SettingsView: View {
             ForEach(tabs) { tab in
                 let isSelected = selectedTab == tab
                 Button {
-                    withAnimation(.easeInOut(duration: 0.14)) {
-                        selectedTab = tab
-                    }
+                    withAnimation(.snappy(duration: 0.2)) { selectedTab = tab }
                 } label: {
-                    HStack(spacing: DS.Space.s) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(tab.tint.opacity(isSelected ? 0.22 : 0.12))
-                                .frame(width: 24, height: 24)
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(tab.tint)
-                        }
+                    HStack(spacing: DS.Space.m) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(isSelected ? DS.Ink.accent : .secondary)
+                            .frame(width: 20)
                         Text(tab.title)
-                            .font(.system(.subheadline, design: .rounded).weight(isSelected ? .semibold : .regular))
-                            .foregroundStyle(isSelected ? DS.Ink.primary : .secondary)
+                            .font(.system(size: 14, weight: isSelected ? .semibold : .regular, design: .rounded))
+                            .foregroundStyle(.primary)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 7)
                     .background(
-                        RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous)
-                            .fill(isSelected ? DS.Surface.selection : .clear)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(isSelected ? DS.Accent.brand.opacity(0.14) : .clear)
                     )
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("settings-tab-\(tab.rawValue)")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
     }
 
+    // MARK: Inhalt mit großem Kopf
+
     private var content: some View {
+        ScrollViewReader { proxy in
         ScrollView(.vertical) {
-            selectedTabContent
-                .frame(maxWidth: 660, alignment: .leading)
-                .padding(.horizontal, DS.Space.xxl)
-                .padding(.vertical, DS.Space.l)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: DS.Space.xl) {
+                pageHeader
+                selectedTabContent
+                    .environment(\.settingsHighlight, highlight)
+                    .environment(\.settingsHighlightSection, highlightSection)
+            }
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, DS.Space.xxl)
+            .padding(.top, 34)
+            .padding(.bottom, DS.Space.xxl)
+            .frame(maxWidth: .infinity)
+            .background(DiscreetScrollers())
         }
-        .background(DS.Surface.canvas)
-        .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
+        .scrollContentBackground(.hidden)
+        .onChange(of: highlight) { _, target in
+            guard let target else { return }
+            // Erst nach dem Tab-Wechsel bzw. Aufklappen scrollen.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo("setting-" + target, anchor: .center) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+                if highlight == target { highlight = nil; highlightSection = nil }
+            }
+        }
+        }
+        .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var pageHeader: some View {
+        HStack(alignment: .center, spacing: DS.Space.l) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(DS.Accent.brandGradient)
+                .frame(width: 58, height: 58)
+                .overlay(
+                    Image(systemName: selectedTab.icon)
+                        .font(.system(size: 25, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
+                .shadow(color: DS.Accent.brand.opacity(0.28), radius: 10, y: 4)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(selectedTab.title)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                Text(selectedTab.navigationSubtitle)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: DS.Space.m)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { isHelpModeActive.toggle() }
+            } label: {
+                Image(systemName: isHelpModeActive ? "info.circle.fill" : "info.circle")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(isHelpModeActive ? DS.Ink.accent : .secondary)
+                    .frame(width: 32, height: 32)
+                    .glassSurface(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(L("Info-Modus: Erklärungen zu jeder Einstellung beim Überfahren"))
+            .accessibilityLabel(isHelpModeActive ? L("Info-Modus ausschalten") : L("Info-Modus einschalten"))
+        }
+        .padding(.bottom, DS.Space.xs)
     }
 
     @ViewBuilder
@@ -188,30 +271,14 @@ struct SettingsView: View {
         switch selectedTab {
         case .endpoints: EndpointsTabView(viewModel: viewModel)
         case .model: ModelTabView(viewModel: viewModel)
+        case .models: ModelsTabView(viewModel: viewModel)
         case .learning: LearningModeTabView(viewModel: viewModel)
         case .search: SearchTabView(viewModel: viewModel)
         case .hotkeys: HotkeysTabView(viewModel: viewModel)
         case .tools: ToolsTabView(viewModel: viewModel)
         case .advanced: AdvancedTabView(viewModel: viewModel)
         case .appearance: AppearanceTabView(viewModel: viewModel)
-        case .experimental: ExperimentalTabView(viewModel: viewModel)
         }
-    }
-
-    private var footer: some View {
-        HStack(spacing: DS.Space.s) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(DS.Accent.emerald)
-            Text("Einstellungen werden automatisch übernommen")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Fertig", action: finish)
-                .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
-        }
-        .padding(.horizontal, DS.Space.xl)
-        .padding(.vertical, DS.Space.m)
-        .background(DS.Surface.canvas)
     }
 
     @ViewBuilder
@@ -225,13 +292,13 @@ struct SettingsView: View {
                 Image(systemName: "questionmark.circle.fill")
                     .font(.system(size: 38))
                     .foregroundStyle(DS.Accent.brandGradient)
-                Text("Hilfe-Modus aktiviert")
+                Text(L("Hilfe-Modus aktiviert"))
                     .font(.system(.title3, design: .rounded).weight(.semibold))
-                Text("Bewege den Mauszeiger über markierte Elemente, um Hinweise zu sehen. Solange dieser Modus aktiv ist, sind Änderungen geschützt.")
+                Text(L("Bewege den Mauszeiger über eine Einstellung, um ihre Erklärung zu sehen. Bedienelemente mit Erklärung sind in diesem Modus gesperrt, damit du nichts versehentlich änderst."))
                     .multilineTextAlignment(.center)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Button("Verstanden") {
+                Button(L("Verstanden")) {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         hasSeenHelpIntro = true
                     }
@@ -254,27 +321,32 @@ struct SettingsView: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case endpoints = "Endpoints"
     case model = "Model"
+    case models = "Models"
     case learning = "Learning"
     case search = "Search"
     case hotkeys = "Hotkeys"
     case tools = "Tools"
     case advanced = "Advanced"
     case appearance = "Appearance"
-    case experimental = "Experimental"
 
     var id: String { rawValue }
 
+    /// Reiter aus dem Suchindex („endpoints“, „model“ …).
+    static func from(index name: String) -> SettingsTab? {
+        allCases.first { $0.rawValue.lowercased() == name.lowercased() }
+    }
+
     var title: String {
         switch self {
-        case .endpoints: "Endpunkte"
-        case .model: "Modell & KI"
-        case .learning: "Lernmodus"
-        case .search: "Recherche"
-        case .hotkeys: "Hotkeys"
-        case .tools: "Tools"
-        case .advanced: "Erweitert"
-        case .appearance: "Erscheinungsbild"
-        case .experimental: "Experimentell"
+        case .endpoints: L("Endpunkte")
+        case .model: L("Modell & KI")
+        case .models: L("Modelle")
+        case .learning: L("Lernmodus")
+        case .search: L("Recherche")
+        case .hotkeys: L("Hotkeys")
+        case .tools: L("Tools")
+        case .advanced: L("Erweitert")
+        case .appearance: L("Darstellung")
         }
     }
 
@@ -282,13 +354,13 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .endpoints: "network"
         case .model: "cpu"
+        case .models: "cube"
         case .learning: "brain"
         case .search: "magnifyingglass"
         case .hotkeys: "keyboard"
         case .tools: "wrench.and.screwdriver"
         case .advanced: "gearshape.2"
         case .appearance: "paintpalette"
-        case .experimental: "flask"
         }
     }
 
@@ -296,27 +368,27 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .endpoints: DS.Accent.blue
         case .model: DS.Accent.indigo
+        case .models: DS.Accent.indigo
         case .learning: DS.Accent.amber
         case .search: DS.Accent.cyan
         case .hotkeys: DS.Accent.rose
         case .tools: DS.Accent.emerald
         case .advanced: DS.Accent.indigo
         case .appearance: DS.Accent.cyan
-        case .experimental: DS.Accent.amber
         }
     }
 
     var navigationSubtitle: String {
         switch self {
-        case .endpoints: "Server-Verbindungen, Profile und direkte Modellwahl"
-        case .model: "Modell-Parameter, Kontextfenster und Hintergrund-Jobs"
-        case .learning: "Didaktik, Lernstil und Antwortverhalten"
-        case .search: "Websuche, Quellen und lokales Browsing"
-        case .hotkeys: "Globale Tastenkürzel für schnellen Zugriff"
-        case .tools: "Werkzeuge, System-Integration und Berechtigungen"
-        case .advanced: "Hintergrund-Verarbeitung und Diagnose"
-        case .appearance: "Darstellung, Schriftgröße und Fensterverhalten"
-        case .experimental: "Vorschau-Funktionen und Labor-Optionen"
+        case .endpoints: L("Server-Verbindungen, Profile und direkte Modellwahl")
+        case .model: L("Modell-Parameter, Kontextfenster und Hintergrund-Jobs")
+        case .models: L("Einstellungen pro Modell: Denken, Denkstärke, Sampling und Sonderschalter")
+        case .learning: L("Didaktik, Lernstil und Antwortverhalten")
+        case .search: L("Websuche, Quellen und lokales Browsing")
+        case .hotkeys: L("Globale Tastenkürzel für schnellen Zugriff")
+        case .tools: L("Werkzeuge, System-Integration und Berechtigungen")
+        case .advanced: L("Hintergrund-Verarbeitung und Diagnose")
+        case .appearance: L("Hell oder dunkel, Akzentfarbe, Glas, Farbfeld und Bewegung")
         }
     }
 }
@@ -328,6 +400,6 @@ enum AppVersion {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "LernAssist \(version) (\(build))"
+        return L("LernAssist \(version) (\(build))")
     }
 }

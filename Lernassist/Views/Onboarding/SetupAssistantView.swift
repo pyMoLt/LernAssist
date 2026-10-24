@@ -15,16 +15,16 @@ struct SetupAssistantView: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .server: return "Modelle laufen auf diesem Mac"
-            case .client: return "Remote-Endpunkt nutzen"
-            case .other:  return "Anderer Anbieter"
+            case .server: return L("Modelle laufen auf diesem Mac")
+            case .client: return L("Remote-Endpunkt nutzen")
+            case .other:  return L("Anderer Anbieter")
             }
         }
         var detail: String {
             switch self {
-            case .server: return "oMLX läuft hier lokal."
-            case .client: return "Die Modelle laufen auf einem Server im Netzwerk, erreichbar über LAN oder ein VPN wie Tailscale."
-            case .other:  return "LM Studio, Ollama oder ein OpenAI-kompatibler Dienst – Einrichtung später unter Einstellungen → Endpunkte."
+            case .server: return L("oMLX läuft hier lokal.")
+            case .client: return L("Die Modelle laufen auf einem Server im Netzwerk, erreichbar über LAN oder ein VPN wie Tailscale.")
+            case .other:  return L("LM Studio, Ollama oder ein OpenAI-kompatibler Dienst – Einrichtung später unter Einstellungen → Endpunkte.")
             }
         }
         var icon: String {
@@ -81,8 +81,8 @@ struct SetupAssistantView: View {
             HStack(spacing: DS.Space.m) {
                 LernAssistBrandIcon(size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Willkommen bei LernAssist").font(.system(.title2, design: .rounded).weight(.semibold))
-                    Text("In fünf kurzen Schritten ist alles eingerichtet.").foregroundStyle(.secondary)
+                    Text(L("Willkommen bei LernAssist")).font(.system(.title2, design: .rounded).weight(.semibold))
+                    Text(L("In fünf kurzen Schritten ist alles eingerichtet.")).foregroundStyle(.secondary)
                 }
             }
             .padding(.bottom, DS.Space.s)
@@ -113,27 +113,27 @@ struct SetupAssistantView: View {
 
     private var connectionStep: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            stepTitle("Verbindung zu oMLX", role == .client
+            stepTitle(L("Verbindung zu oMLX"), role == .client
                       ? "Hostname oder IP des Servers, auf dem oMLX läuft (z. B. ein Tailscale-Name). Dort muss oMLX Verbindungen von außen annehmen (nicht nur 127.0.0.1)."
                       : "oMLX auf diesem Gerät, Standard-Port 8072.")
             if role == .client {
                 labeled("Server") {
-                    TextField("Hostname oder IP", text: $host).textFieldStyle(.plain).modifier(SettingsFieldStyle())
+                    TextField(L("Hostname oder IP"), text: $host).textFieldStyle(.plain).modifier(SettingsFieldStyle())
                         .onChange(of: host) { _, _ in connectionResult = nil }
                 }
             } else {
                 labeled("Adresse") {
-                    TextField("http://127.0.0.1:8072", text: $serverURL).textFieldStyle(.plain).modifier(SettingsFieldStyle())
+                    TextField(L("http://127.0.0.1:8072"), text: $serverURL).textFieldStyle(.plain).modifier(SettingsFieldStyle())
                         .onChange(of: serverURL) { _, _ in connectionResult = nil }
                 }
             }
             labeled("API-Key") {
-                SecureField(role == .client ? "Pflicht, wenn oMLX von außen erreichbar ist" : "Optional", text: $apiKey)
+                SecureField(role == .client ? L("Pflicht, wenn oMLX von außen erreichbar ist") : L("Optional"), text: $apiKey)
                     .textFieldStyle(.plain).modifier(SettingsFieldStyle())
             }
             HStack(spacing: DS.Space.s) {
                 Button { Task { await testConnection() } } label: {
-                    if isTesting { ProgressView().controlSize(.small) } else { Label("Verbindung testen", systemImage: "bolt.horizontal") }
+                    if isTesting { ProgressView().controlSize(.small) } else { Label(L("Verbindung testen"), systemImage: "bolt.horizontal") }
                 }
                 .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                 .disabled(isTesting)
@@ -158,24 +158,24 @@ struct SetupAssistantView: View {
 
     private var researchStep: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            stepTitle("Recherche", "Die Websuche fragt SearXNG, Wikipedia und Fachdatenbanken (PubMed/Europe PMC, arXiv, Stack Exchange) und belegt Aussagen mit Quellen.")
-            Toggle("Websuche aktivieren", isOn: $searchEnabled).toggleStyle(.switch)
+            stepTitle(L("Recherche"), "Die Websuche fragt SearXNG, Wikipedia und Fachdatenbanken (PubMed/Europe PMC, arXiv, Stack Exchange) und belegt Aussagen mit Quellen.")
+            Toggle(L("Websuche aktivieren"), isOn: $searchEnabled).toggleStyle(.switch)
             labeled("SearXNG") {
                 HStack {
-                    TextField("http://127.0.0.1:8082", text: $searxngURL).textFieldStyle(.plain).modifier(SettingsFieldStyle())
-                    Button("Testen") { Task { await testSearxng() } }.buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent))
+                    TextField(L("http://127.0.0.1:8082"), text: $searxngURL).textFieldStyle(.plain).modifier(SettingsFieldStyle())
+                    Button(L("Testen")) { Task { await testSearxng() } }.buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent))
                 }
             }
             if let ok = searxngOK {
-                Label(ok ? "SearXNG antwortet." : "SearXNG nicht erreichbar – die Suche nutzt dann nur Wikipedia und die Fachdatenbanken.",
+                Label(ok ? L("SearXNG antwortet.") : L("SearXNG nicht erreichbar – die Suche nutzt dann nur Wikipedia und die Fachdatenbanken."),
                       systemImage: ok ? "checkmark.circle.fill" : "info.circle")
                     .font(.caption)
                     .foregroundStyle(ok ? DS.Accent.emerald : .secondary)
             }
             labeled("Kontakt-E-Mail") {
-                TextField("Optional – Wikipedia & Europe PMC bitten darum", text: $contactEmail).textFieldStyle(.plain).modifier(SettingsFieldStyle())
+                TextField(L("Optional – Wikipedia & Europe PMC bitten darum"), text: $contactEmail).textFieldStyle(.plain).modifier(SettingsFieldStyle())
             }
-            Text("Die E-Mail geht nur an Wikipedia, Europe PMC, arXiv und Stack Exchange (deren Nutzungsregeln), sonst nirgendwohin.")
+            Text(L("Die E-Mail geht nur an Wikipedia, Europe PMC, arXiv und Stack Exchange (deren Nutzungsregeln), sonst nirgendwohin."))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -183,7 +183,7 @@ struct SetupAssistantView: View {
 
     private var permissionsStep: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            stepTitle("Berechtigungen", "Bildschirmaufnahme für den Screenshot-Hotkey, Zugriffs-Hilfen für „Auswahl erklären“. Nach einem Update kann macOS erneut fragen.")
+            stepTitle(L("Berechtigungen"), "Bildschirmaufnahme für den Screenshot-Hotkey, Zugriffs-Hilfen für „Auswahl erklären“. Nach einem Update kann macOS erneut fragen.")
             TimelineView(.periodic(from: .now, by: 1.0)) { _ in
                 VStack(spacing: DS.Space.s) {
                     ForEach(AppPermissions.all) { PermissionRow(permission: $0) }
@@ -194,12 +194,12 @@ struct SetupAssistantView: View {
 
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            stepTitle("Fertig", "LernAssist ist eingerichtet.")
-            summaryRow("bolt.horizontal", "Verbindung", role == .other ? "Später unter Einstellungen → Endpunkte" : draftProfile.baseURL)
-            summaryRow("magnifyingglass", "Websuche", searchEnabled ? "an · \(searxngURL)" : "aus")
-            summaryRow("camera.viewfinder", "Screenshot", hotkeyText)
-            summaryRow("chevron.left.forwardslash.chevron.right", "Python", pythonText)
-            Text("Alles lässt sich später in den Einstellungen ändern; den Assistenten gibt es unter Erweitert erneut.")
+            stepTitle(L("Fertig"), "LernAssist ist eingerichtet.")
+            summaryRow("bolt.horizontal", L("Verbindung"), role == .other ? L("Später unter Einstellungen → Endpunkte") : draftProfile.baseURL)
+            summaryRow("magnifyingglass", L("Websuche"), searchEnabled ? L("an · \(searxngURL)") : "aus")
+            summaryRow("camera.viewfinder", L("Screenshot"), hotkeyText)
+            summaryRow("chevron.left.forwardslash.chevron.right", L("Python"), pythonText)
+            Text(L("Alles lässt sich später in den Einstellungen ändern; den Assistenten gibt es unter Erweitert erneut."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, DS.Space.s)
@@ -218,20 +218,20 @@ struct SetupAssistantView: View {
         }
         .padding(.horizontal, DS.Space.xl)
         .padding(.top, DS.Space.l)
-        .accessibilityLabel("Schritt \(step.rawValue + 1) von \(Step.allCases.count)")
+        .accessibilityLabel(L("Schritt \(step.rawValue + 1) von \(Step.allCases.count)"))
     }
 
     private var footer: some View {
         HStack {
             if step != .role {
-                Button("Zurück") { withAnimation(.snappy) { step = previous(step) } }
+                Button(L("Zurück")) { withAnimation(.snappy) { step = previous(step) } }
                     .buttonStyle(SoftActionButtonStyle())
             }
             Spacer()
             if step == .role {
-                Button("Später") { onClose() }.buttonStyle(.plain).foregroundStyle(.secondary)
+                Button(L("Später")) { onClose() }.buttonStyle(.plain).foregroundStyle(.secondary)
             }
-            Button(step == .done ? "Los geht’s" : "Weiter") { advance() }
+            Button(step == .done ? L("Los geht’s") : L("Weiter")) { advance() }
                 .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                 .keyboardShortcut(.defaultAction)
                 .disabled(step == .connection && role == .client && host.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -268,10 +268,10 @@ struct SetupAssistantView: View {
 
     private var pythonText: String {
         switch viewModel.pythonEnvironmentStatus {
-        case .ready(let version): return "bereit (Python \(version))"
-        case .failed(let message): return "Fehler: \(message) – Einstellungen → Tools"
-        case .unknown: return "wird geprüft …"
-        default: return "wird im Hintergrund eingerichtet (~630 MB)"
+        case .ready(let version): return L("bereit (Python \(version))")
+        case .failed(let message): return L("Fehler: \(message) – Einstellungen → Tools")
+        case .unknown: return L("wird geprüft …")
+        default: return L("wird im Hintergrund eingerichtet (~630 MB)")
         }
     }
 

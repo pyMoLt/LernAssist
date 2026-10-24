@@ -82,6 +82,13 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     /// Kurze Originaleingabe (z. B. „/search Thrombin“), die statt des ausformulierten Prompts in der
     /// Nutzerblase und im Chat-Titel erscheint. `content` bleibt, was das Modell bekommt.
     var displayText: String?
+    /// Interaktive Ausgabe: freigegebene Domains externer Bibliotheken (siehe HTMLLibraryPermissions).
+    var htmlAllowedHosts: [String]?
+    /// Interaktive Ausgabe eingeklappt (Klick auf die Kopfzeile).
+    var artifactCollapsed: Bool?
+    /// Reparierte Diagramme nur für die Anzeige (Quelltext → korrigierter Quelltext). Der Inhalt
+    /// selbst bleibt unverändert, damit Verlauf und Cache des Servers gleich bleiben.
+    var displayFixes: [String: String]?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         // imageBase64 (bis zu 7MB) wird bewusst ausgeschlossen – imageID genügt als Proxy.
@@ -101,7 +108,10 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         lhs.isImageContextFrozen == rhs.isImageContextFrozen &&
         lhs.errorMessage == rhs.errorMessage &&
         lhs.quizCard == rhs.quizCard &&
-        lhs.displayText == rhs.displayText
+        lhs.displayText == rhs.displayText &&
+        lhs.htmlAllowedHosts == rhs.htmlAllowedHosts &&
+        lhs.artifactCollapsed == rhs.artifactCollapsed &&
+        lhs.displayFixes == rhs.displayFixes
         // frozenImageContext aufnehmen (Audit 2.7): Ohne den Vergleich übersprang SwiftUIs
         // Diffing die Neuberechnung, wenn sich NUR der eingefrorene Bildkontext änderte.
     }
@@ -139,7 +149,8 @@ struct ChatMessage: Identifiable, Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, content, thinking, toolCalls, imageBase64, imageID,
              documentAttachment, timestamp, htmlArtifact, imageDescription,
-             frozenImageContext, isImageContextFrozen, quizCard, displayText
+             frozenImageContext, isImageContextFrozen, quizCard, displayText,
+             htmlAllowedHosts, artifactCollapsed, displayFixes
     }
 
     /// Custom Decoder nötig, da `isImageContextFrozen` als NICHT-optionales `Bool = false`
@@ -165,6 +176,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         isImageContextFrozen = try c.decodeIfPresent(Bool.self, forKey: .isImageContextFrozen) ?? false
         quizCard = try? c.decodeIfPresent(QuizCard.self, forKey: .quizCard)
         displayText = try c.decodeIfPresent(String.self, forKey: .displayText)
+        htmlAllowedHosts = try? c.decodeIfPresent([String].self, forKey: .htmlAllowedHosts)
+        artifactCollapsed = try? c.decodeIfPresent(Bool.self, forKey: .artifactCollapsed)
+        displayFixes = try? c.decodeIfPresent([String: String].self, forKey: .displayFixes)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -184,6 +198,9 @@ struct ChatMessage: Identifiable, Codable, Equatable {
         try c.encode(isImageContextFrozen, forKey: .isImageContextFrozen)
         try c.encodeIfPresent(quizCard, forKey: .quizCard)
         try c.encodeIfPresent(displayText, forKey: .displayText)
+        try c.encodeIfPresent(htmlAllowedHosts, forKey: .htmlAllowedHosts)
+        try c.encodeIfPresent(artifactCollapsed, forKey: .artifactCollapsed)
+        try c.encodeIfPresent(displayFixes, forKey: .displayFixes)
     }
 }
 
@@ -204,6 +221,10 @@ nonisolated struct ToolCallInfo: Identifiable, Codable, Equatable, Sendable {
     var recalledScreenshot: Int? = nil
     /// Abbildungen aus der Recherche (web_search/browse_url), im ganzen Chat eindeutig nummeriert.
     var researchImages: [ResearchImageRef]? = nil
+    /// Zeiten und Zustand der Recherche-Quellen (nur Anzeige im Tool-Schritt).
+    var researchStatus: [ResearchSourceStatus]? = nil
+    /// Dauer der Recherche-Schritte (nur Anzeige im Tool-Schritt).
+    var researchPhases: [ResearchPhaseTiming]? = nil
 }
 
 nonisolated enum ToolLimitNote: String, Codable, Sendable {

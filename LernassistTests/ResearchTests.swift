@@ -159,7 +159,7 @@ final class ResearchTests: XCTestCase {
     }
 
     func testResearchSettingsIgnoreUnknownSources() throws {
-        let json = #"{"enabledSources":["wikipedia","gibtsnicht"],"maxPassages":5}"#
+        let json = #"{"enabledSources":["wikipedia","gibtsnicht"],"maxPassages":5,"sourceDefaultsVersion":2}"#
         let settings = try JSONDecoder().decode(ResearchSettings.self, from: Data(json.utf8))
         XCTAssertEqual(settings.enabledSources, [.wikipedia])
         XCTAssertEqual(settings.maxPassages, 5)
@@ -253,5 +253,52 @@ final class ResearchTests: XCTestCase {
         let result = await pipeline([FakeSource(id: .wikipedia, hits: [])]).run("xyzzy")
         XCTAssertTrue(result.passages.isEmpty)
         XCTAssertTrue(result.modelText.contains("keine passenden Belege"))
+    }
+
+    func testBraveParseAndFallbackRequiresEnabledPlusKey() async {
+        let defaults = ResearchSettings()
+        XCTAssertFalse(defaults.enabledSources.contains(.brave), "Brave muss standardmäßig aus sein")
+
+        let sampleJSON: [String: Any] = [
+            "web": [
+                "results": [
+                    [
+                        "title": "<strong>Hämoglobin</strong> Absorptionsspektrum",
+                        "url": "https://example.org/hemoglobin",
+                        "description": "Oxyhämoglobin zeigt zwei charakteristische Banden bei 541 nm und 577 nm.",
+                        "page_age": "2025-11-02T10:00:00",
+                        "extra_snippets": [
+                            "Desoxyhämoglobin besitzt eine einzelne breite Bande bei 555 nm im sichtbaren Bereich.",
+                            "Die Soret-Bande liegt für beide Formen zwischen 415 nm und 430 nm."
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        let parsed = BraveSearchSource.parse(sampleJSON)
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual(parsed.first?.source, .brave)
+        XCTAssertEqual(parsed.first?.title, "Hämoglobin Absorptionsspektrum")
+        XCTAssertEqual(parsed.first?.published, "2025-11-02T10:00:00")
+        XCTAssertEqual(parsed.first?.blocks?.count, 4)
+
+        let braveFake = FakeSource(id: .brave, hits: parsed)
+        var settings = ResearchSettings()
+        settings.enabledSources = [.searxng, .brave]
+
+        // 1. Ohne API-Key wird Brave trotz aktiviertem Toggle NICHT abgefragt
+        let withoutKey = await WebResearchPipeline(
+            settings: settings, searxngURL: "", reranker: nil, exaAPIKey: "", braveAPIKey: "",
+            sourceOverride: [FailingSource(id: .searxng), braveFake]
+        ).run("Hämoglobin Banden")
+        XCTAssertFalse(withoutKey.consultedSources.contains(.brave))
+
+        // 2. Mit API-Key UND aktiviertem Toggle springt Brave als Fallback ein
+        let withKey = await WebResearchPipeline(
+            settings: settings, searxngURL: "", reranker: nil, exaAPIKey: "", braveAPIKey: "test-brave-key",
+            sourceOverride: [FailingSource(id: .searxng), braveFake]
+        ).run("Hämoglobin Banden")
+        XCTAssertTrue(withKey.consultedSources.contains(.brave))
+        XCTAssertTrue(withKey.passages.contains { $0.source == .brave })
     }
 }

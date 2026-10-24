@@ -55,9 +55,9 @@ struct FlashcardsPanel: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(DS.Ink.accent)
             VStack(alignment: .leading, spacing: 1) {
-                Text("Karteikarten")
+                Text(L("Karteikarten"))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                Text(viewModel.dueFlashcardsCount > 0 ? "\(viewModel.dueFlashcardsCount) fällig" : "Nichts fällig")
+                Text(viewModel.dueFlashcardsCount > 0 ? L("\(viewModel.dueFlashcardsCount) fällig") : L("Nichts fällig"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -71,7 +71,7 @@ struct FlashcardsPanel: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
-            .accessibilityLabel("Schließen")
+            .accessibilityLabel(L("Schließen"))
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.top, DS.Space.l)
@@ -86,7 +86,7 @@ struct FlashcardsPanel: View {
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: item.icon).font(.system(size: 11, weight: .semibold))
-                        Text(item.rawValue).font(.system(size: 12, weight: tab == item ? .semibold : .medium, design: .rounded))
+                        Text(L(dynamic: item.rawValue)).font(.system(size: 12, weight: tab == item ? .semibold : .medium, design: .rounded))
                         if item == .review, viewModel.dueFlashcardsCount > 0 {
                             badge(viewModel.dueFlashcardsCount)
                         } else if item == .mistakes, !viewModel.openMistakes.isEmpty {
@@ -162,12 +162,12 @@ private struct FlashcardReviewView: View {
     var body: some View {
         VStack(spacing: DS.Space.l) {
             HStack(spacing: DS.Space.xs) {
-                ChoiceChip(title: viewModel.dueFlashcardsCount > 0 ? "Fällig (\(viewModel.dueFlashcardsCount))" : "Fällig",
+                ChoiceChip(title: viewModel.dueFlashcardsCount > 0 ? L("Fällig (\(viewModel.dueFlashcardsCount))") : L("Fällig"),
                            icon: "clock", isSelected: mode == .due) { switchMode(.due) }
-                ChoiceChip(title: "Frei üben", icon: "shuffle", isSelected: mode == .practice) { switchMode(.practice) }
+                ChoiceChip(title: L("Frei üben"), icon: "shuffle", isSelected: mode == .practice) { switchMode(.practice) }
                 Spacer()
                 if mode == .practice, practiceRunning {
-                    Button("Runde beenden") { endPractice() }
+                    Button(L("Runde beenden")) { endPractice() }
                         .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
                 }
             }
@@ -178,9 +178,9 @@ private struct FlashcardReviewView: View {
                         .lineLimit(1)
                     Spacer()
                     if mode == .practice {
-                        Text("Frei üben · ändert keine Planung").foregroundStyle(.tertiary)
+                        Text(L("Frei üben · ändert keine Planung")).foregroundStyle(.tertiary)
                     }
-                    Text("\(queue.count) übrig")
+                    Text(L("\(queue.count) übrig"))
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -192,7 +192,7 @@ private struct FlashcardReviewView: View {
                     if mode == .due { dueRatingButtons(item) } else { practiceButtons(item) }
                 } else {
                     Button { withAnimation(.snappy(duration: 0.25)) { isRevealed = true } } label: {
-                        Text("Antwort zeigen")
+                        Text(L("Antwort zeigen"))
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 9)
@@ -200,7 +200,7 @@ private struct FlashcardReviewView: View {
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                     .keyboardShortcut(.space, modifiers: [])
                 }
-                Text(mode == .due ? "Leertaste: Antwort · 1–4: bewerten" : "Leertaste: Antwort · 1: Nochmal · 2: Gewusst")
+                Text(mode == .due ? L("Leertaste: Antwort · 1–4: bewerten") : L("Leertaste: Antwort · 1: Nochmal · 2: Gewusst"))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             } else if mode == .practice && !practiceRunning {
@@ -219,7 +219,7 @@ private struct FlashcardReviewView: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     } else {
-                        Button("Neue Runde") { practiceRunning = false }
+                        Button(L("Neue Runde")) { practiceRunning = false }
                             .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                     }
                 }
@@ -234,7 +234,7 @@ private struct FlashcardReviewView: View {
     }
 
     private var finishedTitle: String {
-        if mode == .practice { return "Runde beendet – \(knownCount) von \(reviewedCount) gewusst" }
+        if mode == .practice { return L("Runde beendet – \(knownCount) von \(reviewedCount) gewusst") }
         return reviewedCount > 0 ? "Geschafft – \(reviewedCount) Karten wiederholt" : "Keine Karte fällig"
     }
 
@@ -253,7 +253,7 @@ private struct FlashcardReviewView: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(KeyEquivalent(Character(String(rating.grade))), modifiers: [])
-                .help("\(rating.label) (Taste \(rating.grade))")
+                .help(L("\(rating.label) (Taste \(rating.grade))"))
             }
         }
         .transition(.opacity)
@@ -262,8 +262,8 @@ private struct FlashcardReviewView: View {
     /// Freies Üben: nur „Nochmal“ (kommt am Ende der Runde wieder) und „Gewusst“.
     private func practiceButtons(_ item: ChatViewModel.DueFlashcard) -> some View {
         HStack(spacing: DS.Space.s) {
-            practiceButton("Nochmal", tint: DS.Accent.rose, key: "1") { advancePractice(item, known: false) }
-            practiceButton("Gewusst", tint: DS.Accent.emerald, key: "2") { advancePractice(item, known: true) }
+            practiceButton(L("Nochmal"), tint: DS.Accent.rose, key: "1") { advancePractice(item, known: false) }
+            practiceButton(L("Gewusst"), tint: DS.Accent.emerald, key: "2") { advancePractice(item, known: true) }
         }
         .transition(.opacity)
     }
@@ -279,15 +279,15 @@ private struct FlashcardReviewView: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(KeyEquivalent(key), modifiers: [])
-        .help("\(title) (Taste \(key))")
+        .help(L("\(title) (Taste \(String(key)))"))
     }
 
     private var nextDueText: String {
         let future = viewModel.flashcardDueDates.filter { $0 > Date() }
         guard let next = future.min() else {
-            return "Merke dir Karten über „Als Karte merken“ unter einer Antwort oder lege sie unter „Alle Karten“ an."
+            return L("Merke dir Karten über „Als Karte merken“ unter einer Antwort oder lege sie unter „Alle Karten“ an.")
         }
-        return "Nächste Karte fällig " + next.formatted(.relative(presentation: .named).locale(Locale(identifier: "de_DE"))) + "."
+        return L("Nächste Karte fällig ") + next.formatted(.relative(presentation: .named).locale(Locale(identifier: Loc.current == .english ? "en_US" : "de_DE"))) + "."
     }
 
     private func switchMode(_ newMode: Mode) {
@@ -351,10 +351,10 @@ private struct FlashcardReviewView: View {
         var copy = card
         copy.applyReview(rating, scheduler: FSRS(desiredRetention: viewModel.flashcardRetention), againDelayMinutes: viewModel.flashcardAgainDelayMinutes)
         let seconds = copy.dueDate.timeIntervalSinceNow
-        if seconds < 3600 { return "\(max(1, Int(seconds / 60))) min" }
+        if seconds < 3600 { return L("\(max(1, Int(seconds / 60))) min") }
         let days = Int((seconds / 86_400).rounded())
         if days < 31 { return "\(max(1, days)) T" }
-        if days < 365 { return "\(days / 30) Mon" }
+        if days < 365 { return L("\(days / 30) Mon") }
         return String(format: "%.1f J", Double(days) / 365)
     }
 
@@ -410,16 +410,16 @@ private struct PracticeSetupView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.m) {
-                section("Quelle") {
+                section(L("Quelle")) {
                     HStack(spacing: DS.Space.xs) {
-                        ChoiceChip(title: "Dieser Chat", isSelected: sourceKind == .currentChat) { options.source = .currentChat }
-                            .disabled(viewModel.activeSessionId == nil)
-                        ChoiceChip(title: "Alle Chats", isSelected: sourceKind == .all) { options.source = .all }
-                        ChoiceChip(title: "Fächer", isSelected: sourceKind == .subjects) {
+                        ChoiceChip(title: L("Dieser Chat"), isSelected: sourceKind == .currentChat) { options.source = .currentChat }
+                            .disabled(viewModel.activeSession == nil)
+                        ChoiceChip(title: L("Alle Chats"), isSelected: sourceKind == .all) { options.source = .all }
+                        ChoiceChip(title: L("Fächer"), isSelected: sourceKind == .subjects) {
                             if sourceKind != .subjects { options.source = .subjects([]) }
                         }
                         .disabled(subjects.isEmpty)
-                        ChoiceChip(title: "Chats", isSelected: sourceKind == .chats) {
+                        ChoiceChip(title: L("Chats"), isSelected: sourceKind == .chats) {
                             if sourceKind != .chats { options.source = .chats([]) }
                         }
                     }
@@ -442,7 +442,7 @@ private struct PracticeSetupView: View {
                                     HStack(spacing: DS.Space.s) {
                                         Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
                                             .foregroundStyle(isOn ? DS.Ink.accent : .secondary.opacity(0.5))
-                                        Text(chat.title).lineLimit(1)
+                                        Text(chat.title == "Neuer Chat" ? L("Neuer Chat") : chat.title).lineLimit(1)
                                         Spacer()
                                         Text("\(chat.count)").foregroundStyle(.tertiary)
                                     }
@@ -460,36 +460,36 @@ private struct PracticeSetupView: View {
                     }
                 }
 
-                section("Karten") {
+                section(L("Karten")) {
                     HStack(spacing: DS.Space.xs) {
-                        ChoiceChip(title: "Alle", isSelected: !options.onlyMistakes) { options.onlyMistakes = false }
-                        ChoiceChip(title: "Nur Fehler", icon: "exclamationmark.circle", isSelected: options.onlyMistakes) { options.onlyMistakes = true }
+                        ChoiceChip(title: L("Alle"), isSelected: !options.onlyMistakes) { options.onlyMistakes = false }
+                        ChoiceChip(title: L("Nur Fehler"), icon: "exclamationmark.circle", isSelected: options.onlyMistakes) { options.onlyMistakes = true }
                     }
                 }
 
-                section("Anzahl") {
+                section(L("Anzahl")) {
                     HStack(spacing: DS.Space.xs) {
                         ForEach([10, 20, 50], id: \.self) { n in
                             ChoiceChip(title: "\(n)", isSelected: options.limit == n) { options.limit = n }
                         }
-                        ChoiceChip(title: "Alle", isSelected: options.limit == nil) { options.limit = nil }
+                        ChoiceChip(title: L("Alle"), isSelected: options.limit == nil) { options.limit = nil }
                     }
                 }
 
                 HStack {
-                    Text(matchingCount == 1 ? "1 Karte passt" : "\(matchingCount) Karten passen")
+                    Text(matchingCount == 1 ? L("1 Karte passt") : L("\(matchingCount) Karten passen"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button(action: onStart) {
-                        Label("Runde starten", systemImage: "play.fill")
+                        Label(L("Runde starten"), systemImage: "play.fill")
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                     .disabled(matchingCount == 0)
                     .keyboardShortcut(.defaultAction)
                 }
-                Text("Freies Üben ändert nichts an der Wiederholungsplanung.")
+                Text(L("Freies Üben ändert nichts an der Wiederholungsplanung."))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -584,8 +584,7 @@ struct FlashcardFace: View {
         .textSelection(.enabled)
         .padding(DS.Space.xl)
         .frame(maxWidth: .infinity, minHeight: 200)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.extraLarge, style: .continuous).fill(DS.Surface.card))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.extraLarge, style: .continuous).stroke(DS.Ink.hairline, lineWidth: 0.75))
+        .glassSurface(cornerRadius: DS.Radius.extraLarge, elevated: true)
         .contentShape(Rectangle())
     }
 }
@@ -602,7 +601,7 @@ struct CardImageView: View {
                     .resizable()
                     .aspectRatio(image.size, contentMode: .fit)
                     .clipShape(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous))
-                    .accessibilityLabel("Bild zur Karte")
+                    .accessibilityLabel(L("Bild zur Karte"))
             } else {
                 RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.Surface.chip).frame(height: 120)
             }
@@ -685,7 +684,7 @@ private struct FlashcardLibraryView: View {
                 }
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.secondary)
-                    TextField("Karten durchsuchen …", text: $search).textFieldStyle(.plain).font(.caption)
+                    TextField(L("Karten durchsuchen …"), text: $search).textFieldStyle(.plain).font(.caption)
                 }
                 .padding(.horizontal, DS.Space.s)
                 .padding(.vertical, 6)
@@ -701,7 +700,7 @@ private struct FlashcardLibraryView: View {
 
             if cards.isEmpty {
                 Spacer()
-                Text(scope == .currentChat ? "Dieser Chat hat noch keine Karten." : "Noch keine Karten.")
+                Text(scope == .currentChat ? L("Dieser Chat hat noch keine Karten.") : L("Noch keine Karten."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
@@ -723,34 +722,34 @@ private struct FlashcardLibraryView: View {
             }
         }
         .onAppear {
-            if let documentSeed, !isGenerating { generate(from: documentSeed, title: "Aus Dokument") }
+            if let documentSeed, !isGenerating { generate(from: documentSeed, title: L("Aus Dokument")) }
         }
     }
 
     private var creationBar: some View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             HStack(spacing: DS.Space.s) {
-                TextField("Vorderseite (Frage)", text: $newFront)
+                TextField(L("Vorderseite (Frage)"), text: $newFront)
                     .textFieldStyle(.plain)
                     .modifier(SettingsFieldStyle())
-                TextField("Rückseite (Antwort)", text: $newBack)
+                TextField(L("Rückseite (Antwort)"), text: $newBack)
                     .textFieldStyle(.plain)
                     .modifier(SettingsFieldStyle())
-                Button("Anlegen") { addManualCard() }
+                Button(L("Anlegen")) { addManualCard() }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent))
                     .disabled(newFront.trimmingCharacters(in: .whitespaces).isEmpty || newBack.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             HStack(spacing: DS.Space.s) {
-                Text("Aus dem ganzen Chat erzeugen:").font(.caption).foregroundStyle(.secondary)
+                Text(L("Aus dem ganzen Chat erzeugen:")).font(.caption).foregroundStyle(.secondary)
                 Picker("", selection: $generateCount) {
-                    ForEach([5, 8, 12, 20], id: \.self) { Text("\($0) Karten").tag($0) }
+                    ForEach([5, 8, 12, 20], id: \.self) { Text(L("\($0) Karten")).tag($0) }
                 }
                 .labelsHidden()
                 .frame(width: 110)
                 Button {
-                    generate(from: nil, title: "Aus dem Chat")
+                    generate(from: nil, title: L("Aus dem Chat"))
                 } label: {
-                    if isGenerating { ProgressView().controlSize(.small) } else { Label("Erzeugen", systemImage: "sparkles") }
+                    if isGenerating { ProgressView().controlSize(.small) } else { Label(L("Erzeugen"), systemImage: "sparkles") }
                 }
                 .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                 .disabled(isGenerating)
@@ -771,8 +770,8 @@ private struct FlashcardLibraryView: View {
                     if scope == .all { Text(item.sessionTitle).lineLimit(1) }
                     Text(dueLabel(item.card))
                     if item.card.imageID != nil {
-                        if item.card.occlusion != nil { Label("Abdeckkarte", systemImage: "rectangle.dashed") }
-                        else { Label("Bildkarte", systemImage: "photo") }
+                        if item.card.occlusion != nil { Label(L("Abdeckkarte"), systemImage: "rectangle.dashed") }
+                        else { Label(L("Bildkarte"), systemImage: "photo") }
                     }
                 }
                 .font(.caption2)
@@ -781,9 +780,9 @@ private struct FlashcardLibraryView: View {
             .textSelection(.enabled)
             Spacer(minLength: 0)
             Button { editing = item } label: { Image(systemName: "pencil") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Bearbeiten").accessibilityLabel("Karte bearbeiten")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(L("Bearbeiten")).accessibilityLabel(L("Karte bearbeiten"))
             Button { viewModel.deleteFlashcards(sessionId: item.sessionId, setId: item.setId, cardIds: [item.card.id]) } label: { Image(systemName: "trash") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Löschen").accessibilityLabel("Karte löschen")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(L("Löschen")).accessibilityLabel(L("Karte löschen"))
         }
         .padding(DS.Space.m)
         .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.chip))
@@ -791,8 +790,8 @@ private struct FlashcardLibraryView: View {
 
     private func dueLabel(_ card: Flashcard) -> String {
         if card.isNew { return "neu" }
-        if card.dueDate <= Date() { return "fällig" }
-        return "fällig " + card.dueDate.formatted(.relative(presentation: .named).locale(Locale(identifier: "de_DE")))
+        if card.dueDate <= Date() { return L("fällig") }
+        return L("fällig ") + card.dueDate.formatted(.relative(presentation: .named).locale(Locale(identifier: Loc.current == .english ? "en_US" : "de_DE")))
     }
 
     private func addManualCard() {
@@ -808,7 +807,7 @@ private struct FlashcardLibraryView: View {
     private func generate(from seed: String?, title: String) {
         guard let session = viewModel.activeSession, !isGenerating else { return }
         isGenerating = true
-        statusText = "Erzeuge Karten …"
+        statusText = L("Erzeuge Karten …")
         let context: String
         if let seed {
             context = String(seed.prefix(12_000))
@@ -822,10 +821,14 @@ private struct FlashcardLibraryView: View {
                 instruction: "Erstelle \(count) Karteikarten, die die wichtigsten Inhalte des GESAMTEN Materials abdecken (auch frühe Abschnitte).",
                 context: context)?.map(\.card)
             isGenerating = false
-            guard let cards else { statusText = "Endpunkt nicht erreichbar – bitte erneut versuchen."; return }
-            guard !cards.isEmpty else { statusText = "Die Antwort enthielt keine gültigen Karten – bitte erneut versuchen."; return }
+            guard let cards else {
+                statusText = viewModel.lastInvisiblePromptError.map { L("Karten konnten nicht erstellt werden – \($0)") }
+                    ?? L("Endpunkt nicht erreichbar – bitte erneut versuchen.")
+                return
+            }
+            guard !cards.isEmpty else { statusText = L("Die Antwort enthielt keine gültigen Karten – bitte erneut versuchen."); return }
             viewModel.addFlashcards(cards, to: session.id, setTitle: title)
-            statusText = "\(cards.count) Karten erzeugt."
+            statusText = L("\(cards.count) Karten erzeugt.")
             scope = .currentChat
         }
     }
@@ -838,24 +841,24 @@ private struct FlashcardEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            Text("Karte bearbeiten").font(.headline)
+            Text(L("Karte bearbeiten")).font(.headline)
             if let imageID = card.imageID, card.occlusion == nil {
                 HStack(alignment: .top, spacing: DS.Space.s) {
                     CardImageView(imageID: imageID).frame(maxHeight: 120)
-                    Button("Bild entfernen") { card.imageID = nil }
+                    Button(L("Bild entfernen")) { card.imageID = nil }
                         .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
                 }
             }
-            Text("Vorderseite").font(.caption).foregroundStyle(.secondary)
+            Text(L("Vorderseite")).font(.caption).foregroundStyle(.secondary)
             TextEditor(text: $card.front).font(.body).frame(height: 70).scrollContentBackground(.hidden)
                 .padding(6).background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.Surface.control))
-            Text("Rückseite").font(.caption).foregroundStyle(.secondary)
+            Text(L("Rückseite")).font(.caption).foregroundStyle(.secondary)
             TextEditor(text: $card.back).font(.body).frame(height: 110).scrollContentBackground(.hidden)
                 .padding(6).background(RoundedRectangle(cornerRadius: DS.Radius.small).fill(DS.Surface.control))
             HStack {
                 Spacer()
-                Button("Abbrechen") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Sichern") { onSave(card); dismiss() }
+                Button(L("Abbrechen")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(L("Sichern")) { onSave(card); dismiss() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
             }
@@ -883,14 +886,14 @@ private struct MistakeLogView: View {
                     viewModel.startMistakeTraining()
                     onStartTraining()
                 } label: {
-                    Label("Training aus Fehlern (\(viewModel.openMistakes.count))", systemImage: "figure.strengthtraining.traditional")
+                    Label(L("Training aus Fehlern (\(viewModel.openMistakes.count))"), systemImage: "figure.strengthtraining.traditional")
                 }
                 .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                 .disabled(viewModel.openMistakes.isEmpty)
-                .help("Startet einen neuen Chat, der genau diese Fehler mit abgewandelten Quizfragen übt")
+                .help(L("Startet einen neuen Chat, der genau diese Fehler mit abgewandelten Quizfragen übt"))
                 Spacer()
-                Toggle("Erledigte zeigen", isOn: $showResolved).toggleStyle(.switch).controlSize(.small).font(.caption)
-                Button("Erledigte entfernen") { viewModel.removeResolvedMistakes() }
+                Toggle(L("Erledigte zeigen"), isOn: $showResolved).toggleStyle(.switch).controlSize(.small).font(.caption)
+                Button(L("Erledigte entfernen")) { viewModel.removeResolvedMistakes() }
                     .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
                     .disabled(!viewModel.mistakes.contains(where: \.isResolved))
             }
@@ -898,8 +901,8 @@ private struct MistakeLogView: View {
                 Spacer()
                 VStack(spacing: DS.Space.s) {
                     Image(systemName: "checkmark.circle").font(.system(size: 30, weight: .light)).foregroundStyle(DS.Ink.accent)
-                    Text("Keine offenen Fehler").font(.callout).foregroundStyle(.secondary)
-                    Text("Falsche Quizantworten und mit „Nochmal“ bewertete Karten landen automatisch hier.")
+                    Text(L("Keine offenen Fehler")).font(.callout).foregroundStyle(.secondary)
+                    Text(L("Falsche Quizantworten und mit „Nochmal“ bewertete Karten landen automatisch hier."))
                         .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
@@ -922,10 +925,10 @@ private struct MistakeLogView: View {
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 3) {
                 Text(entry.question).font(.system(size: 13, weight: .semibold, design: .rounded))
-                if let given = entry.givenAnswer { Text("Deine Antwort: \(given)").font(.caption).foregroundStyle(DS.Accent.rose) }
-                if let correct = entry.correctAnswer { Text("Richtig: \(correct)").font(.caption).foregroundStyle(.secondary) }
+                if let given = entry.givenAnswer { Text(L("Deine Antwort: \(given)")).font(.caption).foregroundStyle(DS.Accent.rose) }
+                if let correct = entry.correctAnswer { Text(L("Richtig: \(correct)")).font(.caption).foregroundStyle(.secondary) }
                 HStack(spacing: DS.Space.s) {
-                    Text(entry.date.formatted(.dateTime.day().month(.abbreviated).locale(Locale(identifier: "de_DE"))))
+                    Text(entry.date.formatted(.dateTime.day().month(.abbreviated).locale(Locale(identifier: Loc.current == .english ? "en_US" : "de_DE"))))
                     if let subject = entry.subject { Text(subject) }
                     if entry.count > 1 { Text("\(entry.count)×") }
                 }
@@ -938,10 +941,10 @@ private struct MistakeLogView: View {
                 Image(systemName: entry.isResolved ? "arrow.uturn.backward" : "checkmark")
             }
             .buttonStyle(.plain).foregroundStyle(.secondary)
-            .help(entry.isResolved ? "Wieder öffnen" : "Als erledigt markieren")
-            .accessibilityLabel(entry.isResolved ? "Wieder öffnen" : "Als erledigt markieren")
+            .help(entry.isResolved ? L("Wieder öffnen") : L("Als erledigt markieren"))
+            .accessibilityLabel(entry.isResolved ? L("Wieder öffnen") : L("Als erledigt markieren"))
             Button { viewModel.deleteMistake(entry.id) } label: { Image(systemName: "trash") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Löschen").accessibilityLabel("Eintrag löschen")
+                .buttonStyle(.plain).foregroundStyle(.secondary).help(L("Löschen")).accessibilityLabel(L("Eintrag löschen"))
         }
         .padding(DS.Space.m)
         .background(RoundedRectangle(cornerRadius: DS.Radius.medium, style: .continuous).fill(DS.Surface.chip))

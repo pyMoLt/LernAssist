@@ -49,11 +49,11 @@ nonisolated protocol SearchSource: Sendable {
 nonisolated enum SourceHTTP {
     static let apiUserAgent = "LernAssist/2.0 (macOS learning app; personal use)"
 
-    static func json(_ url: URL, userAgent: String = apiUserAgent, timeout: TimeInterval = 12) async throws -> Any {
+    static func json(_ url: URL, userAgent: String = apiUserAgent, timeout: TimeInterval = 12, headers: [String: String] = [:]) async throws -> Any {
         // APIs bekommen eine ehrliche App-Kennung (optional mit Kontakt-E-Mail, siehe
         // ResearchSettings.apiContactEmail).
         let fetcher = WebFetcher(timeout: timeout, maxBytes: 4 * 1_024 * 1_024, userAgent: userAgent)
-        let page = try await fetcher.fetch(url, accept: "application/json")
+        let page = try await fetcher.fetch(url, accept: "application/json", headers: headers)
         return try JSONSerialization.jsonObject(with: page.data)
     }
 
@@ -68,10 +68,13 @@ nonisolated enum SourceHTTP {
 
 nonisolated struct SearXNGSource: SearchSource {
     let baseURL: String
+    var timeout: TimeInterval = 70
+    var headers: [String: String] = [:]
     var id: ResearchSource { .searxng }
 
     func search(_ query: String, limit: Int) async throws -> [SearchHit] {
-        let results = try await SearchService.shared.search(query: query, baseURL: baseURL, limit: limit)
+        let results = try await SearchService.shared.search(query: query, baseURL: baseURL, limit: limit, timeout: timeout,
+                                                            headers: headers)
         return results.enumerated().map { index, r in
             SearchHit(source: .searxng, title: r.title, url: r.url, snippet: r.snippet, rank: index)
         }

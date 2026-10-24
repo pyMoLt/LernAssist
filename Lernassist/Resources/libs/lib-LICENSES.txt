@@ -1,0 +1,18 @@
+Lokale Bibliotheken für interaktive Ausgaben (unverändert von cdn.jsdelivr.net bzw. cdn.tailwindcss.com, Stand 23.10.2026)
+
+Chart.js 4.4.4 – MIT
+D3 7.9.0 – ISC
+three.js r128 (three.min.js, examples/js/controls/OrbitControls.js) – MIT
+p5.js 1.11.1 – LGPL-2.1
+anime.js 3.2.2 – MIT
+GSAP 3.12.5 – GreenSock Standard "No Charge" License
+Matter.js 0.20.0 – MIT
+Alpine.js 3.14.1 – MIT
+Vue 3.4.38 – MIT
+React / React DOM 18.3.1 – MIT
+Cytoscape.js 3.30.2 – MIT
+vis-network 9.1.9 – Apache-2.0 / MIT
+Leaflet 1.9.4 – BSD-2-Clause
+Lodash 4.17.21 – MIT
+Tailwind CSS Play CDN 3.4.16 – MIT
+Font Awesome Free 6.6.0 – Icons CC BY 4.0, Fonts SIL OFL 1.1, Code MIT

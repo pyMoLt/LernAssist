@@ -33,10 +33,11 @@ actor SearchRequestPacing {
 
     func waitTurn(for backend: String) async throws {
         let now = Date()
-        if let pause = pauses[backend], pause.until.timeIntervalSince(now) > 15 {
+        // Pausiert (429/503): sofort überspringen statt zu warten (Version 4.0).
+        if let pause = pauses[backend], pause.until > now {
             throw SearchService.SearchError.rateLimited(pause.code, pause.until.timeIntervalSince(now))
         }
-        let start = max(now, nextStart[backend] ?? now, pauses[backend]?.until ?? now)
+        let start = max(now, nextStart[backend] ?? now)
         nextStart[backend] = start.addingTimeInterval(minimumSpacing + Double.random(in: jitterRange))
         let initialWait = start.timeIntervalSinceNow
         if initialWait > 0 {
@@ -133,7 +134,8 @@ class SearchService {
     ///   - baseURL: SearXNG-Basis-URL (z.B. „http://127.0.0.1:8082").
     ///              Bei leerem String wird bewusst DuckDuckGo als einfacher Fallback verwendet.
     /// - Returns: Bis zu 5 Treffer
-    func search(query: String, baseURL: String, limit: Int = 5) async throws -> [SearchResult] {
+    func search(query: String, baseURL: String, limit: Int = 5, timeout: TimeInterval = 70,
+                headers: [String: String] = [:]) async throws -> [SearchResult] {
         // Abbruchpunkt (Audit T8): Bei gecanceltem Tool-Call nicht weiter Requests starten.
         try Task.checkCancellation()
         let trimmedQuery = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(500))
@@ -165,7 +167,8 @@ class SearchService {
             return response.results
         }
 
-        let response = try await searxng(query: trimmedQuery, baseURL: trimmed, backend: backend, limit: limit)
+        let response = try await searxng(query: trimmedQuery, baseURL: trimmed, backend: backend, limit: limit, timeout: timeout,
+                                         headers: headers)
         guard !response.results.isEmpty else {
             throw SearchError.noResults
         }
@@ -193,7 +196,8 @@ class SearchService {
 
     // MARK: - SearXNG
 
-    private func searxng(query: String, baseURL: String, backend: String, limit: Int) async throws -> (results: [SearchResult], cacheable: Bool) {
+    private func searxng(query: String, baseURL: String, backend: String, limit: Int, timeout: TimeInterval,
+                         headers: [String: String]) async throws -> (results: [SearchResult], cacheable: Bool) {
         var base = baseURL
         if !base.lowercased().hasPrefix("http") { base = "http://" + base }
         while base.hasSuffix("/") { base = String(base.dropLast()) }
@@ -212,8 +216,9 @@ class SearchService {
         // Roundtrip selbst spürbar länger dauern, zusätzlich zu der Zeit, die SearXNG intern auf
         // langsame Upstream-Engines wartet – ein zu knappes Client-Timeout hätte die Verbindung
         // sonst abgebrochen, bevor SearXNG überhaupt fertig aggregieren konnte.
-        var req = URLRequest(url: url, timeoutInterval: 70)
+        var req = URLRequest(url: url, timeoutInterval: timeout)
         req.setValue("LernAssist/1.0", forHTTPHeaderField: "User-Agent")
+        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
 
         let (data, response) = try await networkSession.data(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {

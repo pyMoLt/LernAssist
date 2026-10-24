@@ -27,25 +27,18 @@ enum DS {
         static let medium: CGFloat = 11
         static let large: CGFloat = 15
         static let extraLarge: CGFloat = 20
+        /// Einstellungs-Pillen und schwebende Karten (Version 4).
+        static let pill: CGFloat = 18
     }
 
     // MARK: Kuratierte Akzent-Palette
 
     enum Accent {
-        /// Primärer Marken-Akzent (abgestimmt auf das neue LernAssist-Icon).
-        static let brand = Color(red: 0.45, green: 0.27, blue: 0.86)
-        static let indigo = brand
-        /// Hellerer Sekundärton für Verläufe und Glows.
-        static let brandLight = Color(red: 0.56, green: 0.36, blue: 0.94)
-        /// Tiefer Indigo-Ton für Verläufe.
-        static let brandDeep = Color(red: 0.28, green: 0.19, blue: 0.68)
-
-        /// Harmonischer Marken-Verlauf.
-        static let brandGradient = LinearGradient(
-            colors: [brandLight, brand, brandDeep],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
+        /// Akzent der Oberfläche – folgt der Einstellung „Akzentfarbe“ (Version 4).
+        static var brand: Color { Theme.accentSolid }
+        static var indigo: Color { brand }
+        /// Verlauf aus Akzent und Begleitfarbe (Symbol-Kacheln, Hervorhebungen).
+        static var brandGradient: LinearGradient { Theme.gradient(Theme.current.accent) }
 
         /// Smaragd / Mint: Live-Token-Speed (Decode), Online-Status, Erfolg.
         static let emerald = Color(red: 0.06, green: 0.72, blue: 0.50)
@@ -70,11 +63,7 @@ enum DS {
         static let hairline = Color.primary.opacity(0.075)
         /// Akzent für Text, Symbole und Auswahl: im Dark Mode heller, damit er auf dunklen
         /// Flächen lesbar bleibt (das satte Markenviolett war dort kaum zu erkennen).
-        static let accent = Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(red: 0.70, green: 0.58, blue: 1.0, alpha: 1)
-                : NSColor(red: 0.45, green: 0.27, blue: 0.86, alpha: 1)
-        })
+        static var accent: Color { Theme.accent }
         /// Lern-/Quiz-Assoziation der App.
         static let quiz = Accent.rose
         /// Dokument-/Import-Assoziation.
@@ -99,13 +88,13 @@ enum DS {
         /// Hover-Variante derselben Fläche.
         static let chipHover = Color.primary.opacity(0.09)
         /// Getönte Nutzer-Bubble (Chat-Nachricht vom Nutzer) mit sanftem Marken-Tint.
-        static let bubbleUser = Accent.brand.opacity(0.12)
+        static var bubbleUser: Color { Accent.brand.opacity(0.12) }
         /// Hintergrund der Metrik-/Status-Chips.
         static let status = Color.primary.opacity(0.065)
         /// Subtil abgesetzte Navigation in den Einstellungen.
         static let navigation = Color.primary.opacity(0.032)
         /// Selektionsfarbe für aktive Navigationszeilen.
-        static let selection = Accent.brand.opacity(0.18)
+        static var selection: Color { Accent.brand.opacity(0.16) }
     }
 }
 
@@ -256,18 +245,12 @@ struct AppCard<Content: View>: View {
     }
 
     var body: some View {
+        // Version 4: Karte im Pillen-Stil – Glas, Milchglas oder deckend je nach Darstellung.
         content
-            .padding(padding)
+            .padding(.horizontal, padding + 2)
+            .padding(.vertical, padding - 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
-                    .fill(DS.Surface.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous)
-                    .stroke(DS.Ink.hairline, lineWidth: 0.75)
-            )
-            .shadow(color: .black.opacity(0.03), radius: 8, x: 0, y: 2)
+            .glassSurface(cornerRadius: DS.Radius.pill)
     }
 }
 
@@ -282,16 +265,9 @@ struct GlassChip<Content: View>: View {
 
     var body: some View {
         content()
-            .background(
-                Capsule()
-                    .fill(isHovered ? DS.Surface.chipHover : DS.Surface.pill)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(DS.Ink.hairline, lineWidth: 0.75)
-            )
-            .shadow(color: .black.opacity(0.035), radius: 5, x: 0, y: 1.5)
-            .opacity(controlActiveState == .inactive ? 0.65 : 1.0)
+            .background(Capsule().fill(isHovered ? DS.Surface.chipHover : .clear))
+            .glassSurface(Capsule())
+            .opacity(controlActiveState == .inactive ? 0.75 : 1.0)
             .onHover { isHovered = $0 }
     }
 }

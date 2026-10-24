@@ -6,20 +6,54 @@ struct ToolCallPresentation {
     let call: ToolCallInfo
     /// Einmal geparst statt bei jedem Zugriff (title, language, code … lasen sonst je neu).
     private let json: [String: Any]?
+    /// Code und Sprache aus den (ggf. noch unvollständigen) Argumenten – zwischengespeichert,
+    /// solange sich die Argumente nicht ändern. Beim Live-Streamen von Code wurde der Text sonst
+    /// pro Neuaufbau mehrfach komplett gelesen (Version 4, Performance).
+    private let parsed: Parsed
+
+    final class Parsed {
+        let json: [String: Any]?
+        let rawCode: String
+        let language: String
+        init(json: [String: Any]?, rawCode: String, language: String) {
+            self.json = json; self.rawCode = rawCode; self.language = language
+        }
+    }
+
+    private static let cache: NSCache<NSString, Parsed> = {
+        let cache = NSCache<NSString, Parsed>()
+        cache.countLimit = 200
+        return cache
+    }()
 
     init(call: ToolCallInfo) {
         self.call = call
-        if let data = call.arguments.data(using: .utf8) {
-            json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let key = "\(call.id)#\(call.index ?? -1)#\(call.name)#\(call.arguments.utf8.count)" as NSString
+        if let cached = Self.cache.object(forKey: key) {
+            parsed = cached
         } else {
-            json = nil
+            let json = call.arguments.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            func value(_ k: String) -> String {
+                if let v = json?[k] { return (v as? String) ?? (v as? NSNumber)?.stringValue ?? "" }
+                return Self.partialString(for: k, in: call.arguments) ?? ""
+            }
+            let rawCode = call.name == "coding_sandbox" ? value("code") : ""
+            let lang = value("language").lowercased()
+            let language = lang.isEmpty
+                ? (call.arguments.contains("<html") || call.arguments.contains("<!DOCTYPE") ? "html" : "python") : lang
+            parsed = Parsed(json: json, rawCode: rawCode, language: language)
+            Self.cache.setObject(parsed, forKey: key)
         }
+        json = parsed.json
     }
 
     var isRunning: Bool { call.result == nil }
     /// Wegen des Tool-Rundenlimits nicht ausgeführt (ruhige Info statt Fehler).
     var isLimitReached: Bool { call.limitNote == .notExecuted }
     var isError: Bool { !isLimitReached && (call.result?.contains("<TOOL_ERROR>") == true || call.result?.hasPrefix("Nicht ausgeführt") == true) }
+    /// HTML-Ausgabe angezeigt, der Probelauf hat aber Skriptfehler gemeldet – nur ein Hinweis am
+    /// einzelnen Schritt, die Ausgabe selbst und die Gruppe bleiben ruhig.
+    var hasScriptWarning: Bool { !isError && call.name == "coding_sandbox" && call.result?.hasPrefix(CodingTool.htmlScriptErrorPrefix) == true }
 
     var symbol: String {
         switch call.name {
@@ -38,24 +72,24 @@ struct ToolCallPresentation {
         switch call.name {
         case "web_search":
             let q = argument("query")
-            return q.isEmpty ? "Websuche" : "Websuche: „\(q)“"
+            return q.isEmpty ? L("Websuche") : L("Websuche: „\(q)“")
         case "browse_url":
             let host = URL(string: argument("url"))?.host?.replacingOccurrences(of: "www.", with: "") ?? argument("url")
-            return host.isEmpty ? "Webseite lesen" : "Liest \(host)"
+            return host.isEmpty ? L("Webseite lesen") : L("Liest \(host)")
         case "calculate":
             let expression = argument("expression")
-            return expression.isEmpty ? "Rechnen" : "Rechnet \(expression)"
+            return expression.isEmpty ? L("Rechnen") : L("Rechnet \(expression)")
         case "coding_sandbox":
-            if isRunning, call.arguments.count > 10, code.isEmpty == false, !argumentsComplete { return language == "html" ? "Schreibt Simulation …" : "Schreibt Code …" }
-            if isRunning { return language == "html" ? "Erstellt Simulation" : "Führt Python aus" }
-            return language == "html" ? "Interaktive Simulation" : "Python-Ausführung"
+            if isRunning, call.arguments.count > 10, code.isEmpty == false, !argumentsComplete { return language == "html" ? L("Schreibt Simulation …") : L("Schreibt Code …") }
+            if isRunning { return language == "html" ? L("Erstellt Simulation") : L("Führt Python aus") }
+            return language == "html" ? L("Interaktive Simulation") : L("Python-Ausführung")
         case "recall_screenshot":
             let n = argument("number")
-            return n.isEmpty ? "Holt vorherigen Screenshot" : "Holt Screenshot #\(n)"
+            return n.isEmpty ? L("Holt vorherigen Screenshot") : L("Holt Screenshot #\(n)")
         case "quiz_card":
-            return "Abfragekarte"
+            return L("Abfragekarte")
         default:
-            return call.name.isEmpty ? "Tool" : call.name
+            return call.name.isEmpty ? L("Tool") : call.name
         }
     }
 
@@ -71,15 +105,12 @@ struct ToolCallPresentation {
         return Self.partialString(for: key, in: call.arguments) ?? ""
     }
 
-    var language: String {
-        let lang = argument("language").lowercased()
-        return lang.isEmpty ? (call.arguments.contains("<html") || call.arguments.contains("<!DOCTYPE") ? "html" : "python") : lang
-    }
+    var language: String { parsed.language }
 
     /// Code wie er ausgeführt wird: Nach dem Streamen bereinigt (Markdown-Zäune o. Ä.), damit
     /// Zeilennummern und Fehlerkontext zur angezeigten Fassung passen.
     var code: String {
-        let raw = argument("code")
+        let raw = call.name == "coding_sandbox" ? parsed.rawCode : argument("code")
         guard argumentsComplete, call.name == "coding_sandbox" else { return raw }
         return language == "html" ? CodingTool.sanitizeHTMLCode(raw) : CodingEnvironment.sanitizePythonCode(raw)
     }
@@ -179,7 +210,7 @@ struct ToolCallPresentation {
             for m in markers { if let r = afterHeader.range(of: m), r.lowerBound < end { end = r.lowerBound } }
             return String(afterHeader[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let enders = ["\n\nExit Code:", "\n\n--- BETROFFENE", "\n\n(", "\n\nErkläre dem Nutzer", "\nKorrigiere den Fehler", "\nDas Skript wurde"]
+        let enders = ["\n\nExit Code:", "\n\n--- BETROFFENE", "\n\n(", "\n\nAbbildungen (", "\n\nErkläre dem Nutzer", "\nKorrigiere den Fehler", "\nDas Skript wurde"]
         let output = section(after: "--- AUSGABE", until: enders) ?? (language == "html" ? "" : text)
         var exit: Int?
         if let r = text.range(of: "Exit Code: ") {

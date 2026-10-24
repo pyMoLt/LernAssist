@@ -5,7 +5,7 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RSVG="$(command -v rsvg-convert || echo /Volumes/Arbeitsmedium1TB/Apps/FSL/bin/rsvg-convert)"
 SRC="$ROOT/design/icon/preview_flat.svg"
-OUT="$ROOT/Lernassist/Lernassist/Assets.xcassets/AppIcon.appiconset"
+OUT="$ROOT/Lernassist/Assets.xcassets/AppIcon.appiconset"
 find "$OUT" -maxdepth 1 \( -name "*.png" -o -name "*.jpeg" -o -name "*.jpg" \) -delete
 cd "$ROOT/design/icon"
 images=""

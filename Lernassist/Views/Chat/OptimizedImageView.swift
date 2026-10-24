@@ -21,7 +21,8 @@ struct OptimizedImageView: View {
                         .interpolation(.high)
                         .aspectRatio(img.size.width > 0 && img.size.height > 0 ? img.size.width / img.size.height : 1.5, contentMode: .fit)
                         .frame(maxHeight: 560)
-                        .onTapGesture(count: 2) { openLarge() }
+                        // Doppelklick öffnet das Bild im eigenen Fenster (AppKit-Klick, siehe ClickCatcher).
+                        .overlay(ClickCatcher(onDoubleClick: { openLarge() }))
                     
                     Button {
                         openLarge()
@@ -34,7 +35,7 @@ struct OptimizedImageView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(8)
-                    .help("Vollbild / Größer anzeigen")
+                    .help(L("Vollbild / Größer anzeigen"))
                 }
             } else if loadFailed {
                 HStack(spacing: DS.Space.s) {
@@ -42,10 +43,10 @@ struct OptimizedImageView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Bild nicht mehr lokal verfügbar")
+                        Text(L("Bild nicht mehr lokal verfügbar"))
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
-                        Text("Archivierter Anhang")
+                        Text(L("Archivierter Anhang"))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -86,12 +87,13 @@ struct OptimizedImageView: View {
 
     /// Bild groß im eigenen Fenster (auch für Abbildungen aus der Recherche).
     static func openImageWindow(_ img: NSImage) {
-        let w = min(max(img.size.width, 800), 1600)
-        let h = min(max(img.size.height, 600), 1200)
+        // Fenster in Bildgröße (höchstens 90 % des Bildschirms); beim Verkleinern passt sich das
+        // Bild an, solange man nicht selbst zoomt.
+        let size = ContentWindowSize.fitting(content: img.size, extraHeight: 44)
         NativeWindowManager.openWindow(
-            for: NativeImageWindowView(image: img).frame(minWidth: 600, idealWidth: w, maxWidth: .infinity, minHeight: 400, idealHeight: h, maxHeight: .infinity),
-            title: "Bild betrachten",
-            initialSize: CGSize(width: w, height: h)
+            for: NativeImageWindowView(image: img).frame(minWidth: 300, maxWidth: .infinity, minHeight: 200, maxHeight: .infinity),
+            title: L("Bild betrachten"),
+            initialSize: size
         )
     }
 
@@ -104,7 +106,7 @@ struct OptimizedImageView: View {
 
     /// Längste Seite der Chat-Fassung in Pixeln. Screenshots haben oft 3000 px und mehr – sie bei
     /// jedem Bild in voller Auflösung zu skalieren, ließ das Scrollen über Bildern ruckeln.
-    static let displayMaxPixels: CGFloat = 1_600
+    nonisolated static let displayMaxPixels: CGFloat = 1_600
 
     /// Verkleinert ein Bild (Hintergrund-Thread) – Seitenverhältnis und Punktgröße bleiben gleich.
     nonisolated static func displayVersion(of image: NSImage, maxPixels: CGFloat = displayMaxPixels) -> NSImage {
@@ -167,7 +169,7 @@ private struct NativeImageWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Bild").font(.headline)
+                Text(L("Bild")).font(.headline)
                 Spacer()
                 Button(action: {
                     NSPasteboard.general.clearContents()
@@ -176,7 +178,7 @@ private struct NativeImageWindowView: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .buttonStyle(.plain)
-                .help("In die Zwischenablage kopieren")
+                .help(L("In die Zwischenablage kopieren"))
             }
             .padding(10)
             Divider()

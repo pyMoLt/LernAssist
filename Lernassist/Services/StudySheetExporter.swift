@@ -34,7 +34,9 @@ final class StudySheetExporter: NSObject, WKNavigationDelegate {
     /// Rendert Markdown wie im Chat und schreibt es als A4-PDF. Gibt zurück, ob die Datei Inhalt hat.
     func renderPDF(_ markdown: String, to url: URL) async -> Bool {
         guard webView == nil, let (htmlURL, dirURL) = MarkdownWebView.bundleURLs() else { return false }
-        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 1000), configuration: WKWebViewConfiguration())
+        let webConfig = WKWebViewConfiguration()
+        webConfig.setURLSchemeHandler(ResearchImageSchemeHandler(), forURLScheme: ResearchImageSchemeHandler.scheme)
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 700, height: 1000), configuration: webConfig)
         webView.navigationDelegate = self
         // Druckausgabe immer hell, unabhängig vom Erscheinungsbild der App.
         webView.appearance = NSAppearance(named: .aqua)
@@ -166,7 +168,7 @@ final class StudySheetExporter: NSObject, WKNavigationDelegate {
         panel.nameFieldStringValue = Self.fileName(from: name) + "." + (type.preferredFilenameExtension ?? "txt")
         panel.canCreateDirectories = true
         panel.level = .floating
-        return panel.runModal() == .OK ? panel.url : nil
+        return ModalActivity.run({ panel.runModal() }) == .OK ? panel.url : nil
     }
 
     /// Dateiname aus Titel oder erster Überschrift.

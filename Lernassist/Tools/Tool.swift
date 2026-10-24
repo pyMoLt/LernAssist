@@ -28,7 +28,8 @@ protocol AppTool: AnyObject {
 /// den Kontext füllen).
 enum ToolArtifact {
     case image(base64: String)
-    case html(String)
+    /// Interaktives HTML. `allowedHosts`: vom Nutzer freigegebene Domains externer Bibliotheken.
+    case html(String, allowedHosts: [String] = [])
     /// Interaktive Abfragekarte im Chat. Nach einer Karte wartet die App auf die Antwort des
     /// Nutzers, statt das Modell weiterschreiben zu lassen.
     case quiz(QuizCard)
@@ -37,6 +38,10 @@ enum ToolArtifact {
     case modelImage(screenshotNumber: Int)
     /// Abbildungen aus der Recherche ([B#]); die App zeigt sie, wenn das Modell [B#] schreibt.
     case researchImages([ResearchImageRef])
+    /// Zeiten und Zustand der Recherche-Quellen – nur für den Tool-Schritt, nicht für das Modell.
+    case researchStatus([ResearchSourceStatus])
+    /// Dauer der Recherche-Schritte – nur für den Tool-Schritt.
+    case researchPhases([ResearchPhaseTiming])
 }
 
 /// Klassifikation eines Tool-Fehlers für den App-seitigen Retry-Layer (Nutzer-Feature):
@@ -102,7 +107,7 @@ struct ToolResult {
     /// Optionaler Quellenhinweis (URL, Seitenname), der in der Antwort zitiert werden soll.
     let source: String?
     /// Direkt im Chat darzustellende Artefakte (siehe `ToolArtifact`).
-    let artifacts: [ToolArtifact]
+    var artifacts: [ToolArtifact]
 
     init(content: String, isError: Bool = false, errorKind: ToolErrorKind? = nil,
          source: String? = nil, artifacts: [ToolArtifact] = [],

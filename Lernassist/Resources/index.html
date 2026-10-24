@@ -172,7 +172,23 @@ em { font-style: italic; }
   .run-html { color: #B394FF; background: rgba(179, 148, 255, 0.16); }
   .run-html:hover { background: rgba(179, 148, 255, 0.26); }
 }
-.mermaid-error { font-size: 0.8em; opacity: 0.6; margin-bottom: 0.3em; }
+.mermaid-error { font-size: 0.8em; margin-bottom: 0.3em; display: flex; gap: 8px; align-items: center; }
+.mermaid-error span { opacity: 0.6; }
+.repair-diagram {
+  font: 500 11px -apple-system, BlinkMacSystemFont, sans-serif; color: inherit;
+  background: rgba(127, 127, 127, 0.18); border: none; border-radius: 999px; padding: 3px 10px; cursor: pointer;
+}
+.repair-diagram:disabled { opacity: 0.6; cursor: default; }
+/* Kopieren-Knopf an Code-Blöcken (erscheint beim Überfahren) */
+.code-block { position: relative; }
+.copy-code {
+  position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 0.15s;
+  font: 500 11px -apple-system, BlinkMacSystemFont, sans-serif;
+  color: inherit; background: rgba(127, 127, 127, 0.18);
+  border: none; border-radius: 999px; padding: 3px 9px; cursor: pointer;
+}
+.code-block:hover .copy-code, .copy-code.done { opacity: 1; }
+.copy-code:hover { background: rgba(127, 127, 127, 0.3); }
 </style>
 </head>
 <body>
@@ -210,6 +226,13 @@ var md = window.markdownit({
 // ```mermaid-Blöcke werden als Platzhalter gerendert und erst dann gezeichnet, wenn die
 // Bibliothek (2,5 MB) gebraucht wird – sie wird nur bei Bedarf nachgeladen. Fertige SVGs
 // werden pro Quelltext gecacht, damit Streaming-Updates nicht ständig neu zeichnen.
+// Texte der Oberfläche in der App-Sprache (setzt MarkdownView als window._ui).
+function ui(key) {
+  var fallback = { diagramFailed: 'Diagramm konnte nicht gezeichnet werden – Quelltext:', repair: 'Reparieren lassen',
+                   repairing: 'Wird repariert …', copy: 'Kopieren', copied: 'Kopiert', simulation: 'Als Simulation anzeigen' };
+  return (window._ui && window._ui[key]) || fallback[key] || key;
+}
+
 var defaultFence = md.renderer.rules.fence;
 md.renderer.rules.fence = function(tokens, idx, options, env, self) {
   var token = tokens[idx];
@@ -223,9 +246,10 @@ md.renderer.rules.fence = function(tokens, idx, options, env, self) {
     // HTML im Chat (z. B. wenn das Modell kein Tool aufgerufen hat): per Knopf als Simulation öffnen.
     var raw = token.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     return '<div class="html-block">' + defaultFence(tokens, idx, options, env, self) +
-      '<button class="run-html" data-src="' + raw + '">▶ Als Simulation anzeigen</button></div>';
+      '<button class="run-html" data-src="' + raw + '">▶ ' + ui('simulation') + '</button></div>';
   }
-  return defaultFence(tokens, idx, options, env, self);
+  return '<div class="code-block">' + defaultFence(tokens, idx, options, env, self) +
+    '<button class="copy-code">' + ui('copy') + '</button></div>';
 };
 
 window._mermaidCache = window._mermaidCache || {};
@@ -241,6 +265,7 @@ function applyMermaidTheme() {
   window.mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'antiscript',
+    suppressErrorRendering: true,
     htmlLabels: false,
     flowchart: { htmlLabels: false },
     theme: dark ? 'dark' : 'neutral',
@@ -283,14 +308,137 @@ if (window.matchMedia) {
   }
 }
 
-// Setzt Knotentexte mit Sonderzeichen in Anführungszeichen: A[Text (x)] → A["Text (x)"].
-function repairMermaid(code) {
-  return code.replace(/(\b[\w-]+)\[(?!["(\[\/\\])([^\]\n"]*)\]/g, function(m, id, label) {
-    return /[()\{\}<>:;,&#|]/.test(label) ? id + '["' + label + '"]' : m;
-  }).replace(/(\b[\w-]+)\{(?!["{])([^}\n"]*)\}/g, function(m, id, label) {
-    return /[()\[\]<>:;,&#|]/.test(label) ? id + '{"' + label + '"}' : m;
+// ── Mermaid-Reparatur ──────────────────────────────────────────────────
+// Kleine Modelle machen bei Mermaid immer wieder dieselben Fehler. Erst eine deterministische
+// Vorverarbeitung, danach (falls der Parser noch meckert) eine Schleife, die die gemeldete Zeile
+// gezielt repariert oder – bei Stil-Zeilen und als letzter Ausweg – auskommentiert.
+var MERMAID_SPECIAL = /[()\[\]{}<>:;,#&|"\/@=+*%!?]/;
+
+function quoteLabel(text) {
+  return '"' + text.replace(/"/g, '#quot;') + '"';
+}
+
+// Knotentexte mit Sonderzeichen quoten: A[Text (x)] → A["Text (x)"], ebenso {…}, (…), ([…]), [[…]], ((…)).
+function quoteNodeLabels(line) {
+  var shapes = [
+    [/(\b[\w-]+)\(\[(?!")([^\]\n]*?)\]\)/g, '([', '])'],
+    [/(\b[\w-]+)\[\[(?!")([^\]\n]*?)\]\]/g, '[[', ']]'],
+    [/(\b[\w-]+)\(\((?!")([^)\n]*?)\)\)/g, '((', '))'],
+    [/(\b[\w-]+)\[(?![\["(\/\\])([^\]\n]*)\]/g, '[', ']'],
+    [/(\b[\w-]+)\{(?![{"])([^}\n]*)\}/g, '{', '}'],
+    [/(\b[\w-]+)\((?![("\[])([^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)(?!\))/g, '(', ')']
+  ];
+  shapes.forEach(function(shape) {
+    line = line.replace(shape[0], function(m, id, label) {
+      return MERMAID_SPECIAL.test(label) || /\(|\)/.test(label) ? id + shape[1] + quoteLabel(label) + shape[2] : m;
+    });
+  });
+  return line;
+}
+
+// Kanten-Beschriftungen: -->|a (b)| → -->|"a (b)"|
+function quoteEdgeLabels(line) {
+  return line.replace(/\|([^|"\n]+)\|/g, function(m, label) {
+    return MERMAID_SPECIAL.test(label) ? '|' + quoteLabel(label.trim()) + '|' : m;
   });
 }
+
+function preprocessMermaid(code) {
+  var text = code.replace(/^\s*```\s*mermaid\s*\n?/i, '').replace(/\n?```\s*$/, '');
+  // Unicode-Pfeile und typografische Anführungszeichen.
+  text = text.replace(/[→⟶➔⇒]/g, '-->').replace(/[—–]>/g, '-->')
+             .replace(/[“”„«»]/g, "'").replace(/ /g, ' ');
+  var lines = text.split('\n');
+  // Kopfzeile finden und vereinheitlichen.
+  var head = -1;
+  for (var i = 0; i < lines.length; i++) {
+    var t = lines[i].trim();
+    if (t && t.indexOf('%%') !== 0 && t !== '---') { head = i; break; }
+  }
+  if (head < 0) { return text; }
+  var header = lines[head].trim();
+  var kind = header.split(/\s+/)[0].toLowerCase();
+  var headerMap = { 'sequence': 'sequenceDiagram', 'sequencediagram': 'sequenceDiagram', 'class': 'classDiagram',
+                    'classdiagram': 'classDiagram', 'statediagram': 'stateDiagram-v2', 'state': 'stateDiagram-v2',
+                    'er': 'erDiagram', 'erdiagram': 'erDiagram', 'mindmap': 'mindmap', 'timeline': 'timeline', 'pie': 'pie' };
+  if (kind === 'graph' || kind === 'flowchart') {
+    if (!/^(graph|flowchart)\s+(TD|TB|LR|RL|BT)\b/i.test(header)) { lines[head] = kind + ' TD'; }
+  } else if (headerMap[kind] && header.split(/\s+/).length === 1 && header !== headerMap[kind]) {
+    lines[head] = headerMap[kind];
+  }
+  var isFlowchart = /^(graph|flowchart)\b/i.test(lines[head].trim());
+  if (!isFlowchart) { return lines.join('\n'); }
+
+  var opened = 0, closed = 0, subgraphCount = 0;
+  for (var k = head + 1; k < lines.length; k++) {
+    var line = lines[k];
+    var trimmed = line.trim();
+    if (!trimmed || trimmed.indexOf('%%') === 0) { continue; }
+    if (/^subgraph\b/i.test(trimmed)) {
+      opened++;
+      // subgraph Titel mit Leerzeichen → subgraph sgN["Titel mit Leerzeichen"]
+      var title = trimmed.replace(/^subgraph\s+/i, '');
+      if (title && !/[\["]/.test(title) && /\s/.test(title)) {
+        lines[k] = line.replace(/subgraph\s+.*/i, 'subgraph sg' + (++subgraphCount) + '[' + quoteLabel(title) + ']');
+      }
+      continue;
+    }
+    if (/^end\s*;?$/i.test(trimmed)) { closed++; continue; }
+    if (/^(style|classDef|linkStyle|class|click)\b/.test(trimmed)) { continue; }
+    // Verkürzte Pfeile im Flussdiagramm: A -> B
+    line = line.replace(/([^-<=])->(?!>)/g, '$1-->');
+    // Reservierte Wörter als Knoten (end, graph …) → großschreiben.
+    line = line.replace(/(^|[\s>|&;-])(end|graph|subgraph|style|class|click|default)(?=\s*($|[\[\({;&]|-|$))/g,
+                        function(m, pre, word) { return pre + word.charAt(0).toUpperCase() + word.slice(1); });
+    // \n in Texten → Zeilenumbruch.
+    line = line.replace(/\\n/g, '<br/>');
+    line = quoteEdgeLabels(quoteNodeLabels(line));
+    lines[k] = line;
+  }
+  for (var m = closed; m < opened; m++) { lines.push('end'); }
+  return lines.join('\n');
+}
+
+// Zeile laut Parser-Fehler (Mermaid 11: err.hash.loc oder „line N“ im Text).
+function mermaidErrorLine(err) {
+  if (err && err.hash) {
+    if (err.hash.loc && err.hash.loc.first_line) { return err.hash.loc.first_line; }
+    if (typeof err.hash.line === 'number') { return err.hash.line + 1; }
+  }
+  var match = /line[: ]+(\d+)/i.exec(String(err && err.message || err));
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+// Parser-Schleife: höchstens 6 Reparaturen, jede an der gemeldeten Zeile.
+async function repairMermaid(mermaid, code) {
+  var text = preprocessMermaid(code);
+  for (var attempt = 0; attempt < 6; attempt++) {
+    try {
+      await mermaid.parse(text);
+      return text;
+    } catch (err) {
+      var lineNo = mermaidErrorLine(err);
+      var lines = text.split('\n');
+      if (lineNo < 2 || lineNo > lines.length) { return null; }
+      var line = lines[lineNo - 1];
+      var trimmed = line.trim();
+      var fixed;
+      if (/^(style|classDef|linkStyle|class|click)\b/.test(trimmed)) {
+        fixed = '%% ' + trimmed;                       // nur Optik geht verloren
+      } else {
+        // Alles in Klammern hart quoten; hilft das nicht, Zeile auskommentieren.
+        fixed = line.replace(/(\b[\w-]+)([\[\(\{])([^\n]*?)([\]\)\}])(?=\s*($|-|&|;|:::))/g, function(m, id, open, label, close) {
+          return label.charAt(0) === '"' ? m : id + open + quoteLabel(label) + close;
+        });
+        if (fixed === line) { fixed = '%% ' + trimmed; }
+      }
+      lines[lineNo - 1] = fixed;
+      text = lines.join('\n');
+    }
+  }
+  return null;
+}
+
 // Feste helle Farben aus dem Modell (classDef/style fill:#e1f5fe) im Dark Mode abdunkeln –
 // Farbton bleibt, damit farbige Gruppen ihre Bedeutung behalten. Dunkle Schrift wird hell.
 function adaptMermaidColors(code) {
@@ -339,7 +487,6 @@ function renderMermaidBlocks(el) {
         var preserved = src.replace(/<br\s*\/?>/gi, '__MERMAID_BR__');
         var decoded = new DOMParser().parseFromString(preserved, 'text/html').documentElement.textContent.replace(/__MERMAID_BR__|<br\s*\/?>/gi, '<br/>');
         decoded = adaptMermaidColors(decoded);
-        var repaired = repairMermaid(decoded);
         var show = function(result) {
           window._mermaidCache[src] = result.svg;
           block.innerHTML = result.svg;
@@ -347,16 +494,28 @@ function renderMermaidBlocks(el) {
           reportHeight();
         };
         mermaid.render('mmd' + (++mermaidCounter), decoded).then(show).catch(function() {
-          // Häufiger Modellfehler: Klammern o. Ä. in ungequoteten Knotentexten → reparierte Fassung.
-          return mermaid.render('mmd' + (++mermaidCounter), repaired).then(show);
-        }).catch(function() {
+          // Modellfehler (Klammern in Texten, Pfeile, reservierte Wörter …) → reparierte Fassung.
+          cleanupMermaidErrors();
+          return repairMermaid(mermaid, decoded).then(function(repaired) {
+            if (!repaired) { throw new Error('nicht reparierbar'); }
+            return mermaid.render('mmd' + (++mermaidCounter), repaired).then(show);
+          });
+        }).catch(function(err) {
           cleanupMermaidErrors();
           // Stream noch unvollständig → beim nächsten Update erneut versuchen. Ist der Text fertig
-          // und trotzdem fehlerhaft, bleibt der Quelltext mit einem kurzen Hinweis sichtbar.
+          // und trotzdem fehlerhaft, bleibt der Quelltext mit Hinweis und „Reparieren lassen“ sichtbar.
           if (!block.querySelector('.mermaid-error')) {
             var note = document.createElement('div');
             note.className = 'mermaid-error';
-            note.textContent = 'Diagramm konnte nicht gezeichnet werden – Quelltext:';
+            var label = document.createElement('span');
+            label.textContent = ui('diagramFailed');
+            note.appendChild(label);
+            var button = document.createElement('button');
+            button.className = 'repair-diagram';
+            button.textContent = ui('repair');
+            button.setAttribute('data-src', src);
+            button.setAttribute('data-error', String(err && err.message || err || '').slice(0, 500));
+            note.appendChild(button);
             block.insertBefore(note, block.firstChild);
             reportHeight();
           }
@@ -388,7 +547,7 @@ function ensureLibs(content, fontScale) {
   if (typeof hljs === 'undefined' && content.indexOf('```') >= 0) {
     libsLoading.hl = libsLoading.hl || loadScript('highlight.bundle.js'); jobs.push(libsLoading.hl);
   }
-  if (typeof renderMathInElement === 'undefined' && /\$|\\\(|\\\[/.test(content)) {
+  if (typeof renderMathInElement === 'undefined' && (/\$|\\\(|\\\[|\\begin\{|\\(?:text|mathrm|ce|frac|dfrac|sqrt|Delta|rightarrow|approx)\b/.test(content))) {
     libsLoading.math = libsLoading.math || loadScript('katex.min.js').then(function() { return loadScript('auto-render.min.js'); });
     jobs.push(libsLoading.math);
   }
@@ -399,14 +558,95 @@ function ensureLibs(content, fontScale) {
   });
 }
 
+// Chemie-Makro \ce{...} (mhchem) in Standard-KaTeX (\mathrm{...}) überführen, da mhchem nicht
+// geladen ist und Modelle wie Qwen/Sage häufig \ce{ATP + H2O -> ADP + P_i} ausgeben.
+function expandCe(math) {
+  var out = '', i = 0;
+  while (i < math.length) {
+    var idx = math.indexOf('\\ce{', i);
+    if (idx < 0) { out += math.slice(i); break; }
+    out += math.slice(i, idx);
+    var depth = 1, j = idx + 4;
+    while (j < math.length && depth > 0) {
+      if (math[j] === '\\') { j += 2; continue; }
+      if (math[j] === '{') { depth++; }
+      else if (math[j] === '}') { depth--; }
+      j++;
+    }
+    var inner = math.slice(idx + 4, depth === 0 ? j - 1 : j);
+    inner = inner
+      .replace(/<-->|<->|↔/g, ' \\leftrightarrow ')
+      .replace(/<=>|⇌/g, ' \\rightleftharpoons ')
+      .replace(/-->|->|⟶|→/g, ' \\rightarrow ')
+      .replace(/<--|<-|⟵|←/g, ' \\leftarrow ')
+      .replace(/\^(\d*[+-])(?![}\d])/g, '^{$1}')
+      .replace(/([A-Za-z)\]])(\d+)/g, '$1_{$2}');
+    out += '\\mathrm{' + inner + '}';
+    i = j;
+  }
+  return out;
+}
+
+// Typische LaTeX-Formelfehler lokaler und großer Modelle deterministisch reparieren:
+// - Markdown-Escapes (\_, \*), doppelte Backslashes vor Befehlen (\\frac → \frac)
+// - \ce{...}-Chemiemakros
+// - Doppelte Superskripte durch Strich/Prime nach Exponenten (\Delta G^\circ' → \Delta G^{\circ\prime})
+// - Unescapte %-Zeichen in Formeln (40% → 40\%)
+function preprocessLatexMath(math) {
+  var s = math
+    .replace(/\\_/g, '_')
+    .replace(/\\\*/g, '*')
+    .replace(/(?<!\\)\\\\(?=[a-zA-Z]{2,})/g, '\\')
+    .replace(/\\degree\b/g, '^\\circ')
+    .replace(/\\mathbfit\b/g, '\\boldsymbol');
+  if (s.indexOf('\\ce{') >= 0) {
+    s = expandCe(s);
+  }
+  // Doppeltes Superskript durch Prime (' / ’ / ′) direkt nach ^... (z. B. \Delta G^\circ', E^{\circ}', x^2')
+  s = s.replace(/\^\{([^{}]*)\}\s*(['’′]+)/g, function(_, exp, primes) {
+    return '^{' + exp + '\\prime'.repeat(primes.length) + '}';
+  });
+  s = s.replace(/\^(\\[a-zA-Z]+|[a-zA-Z0-9])\s*(['’′]+)/g, function(_, exp, primes) {
+    return '^{' + exp + (exp.charAt(0) === '\\' ? ' ' : '') + '\\prime'.repeat(primes.length) + '}';
+  });
+  s = s.replace(/\^(\\[a-zA-Z]+|\{[^{}]*\}|[a-zA-Z0-9])\s*\^\{\\prime\}/g, function(_, exp) {
+    var clean = exp.charAt(0) === '{' && exp.charAt(exp.length - 1) === '}' ? exp.slice(1, -1) : exp;
+    return '^{' + clean + (clean.charAt(0) === '\\' ? ' ' : '') + '\\prime}';
+  });
+  // Einzelne hochgestellte Unicode-Striche (’ / ′) ohne ^ als \prime
+  s = s.replace(/[’′]/g, "'");
+  // Unescapte %-Zeichen im Mathe-Modus kommentieren sonst den Rest der Formel bis zum Ende aus.
+  s = s.replace(/(?<!\\)%/g, '\\%');
+  return s;
+}
+
+// Freistehende LaTeX-Gleichungszeilen ohne $$/\[...\]-Begrenzer automatisch in $$...$$ fassen
+// (z. B. „\text{ATP} \rightarrow \text{ADP} + \text{P}_i \quad \Delta G^\circ' \approx -30.5 \text{ kJ/mol}“).
+function repairBareMathLines(text) {
+  // 1. Freistehende \begin{align/equation/...}...\end{...} ohne $$-Begrenzer schützen
+  text = text.replace(/(^|\n)[ \t]*(\\begin\{(equation|align|aligned|gather|gathered|multline|pmatrix|bmatrix|vmatrix|matrix|cases)\*?\}[\s\S]*?\\end\{\3\*?\})[ \t]*(?=\n|$)/g, '$1$$$$$2$$$$');
+  // 2. Einzelne Zeilen, die eindeutig reine LaTeX-Gleichungen ohne $-Begrenzer sind
+  var bareStart = /^\\(?:text|mathrm|mathbf|mathit|ce|Delta|nabla|sum|prod|int|oint|frac|dfrac|tfrac|sqrt|left|partial|alpha|beta|gamma|delta|epsilon|lambda|mu|pi|sigma|tau|omega|Omega|Phi|Psi)\b/;
+  var mathOperator = /\\(?:rightarrow|leftarrow|leftrightarrow|rightleftharpoons|approx|equiv|sim|le|ge|neq|times|cdot|quad|qquad|frac|dfrac|tfrac|sqrt|Delta|sum|int)\b|[=^_]/;
+  return text.split('\n').map(function(line) {
+    var t = line.trim();
+    if (!t || /\$|\\\(|\\\[/.test(t)) { return line; }
+    if (/^(?:[#|>]|[-*+]\s|\d+\.\s|\[[WB]\d+\])/.test(t)) { return line; }
+    if (bareStart.test(t) && mathOperator.test(t)) {
+      return '$$' + t + '$$';
+    }
+    return line;
+  }).join('\n');
+}
+
 // Ersetzt Formeln außerhalb von Code durch Platzhalter (ohne Markdown-Bedeutung).
 function protectMath(content) {
   var store = [];
   var parts = content.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/);
-  var mathRe = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$/g;
+  var mathRe = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$(?!\s)[^$\n]+?(?<!\s)\$|\$[ \t]*[^$\n]*\\[a-zA-Z]+[^$\n]*[ \t]*\$/g;
   for (var i = 0; i < parts.length; i++) {
     if (i % 2 === 1) { continue; } // Code bleibt unangetastet
-    parts[i] = parts[i].replace(mathRe, function(m) {
+    parts[i] = repairBareMathLines(parts[i]).replace(mathRe, function(m) {
       store.push(m);
       return 'LAMATHX' + (store.length - 1) + 'XLAMATH';
     });
@@ -422,6 +662,44 @@ function restoreMath(html, store) {
   });
 }
 
+// Tabellen kleiner Modelle reparieren (außerhalb von Code): fehlende Trennzeile, zu wenige
+// Spalten, Leerzeilen mitten in der Tabelle, eingerückte Tabellen, fehlende Leerzeile davor.
+function repairTables(text) {
+  var lines = text.split('\n'), out = [], inFence = false;
+  function isRow(l) { var t = l.trim(); return t.charAt(0) === '|' && (t.match(/\|/g) || []).length >= 2; }
+  function isSeparator(l) { return /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l); }
+  function cells(l) { return l.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).length; }
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^\s*```/.test(line)) { inFence = !inFence; out.push(line); continue; }
+    if (inFence || !isRow(line)) { out.push(line); continue; }
+    // Tabellenblock sammeln (Leerzeilen zwischen zwei Zeilen überspringen).
+    var block = [];
+    while (i < lines.length) {
+      if (isRow(lines[i])) { block.push(lines[i].trim()); i++; continue; }
+      if (!lines[i].trim() && i + 1 < lines.length && isRow(lines[i + 1]) && block.length && !isSeparator(lines[i + 1])) { i++; continue; }
+      break;
+    }
+    i--;
+    if (block.length >= 2) {
+      var columns = cells(block[0]);
+      if (!isSeparator(block[1])) {
+        block.splice(1, 0, '|' + new Array(columns + 1).join(' --- |'));
+      }
+      block = block.map(function(row, n) {
+        if (n === 1) { return row; }
+        if (!/\|$/.test(row)) { row += ' |'; }
+        var missing = columns - cells(row);
+        for (var k = 0; k < missing; k++) { row += '  |'; }
+        return row;
+      });
+      if (out.length && out[out.length - 1].trim()) { out.push(''); }
+    }
+    Array.prototype.push.apply(out, block);
+  }
+  return out.join('\n');
+}
+
 function updateContent(content, fontScale) {
   var el = document.getElementById('content');
   ensureLibs(content, fontScale);
@@ -433,6 +711,7 @@ function updateContent(content, fontScale) {
   // 1. Markdown → HTML. Formeln vorher schützen: Sonst liest Markdown die Unterstriche in
   //    „($[E]_0$) und ($k_{cat}$)“ als Kursiv-Markierung und zerstört die $…$-Grenzen.
   var protectedMath = protectMath(content);
+  protectedMath.text = repairTables(protectedMath.text);
   var html = md.render(protectedMath.text);
   el.innerHTML = restoreMath(html, protectedMath.store);
 
@@ -448,9 +727,7 @@ function updateContent(content, fontScale) {
           { left: '\\[', right: '\\]', display: true  },
           { left: '$',   right: '$',   display: false }
         ],
-        preProcess: function(math) {
-          return math.replace(/\\_/g, '_');
-        },
+        preProcess: preprocessLatexMath,
         throwOnError: false,
         output: 'html'
       });
@@ -487,6 +764,24 @@ function updateContent(content, fontScale) {
 
 // ── Links und Bilder abfangen (im System-Browser öffnen, nicht in der WebView) ──
 document.addEventListener('click', function(e) {
+  var repair = e.target.closest && e.target.closest('.repair-diagram');
+  if (repair) {
+    e.preventDefault();
+    if (repair.disabled) { return; }
+    repair.disabled = true;
+    repair.textContent = ui('repairing');
+    try { window.webkit.messageHandlers.repairDiagram.postMessage({ source: repair.getAttribute('data-src') || '', error: repair.getAttribute('data-error') || '' }); } catch(err) {}
+    return;
+  }
+  var copy = e.target.closest && e.target.closest('.copy-code');
+  if (copy) {
+    e.preventDefault();
+    var code = copy.parentNode.querySelector('pre code') || copy.parentNode.querySelector('pre');
+    try { window.webkit.messageHandlers.copyText.postMessage(code ? code.innerText : ''); } catch(err) {}
+    copy.textContent = ui('copied'); copy.classList.add('done');
+    setTimeout(function() { copy.textContent = ui('copy'); copy.classList.remove('done'); }, 1500);
+    return;
+  }
   var run = e.target.closest && e.target.closest('.run-html');
   if (run) {
     e.preventDefault();

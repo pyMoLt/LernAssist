@@ -7,16 +7,16 @@ struct EndpointsTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            settingsSection(icon: "bolt.horizontal.circle.fill", title: "Aktives Profil & Fallback", tint: DS.Accent.emerald) {
+            settingsSection(icon: "bolt.horizontal.circle.fill", title: L("Aktives Profil & Fallback"), tint: DS.Accent.emerald) {
                 VStack(alignment: .leading, spacing: DS.Space.m) {
                     SettingsRow(
-                        title: "Aktives Server-Profil",
-                        subtitle: "Wird für neue Nachrichten, Screenshots und Schnell-Aktionen verwendet.",
+                        title: L("Aktives Server-Profil"),
+                        subtitle: L("Wird für neue Nachrichten, Screenshots und Schnell-Aktionen verwendet."),
                         icon: "checkmark.circle.fill",
                         tint: DS.Accent.emerald
                     ) {
                         SoftDropdownMenu(
-                            label: viewModel.activeProfile?.name ?? "Auswählen",
+                            label: viewModel.activeProfile?.name ?? L("Auswählen"),
                             width: 210
                         ) {
                             ForEach(viewModel.profiles) { profile in
@@ -36,22 +36,22 @@ struct EndpointsTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Fallback bei Nichterreichbarkeit",
-                        subtitle: "Springt einmalig ein, falls der Hauptserver beim Senden nicht antwortet.",
+                        title: L("Fallback bei Nichterreichbarkeit"),
+                        subtitle: L("Springt einmalig ein, falls der Hauptserver beim Senden nicht antwortet."),
                         icon: "arrow.triangle.2.circlepath",
                         tint: DS.Accent.amber
                     ) {
                         SoftDropdownMenu(
-                            label: viewModel.profiles.first(where: { $0.id == viewModel.fallbackProfileID })?.name ?? "Kein Fallback",
+                            label: viewModel.profiles.first(where: { $0.id == viewModel.fallbackProfileID })?.name ?? L("Kein Fallback"),
                             width: 210
                         ) {
                             Button {
                                 viewModel.fallbackProfileID = nil
                             } label: {
                                 if viewModel.fallbackProfileID == nil {
-                                    Label("Kein Fallback", systemImage: "checkmark")
+                                    Label(L("Kein Fallback"), systemImage: "checkmark")
                                 } else {
-                                    Text("Kein Fallback")
+                                    Text(L("Kein Fallback"))
                                 }
                             }
                             Divider()
@@ -67,14 +67,14 @@ struct EndpointsTabView: View {
                                 }
                             }
                         }
-                        .settingHelp("Ist das aktive Profil nicht erreichbar, wird automatisch einmalig auf dieses Profil ausgewichen – ohne Polling, nur beim tatsächlichen Senden.")
+                        .settingHelp(L("Ist das aktive Profil nicht erreichbar, wird automatisch einmalig auf dieses Profil ausgewichen – ohne Polling, nur beim tatsächlichen Senden."))
                     }
 
                     if viewModel.isUsingFallback {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(DS.Accent.amber)
-                            Text("Aktuell im Fallback-Betrieb")
+                            Text(L("Aktuell im Fallback-Betrieb"))
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(DS.Accent.amber)
                         }
@@ -87,14 +87,14 @@ struct EndpointsTabView: View {
 
             settingsSection(
                 icon: "server.rack",
-                title: "Server-Profile (\(viewModel.profiles.count))",
+                title: L("Server-Profile (\(viewModel.profiles.count))"),
                 tint: DS.Accent.blue,
                 trailing: {
                     Button(action: addProfile) {
                         HStack(spacing: 5) {
                             Image(systemName: "plus")
                                 .font(.system(size: 11, weight: .bold))
-                            Text("Profil hinzufügen")
+                            Text(L("Profil hinzufügen"))
                         }
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
@@ -165,15 +165,15 @@ private struct ProfileEditorRow: View {
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)
-                .help(isActive ? "Aktives Profil" : "Als aktives Profil auswählen")
+                .help(isActive ? L("Aktives Profil") : L("Als aktives Profil auswählen"))
 
-                TextField("Profilname", text: $profile.name)
+                TextField(L("Profilname"), text: $profile.name)
                     .textFieldStyle(.plain)
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(DS.Ink.primary)
 
                 if isActive {
-                    Text("AKTIV")
+                    Text(L("AKTIV"))
                         .font(.system(size: 9.5, weight: .bold, design: .rounded))
                         .foregroundStyle(DS.Accent.emerald)
                         .padding(.horizontal, 7)
@@ -183,7 +183,7 @@ private struct ProfileEditorRow: View {
 
                 Spacer(minLength: DS.Space.s)
 
-                Toggle("Remote", isOn: $profile.isRemote)
+                Toggle(L("Remote"), isOn: $profile.isRemote)
                     .toggleStyle(.switch)
                     .controlSize(.mini)
                     .font(.caption)
@@ -195,7 +195,7 @@ private struct ProfileEditorRow: View {
                     HStack(spacing: 4) {
                         Image(systemName: "sparkles")
                             .font(.system(size: 10, weight: .semibold))
-                        Text("Vorlagen")
+                        Text(L("Vorlagen"))
                     }
                 }
                 .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo))
@@ -213,12 +213,12 @@ private struct ProfileEditorRow: View {
                                 .fill(pingStatusColor)
                                 .frame(width: 6, height: 6)
                         }
-                        Text(pingStatus ?? "Ping")
+                        Text(pingStatus ?? L("Ping"))
                     }
                 }
                 .buttonStyle(SoftActionButtonStyle(tint: pingButtonTint))
                 .disabled(isPinging)
-                .help("Verbindung prüfen und verfügbare Modelle vom Server laden")
+                .help(L("Verbindung prüfen und verfügbare Modelle vom Server laden"))
 
                 if canDelete {
                     Button(action: onDelete) {
@@ -229,7 +229,7 @@ private struct ProfileEditorRow: View {
                             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(DS.Surface.control))
                     }
                     .buttonStyle(.plain)
-                    .help("Profil löschen")
+                    .help(L("Profil löschen"))
                 }
             }
 
@@ -237,7 +237,7 @@ private struct ProfileEditorRow: View {
 
             // 2. Zeile: Anbieter & API-Key (exakt gleiche Höhe durch labeledField auf beiden Spalten)
             HStack(alignment: .top, spacing: DS.Space.m) {
-                labeledField("Anbieter / Protokoll") {
+                labeledField(L("Anbieter / Protokoll")) {
                     HStack(spacing: 6) {
                         SoftDropdownMenu(
                             label: profile.provider.displayName,
@@ -287,10 +287,10 @@ private struct ProfileEditorRow: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                labeledField("API-Schlüssel (optional)") {
+                labeledField(L("API-Schlüssel (optional)")) {
                     SecureField(profile.provider.apiKeyLabel, text: $profile.apiKey)
                         .modifier(SettingsFieldStyle())
-                        .settingHelp("API-Key. Bei lokalen Modellen (LM Studio, Ollama, oMLX) leer lassen.")
+                        .settingHelp(L("API-Key. Bei lokalen Modellen (LM Studio, Ollama, oMLX) leer lassen."))
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -298,23 +298,23 @@ private struct ProfileEditorRow: View {
             // 3. Zeile: Server-URL & Kontextfenster (beide mit Spalten-Label auf exakt gleicher Höhe!)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: DS.Space.m) {
-                    labeledField("Server-URL") {
+                    labeledField(L("Server-URL")) {
                         TextField(profile.provider.defaultBaseURL, text: $profile.baseURL)
                             .modifier(SettingsFieldStyle(monospaced: true))
-                            .settingHelp("Die Basis-URL deines Servers.\n• LM Studio: http://127.0.0.1:1234\n• Ollama: http://localhost:11434\n• oMLX: http://127.0.0.1:8000\n• OpenAI: https://api.openai.com")
+                            .settingHelp(L("Die Basis-URL deines Servers.\n• LM Studio: http://127.0.0.1:1234\n• Ollama: http://localhost:11434\n• oMLX: http://127.0.0.1:8000\n• OpenAI: https://api.openai.com"))
                     }
                     .frame(maxWidth: .infinity)
 
-                    labeledField("Kontext (Tokens)") {
-                        TextField("Auto", value: $profile.contextSizeOverride, format: .number)
+                    labeledField(L("Kontext (Tokens)")) {
+                        TextField(L("Auto"), value: $profile.contextSizeOverride, format: .number)
                             .modifier(SettingsFieldStyle(monospaced: true))
-                            .settingHelp("Kontextgröße (Tokens).\n• Ideal: Leer lassen (Auto)\n• Lokale Modelle: Häufig 8192–32768")
+                            .settingHelp(L("Kontextgröße (Tokens).\n• Ideal: Leer lassen (Auto)\n• Lokale Modelle: Häufig 8192–32768"))
                     }
                     .frame(width: 140)
                 }
 
                 if let url = EndpointManager.chatCompletionsURL(for: profile) {
-                    Text("Endpunkt: \(url.absoluteString)")
+                    Text(L("Endpunkt: \(url.absoluteString)"))
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -323,7 +323,7 @@ private struct ProfileEditorRow: View {
             }
 
             // 4. Zeile: Modell-Auswahl (mit Pfeil-Dropdown direkt im selben Feld nach Ping / Abruf!)
-            labeledField("Modell") {
+            labeledField(L("Modell")) {
                 HStack(spacing: DS.Space.s) {
                     // Kombiniertes Modell-Eingabefeld + Ausklapp-Menü auf exakt gleicher Höhe
                     HStack(spacing: 6) {
@@ -331,13 +331,13 @@ private struct ProfileEditorRow: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(DS.Accent.indigo)
 
-                        TextField("Modellname", text: $profile.model)
+                        TextField(L("Modellname"), text: $profile.model)
                             .textFieldStyle(.plain)
                             .font(.system(size: 12.5, design: .monospaced))
 
                         if !cachedModels.isEmpty {
                             Menu {
-                                Section("Verfügbare Server-Modelle (\(cachedModels.count))") {
+                                Section(L("Verfügbare Server-Modelle (\(cachedModels.count))")) {
                                     ForEach(cachedModels, id: \.id) { m in
                                         Button {
                                             profile.model = m.id
@@ -350,7 +350,7 @@ private struct ProfileEditorRow: View {
                                                     Image(systemName: "checkmark")
                                                 }
                                                 if let cw = m.contextWindow {
-                                                    Text("\(m.id)  (\(cw / 1024)k ctx)")
+                                                    Text(L("\(m.id)  (\(cw / 1024)k ctx)"))
                                                 } else {
                                                     Text(m.id)
                                                 }
@@ -372,7 +372,7 @@ private struct ProfileEditorRow: View {
                             }
                             .buttonStyle(.plain)
                             .fixedSize()
-                            .help("Modell direkt aus der Server-Liste auswählen")
+                            .help(L("Modell direkt aus der Server-Liste auswählen"))
                         }
                     }
                     .padding(.horizontal, 10)
@@ -393,48 +393,28 @@ private struct ProfileEditorRow: View {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.system(size: 11, weight: .semibold))
                             }
-                            Text("Modelle")
+                            Text(L("Modelle"))
                         }
                     }
                     .buttonStyle(SoftActionButtonStyle())
                     .disabled(isLoadingModels)
-                    .help("Modell-Liste vom Server aktualisieren")
+                    .help(L("Modell-Liste vom Server aktualisieren"))
                 }
             }
 
-            // 5. Zeile: Denkmodus (Thinking) & Timeout (ebenfalls sauber zweispaltig auf gleicher Höhe)
+            // 5. Zeile: Timeout. Denken an/aus und Budget hängen seit Version 4.0 am Modell
+            // (Einstellungen → Modelle), nicht mehr am Profil.
             HStack(alignment: .top, spacing: DS.Space.m) {
-                labeledField("Denkmodus (Reasoning / Thinking)") {
-                    HStack(spacing: DS.Space.s) {
-                        SoftDropdownMenu(label: profile.thinkingMode.label) {
-                            ForEach(ThinkingMode.allCases, id: \.self) { mode in
-                                Button {
-                                    profile.thinkingMode = mode
-                                } label: {
-                                    if profile.thinkingMode == mode {
-                                        Label(mode.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(mode.label)
-                                    }
-                                }
-                            }
-                        }
-                        .settingHelp("Denkprozess des Modells für Chat-Antworten. „An“ mit Budget ist für Erklärungen empfehlenswert; „Server-Standard“ sendet nichts.")
+                Text(L("Denken, Denkstärke und Preserve Thinking stellst du pro Modell unter „Modelle“ ein."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 20)
 
-                        if profile.thinkingMode == .on {
-                            TextField("Budget", value: $profile.thinkingBudget, format: .number)
-                                .modifier(SettingsFieldStyle(monospaced: true))
-                                .frame(width: 95)
-                                .settingHelp("Maximale Denk-Tokens (leer = unbegrenzt). Empfehlung: 2.000–4.000.")
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity)
-
-                labeledField("Timeout (Sek.)") {
+                labeledField(L("Timeout (Sek.)")) {
                     TextField(profile.isRemote ? "300" : "180", value: $profile.requestTimeout, format: .number)
                         .modifier(SettingsFieldStyle(monospaced: true))
-                        .settingHelp("Sekunden ohne neue Daten, bevor eine Anfrage abbricht. Leer = Standard (lokal 180 s, remote 300 s).")
+                        .settingHelp(L("Sekunden ohne neue Daten, bevor eine Anfrage abbricht. Leer = Standard (lokal 180 s, remote 300 s)."))
                 }
                 .frame(width: 140)
             }
@@ -481,7 +461,7 @@ private struct ProfileEditorRow: View {
             await MainActor.run {
                 isLoadingModels = false
                 if models.isEmpty {
-                    modelLoadError = "Keine Modelle vom Server gemeldet."
+                    modelLoadError = L("Keine Modelle vom Server gemeldet.")
                 }
             }
         }
@@ -541,7 +521,7 @@ private struct PresetsPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Schnell-Vorlagen")
+            Text(L("Schnell-Vorlagen"))
                 .font(.system(.caption, design: .rounded).weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
@@ -557,8 +537,6 @@ private struct PresetsPopover: View {
                             ? EndpointProfile.omlxLocal() : EndpointProfile.omlxRemote()
                         profile.params = template.params
                         profile.isRemote = template.isRemote
-                        profile.thinkingMode = template.thinkingMode
-                        profile.thinkingBudget = template.thinkingBudget
                     }
                 } label: {
                     HStack(spacing: 10) {

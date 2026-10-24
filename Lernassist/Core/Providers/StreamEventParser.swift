@@ -72,6 +72,35 @@ nonisolated struct StreamEventParser {
         }
     }
 
+    /// Nicht gestreamte Antwort (Reiter „Modelle“: Streaming aus): Das ganze JSON wird wie ein
+    /// einziger Chunk behandelt – `choices[0].message` als Delta, Tool-Calls mit ihrer Position
+    /// als Index. Ollama liefert ohnehin dieselbe Form wie im Stream.
+    mutating func consume(completion data: Data) throws -> [LLMEvent] {
+        guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw EndpointManager.EndpointError.parseError
+        }
+        if var choices = json["choices"] as? [[String: Any]], var first = choices.first,
+           var message = first["message"] as? [String: Any] {
+            if let calls = message["tool_calls"] as? [[String: Any]] {
+                message["tool_calls"] = calls.enumerated().map { offset, call in
+                    var call = call
+                    if call["index"] == nil { call["index"] = offset }
+                    return call
+                }
+            }
+            first["delta"] = message
+            first["message"] = nil
+            choices[0] = first
+            json["choices"] = choices
+        }
+        let line = String(decoding: try JSONSerialization.data(withJSONObject: json), as: UTF8.self)
+        var events = try processJSON(line)
+        events += flush()
+        isDone = true
+        events.append(.done)
+        return events
+    }
+
     /// Gibt einen eventuell gepufferten Tag-Rest aus (Stream-Ende ohne `</think>`).
     mutating func flush() -> [LLMEvent] {
         var events: [LLMEvent] = []

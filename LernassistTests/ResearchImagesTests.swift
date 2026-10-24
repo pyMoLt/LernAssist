@@ -78,6 +78,41 @@ final class ResearchImagesTests: XCTestCase {
         XCTAssertTrue(result.hasSuffix("```\n[B3]\n```"), "Code-Blöcke bleiben unverändert")
     }
 
+    @MainActor
+    func testGeneratedPlotsGetNonCollidingNumbersAndEmbedOrFallback() {
+        let webID = UUID()
+        let plotID = UUID()
+        var webCall = ToolCallInfo(id: "w", index: 0, name: "web_search", arguments: "{}", result: "[B1] Abbildung: Spektrum — wiki.org")
+        webCall.researchImages = [
+            ResearchImageRef(number: 1, imageID: webID, caption: "Spektrum", sourceURL: "https://wiki.org/s.png",
+                             pageURL: "https://wiki.org/s", domain: "wiki.org")
+        ]
+        var codeCall = ToolCallInfo(id: "c", index: 0, name: "coding_sandbox", arguments: "{}",
+                                    result: "--- AUSGABE ---\n(Keine Konsolenausgabe)\n\nAbbildungen:\n[B1] Erzeugte Grafik (hemoglobin_spectrum.png)")
+        codeCall.researchImages = [
+            ResearchImageRef(number: 1, imageID: plotID, caption: "hemoglobin_spectrum.png",
+                             sourceURL: "lernassist-plot://\(plotID.uuidString)", pageURL: "", domain: "Python-Plot")
+        ]
+        let renumbered = ChatViewModel.renumberCitations(in: [codeCall], after: [webCall])[0]
+        XCTAssertEqual(renumbered.researchImages?.first?.number, 2, "Plot bekommt nächste freie [B#]-Nummer ohne Kollision mit Web-Bild")
+        XCTAssertTrue(renumbered.result?.contains("[B2] Erzeugte Grafik (hemoglobin_spectrum.png)") == true)
+
+        let plotRef = renumbered.researchImages![0]
+        let images = [1: webCall.researchImages![0], 2: plotRef]
+
+        // Fall 1: Modell schreibt [B2] mit eigener Bildunterschrift am Zeilenanfang (wie Sage-A1.5)
+        let withCaptionLine = "Hier die Spektren:\n\n[B2] Absorptionsspektren der Hämoglobin-Derivate im sichtbaren Bereich.\n\nWeiterer Text."
+        let embeddedCaption = ChatViewModel.embedResearchImages(in: withCaptionLine, images: images, turnPlots: [plotRef])
+        XCTAssertTrue(embeddedCaption.contains("![Absorptionsspektren der Hämoglobin-Derivate im sichtbaren Bereich.](lernassist-image://\(plotID.uuidString))"))
+        XCTAssertTrue(embeddedCaption.contains("*Absorptionsspektren der Hämoglobin-Derivate im sichtbaren Bereich.*"))
+        XCTAssertFalse(embeddedCaption.contains("[Quelle:"), "Selbstgenerierte Plots haben keinen externen Quell-Link")
+
+        // Fall 2: Modell vergisst [B2] komplett im Antworttext -> Fallback zeigt Plot automatisch oben an
+        let withoutRef = "Die Kurven zeigen deutliche Maxima bei 541 nm und 577 nm."
+        let fallbackResult = ChatViewModel.embedResearchImages(in: withoutRef, images: images, turnPlots: [plotRef])
+        XCTAssertTrue(fallbackResult.hasPrefix("![hemoglobin_spectrum.png](lernassist-image://\(plotID.uuidString))\n\nDie Kurven"))
+    }
+
     private func pngData(width: Int, height: Int) -> Data {
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
                                    samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,

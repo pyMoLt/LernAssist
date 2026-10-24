@@ -1,4 +1,4 @@
-# App-Icon LernAssist 2.0 
+# App-Icon LernAssist 2.0
 
 **Idee:** Sucher-Rahmen (Screenshot aufnehmen) um ein Glas-Plättchen mit Doktorhut (lernen), auf einem Verlauf
 von Violett nach Indigo (Akzentfarbe der App).

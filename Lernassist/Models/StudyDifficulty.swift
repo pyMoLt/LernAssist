@@ -9,10 +9,10 @@ nonisolated enum StudyDifficulty: String, Codable, CaseIterable, Identifiable, S
 
     var label: String {
         switch self {
-        case .easy: "Leicht"
-        case .medium: "Mittel"
-        case .hard: "Schwer"
-        case .veryHard: "Sehr schwer"
+        case .easy: L("Leicht")
+        case .medium: L("Mittel")
+        case .hard: L("Schwer")
+        case .veryHard: L("Sehr schwer")
         }
     }
 

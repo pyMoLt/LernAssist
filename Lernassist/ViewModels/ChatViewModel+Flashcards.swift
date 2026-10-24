@@ -316,7 +316,7 @@ extension ChatViewModel {
             }
             if backgroundJobStatus == "Erstelle Karteikarten …" { backgroundJobStatus = nil }
             guard let cards, !cards.isEmpty else {
-                flashcardNotice = FlashcardNotice(text: cards == nil ? "Karten konnten nicht erstellt werden – Endpunkt nicht erreichbar."
+                flashcardNotice = FlashcardNotice(text: cards == nil ? "Karten konnten nicht erstellt werden – \(lastInvisiblePromptError ?? "Endpunkt nicht erreichbar")."
                                                                      : "Karten konnten nicht erstellt werden – bitte erneut versuchen.",
                                                   sessionId: sessionId, setId: UUID(), cardIds: [], isError: true)
                 return

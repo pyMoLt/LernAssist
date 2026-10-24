@@ -13,9 +13,9 @@ enum LMStudioStatus: Equatable {
     var label: String {
         switch self {
         case .idle:               return ""
-        case .loading(let m):    return "Lade \(m.split(separator: "/").last.map(String.init) ?? m)…"
-        case .loaded:             return "Modell bereit"
-        case .unreachable:        return "LM Studio nicht erreichbar"
+        case .loading(let m):    return L("Lade \(m.split(separator: "/").last.map(String.init) ?? m)…")
+        case .loaded:             return L("Modell bereit")
+        case .unreachable:        return L("LM Studio nicht erreichbar")
         }
     }
 

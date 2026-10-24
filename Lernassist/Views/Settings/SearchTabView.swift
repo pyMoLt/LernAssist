@@ -6,9 +6,6 @@ import SwiftUI
 struct SearchTabView: View {
     @ObservedObject var viewModel: ChatViewModel
 
-    @State private var isPinging = false
-    @State private var pingStatus: String? = nil
-
     /// Setzt Web-Suche UND Browsing gemeinsam (siehe ChatViewModel.setSearchAndBrowsingEnabled) und
     /// überträgt die Änderung sofort in die ToolRegistry, statt erst bei einem späteren, unabhängigen
     /// syncToolRegistry()-Aufruf (App-Neustart oder Interaktion im Tools-Tab).
@@ -17,29 +14,6 @@ struct SearchTabView: View {
             get: { viewModel.searchEnabled },
             set: { viewModel.setSearchAndBrowsingEnabled($0) }
         )
-    }
-
-    private func ping() {
-        isPinging = true
-        pingStatus = nil
-        let url = viewModel.searxngURL
-        Task {
-            // Ursachengerechte Diagnose statt nacktem Fehler ✗: "Fehler" ohne Grundangabe war
-            // nicht bedienbar (SearXNG-Bug) – der Nutzer wusste nicht, ob URL, Port, Docker-
-            // Mapping oder die JSON-API das Problem ist.
-            let result = await viewModel.testSearxngConnection(baseURL: url)
-            await MainActor.run {
-                self.isPinging = false
-                self.pingStatus = result.diagnostic
-                // Erfolg kurz zeigen, Diagnosen stehen lassen (bis zur nächsten Änderung),
-                // damit die konkreten Lösungsschritte lesbar bleiben.
-                if result == .ok {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        if self.pingStatus != nil { self.pingStatus = nil }
-                    }
-                }
-            }
-        }
     }
 
     var body: some View {
@@ -52,70 +26,37 @@ struct SearchTabView: View {
     }
 
     private var searxngSection: some View {
-        settingsSection(icon: "magnifyingglass", title: "Websuche & Browsing", tint: DS.Accent.cyan) {
+        settingsSection(icon: "magnifyingglass", title: L("Websuche & Browsing"), tint: DS.Accent.cyan) {
             VStack(alignment: .leading, spacing: DS.Space.m) {
                 SettingsRow(
-                    title: "Websuche & integriertes Browsing",
-                    subtitle: "Erlaubt dem Modell, aktuelle Fakten und Fachquellen live abzurufen.",
+                    title: L("Websuche & integriertes Browsing"),
+                    subtitle: L("Erlaubt dem Modell, aktuelle Fakten und Fachquellen live abzurufen."),
                     icon: "globe",
                     tint: DS.Accent.cyan
                 ) {
                     Toggle("", isOn: searchAndBrowsingBinding)
                         .toggleStyle(.switch)
                         .labelsHidden()
-                        .settingHelp("Aktiviert die Web-Suchfunktion und den integrierten Browser, damit das Modell aktuelle Informationen abrufen kann.")
+                        .settingHelp(L("Aktiviert die Web-Suchfunktion und den integrierten Browser, damit das Modell aktuelle Informationen abrufen kann."))
                 }
 
                 if viewModel.searchEnabled {
                     SettingsHairline()
 
-                    HStack(alignment: .top, spacing: DS.Space.m) {
-                        labeledField("SearXNG-URL / Such-Server") {
-                            HStack(spacing: DS.Space.s) {
-                                TextField("http://127.0.0.1:8082 oder http://<tailscale-host>:8082", text: $viewModel.searxngURL)
-                                    .modifier(SettingsFieldStyle(monospaced: true))
-                                    .settingHelp("Auf dem Rechner mit dem SearXNG-Container: http://127.0.0.1:8082. Von einem anderen Gerät: Hostname oder IP dieses Rechners mit :8082 (z. B. über Tailscale). Leer lassen aktiviert bewusst DuckDuckGo als einfachen Fallback.")
-                                    .onChange(of: viewModel.searxngURL) { _, _ in
-                                        viewModel.syncToolRegistry()
-                                        viewModel.saveSettings()
-                                    }
+                    SearXNGCatalogView(viewModel: viewModel)
 
-                                Button(action: ping) {
-                                    HStack(spacing: 4) {
-                                        if isPinging {
-                                            ProgressView().controlSize(.mini).scaleEffect(0.75)
-                                        } else {
-                                            Circle()
-                                                .fill((pingStatus?.hasPrefix("OK") == true) ? DS.Accent.emerald : DS.Accent.cyan)
-                                                .frame(width: 6, height: 6)
-                                        }
-                                        Text(pingStatus?.hasPrefix("OK") == true ? "OK ✓" : "Ping")
-                                    }
-                                }
-                                .buttonStyle(SoftActionButtonStyle(tint: (pingStatus?.hasPrefix("OK") == true) ? DS.Accent.emerald : DS.Ink.primary))
-                                .disabled(isPinging || viewModel.searxngURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    SettingsHairline()
+
+                    labeledField(L("Max. Zeichen pro Webseite")) {
+                        TextField("10000", value: $viewModel.maxBrowseCharacters, formatter: NumberFormatter())
+                            .modifier(SettingsFieldStyle(monospaced: true))
+                            .onChange(of: viewModel.maxBrowseCharacters) { _, _ in
+                                viewModel.syncToolRegistry()
+                                viewModel.saveSettings()
                             }
-                        }
-                        .frame(maxWidth: .infinity)
-
-                        labeledField("Max. Zeichen pro Webseite") {
-                            TextField("10000", value: $viewModel.maxBrowseCharacters, formatter: NumberFormatter())
-                                .modifier(SettingsFieldStyle(monospaced: true))
-                                .onChange(of: viewModel.maxBrowseCharacters) { _, _ in
-                                    viewModel.syncToolRegistry()
-                                    viewModel.saveSettings()
-                                }
-                                .settingHelp("Browsing nutzt das eingestellte Zeichen-Limit, um das Kontext-Fenster zu schonen.")
-                        }
-                        .frame(width: 175)
+                            .settingHelp(L("Browsing nutzt das eingestellte Zeichen-Limit, um das Kontext-Fenster zu schonen."))
                     }
-
-                    if let status = pingStatus, !status.hasPrefix("OK") {
-                        Text(status)
-                            .font(.caption2)
-                            .foregroundStyle(DS.Accent.rose)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    .frame(width: 175)
                 }
             }
         }
@@ -133,20 +74,20 @@ private struct ResearchSettingsSections: View {
 
     /// Letzte Nutzung bzw. letzter Fehler von Exa in einer Zeile.
     private var exaUsageSubtitle: String {
-        guard let entry = usage.entry(.exa) else { return "Noch keine Exa-Suche. Exa springt nur ein, wenn SearXNG zu wenig findet." }
+        guard let entry = usage.entry(.exa) else { return L("Noch keine Exa-Suche. Exa springt nur ein, wenn SearXNG zu wenig findet.") }
         let format = Date.RelativeFormatStyle(presentation: .named).locale(Locale(identifier: "de_DE"))
         if let error = entry.lastError, let at = entry.lastErrorAt, at >= (entry.lastUsedAt ?? at) {
-            return "Letzter Fehler \(at.formatted(format)): \(error)"
+            return L("Letzter Fehler \(at.formatted(format)): \(error)")
         }
-        if let used = entry.lastUsedAt { return "Zuletzt genutzt \(used.formatted(format))." }
-        return "Exa springt nur ein, wenn SearXNG zu wenig findet."
+        if let used = entry.lastUsedAt { return L("Zuletzt genutzt \(used.formatted(format)).") }
+        return L("Exa springt nur ein, wenn SearXNG zu wenig findet.")
     }
 
     private var omlxProfiles: [EndpointProfile] { viewModel.profiles.filter { $0.provider == .omlx } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            settingsSection(icon: "square.stack.3d.up.fill", title: "Fachquellen & Wissensdatenbanken", tint: DS.Accent.indigo) {
+            settingsSection(icon: "square.stack.3d.up.fill", title: L("Fachquellen & Wissensdatenbanken"), tint: DS.Accent.indigo) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     ForEach(ResearchSource.allCases) { source in
                         SettingsRow(
@@ -179,31 +120,31 @@ private struct ResearchSettingsSections: View {
                         .padding(.vertical, 4)
 
                     HStack(alignment: .top, spacing: DS.Space.m) {
-                        labeledField("Kontakt-E-Mail für Fach-APIs (empfohlen)") {
-                            TextField("name@beispiel.de", text: $viewModel.research.apiContactEmail)
+                        labeledField(L("Kontakt-E-Mail für Fach-APIs (empfohlen)")) {
+                            TextField(L("name@beispiel.de"), text: $viewModel.research.apiContactEmail)
                                 .modifier(SettingsFieldStyle())
-                                .settingHelp("Wird nur Wikipedia, Europe PMC, arXiv und Stack Exchange als Teil der App-Kennung mitgeschickt. Wikimedia empfiehlt eine Kontaktangabe – das senkt das Risiko, als Bot gesperrt zu werden. Bleibt lokal in den Einstellungen dieses Macs und steht nie im Code.")
+                                .settingHelp(L("Wird nur Wikipedia, Europe PMC, arXiv und Stack Exchange als Teil der App-Kennung mitgeschickt. Wikimedia empfiehlt eine Kontaktangabe – das senkt das Risiko, als Bot gesperrt zu werden. Bleibt lokal in den Einstellungen dieses Macs und steht nie im Code."))
                         }
                         .frame(maxWidth: .infinity)
 
-                        labeledField("Wikipedia-Sprache") {
-                            SoftDropdownMenu(label: viewModel.research.wikipediaLanguage == "en" ? "Englisch" : "Deutsch") {
+                        labeledField(L("Wikipedia-Sprache")) {
+                            SoftDropdownMenu(label: viewModel.research.wikipediaLanguage == "en" ? L("Englisch") : L("Deutsch")) {
                                 Button {
                                     viewModel.research.wikipediaLanguage = "de"
                                 } label: {
                                     if viewModel.research.wikipediaLanguage == "de" {
-                                        Label("Deutsch", systemImage: "checkmark")
+                                        Label(L("Deutsch"), systemImage: "checkmark")
                                     } else {
-                                        Text("Deutsch")
+                                        Text(L("Deutsch"))
                                     }
                                 }
                                 Button {
                                     viewModel.research.wikipediaLanguage = "en"
                                 } label: {
                                     if viewModel.research.wikipediaLanguage == "en" {
-                                        Label("Englisch", systemImage: "checkmark")
+                                        Label(L("Englisch"), systemImage: "checkmark")
                                     } else {
-                                        Text("Englisch")
+                                        Text(L("Englisch"))
                                     }
                                 }
                             }
@@ -211,8 +152,8 @@ private struct ResearchSettingsSections: View {
                         .frame(width: 150)
                     }
 
-                    labeledField("Stack-Exchange-Seiten (Kommagetrennt)") {
-                        TextField("stackoverflow, math, physics", text: Binding(
+                    labeledField(L("Stack-Exchange-Seiten (Kommagetrennt)")) {
+                        TextField(L("stackoverflow, math, physics"), text: Binding(
                             get: { viewModel.research.stackExchangeSites.joined(separator: ", ") },
                             set: { viewModel.research.stackExchangeSites = Self.list($0) }))
                             .modifier(SettingsFieldStyle())
@@ -220,27 +161,33 @@ private struct ResearchSettingsSections: View {
                 }
             }
 
-            settingsSection(icon: ResearchSource.exa.systemImage, title: "Exa Semantischer Fallback", tint: DS.Accent.amber) {
+            settingsSection(icon: ResearchSource.exa.systemImage, title: L("Exa & Brave Fallback"), tint: DS.Accent.amber) {
                 VStack(alignment: .leading, spacing: DS.Space.m) {
-                    labeledField("Exa-API-Key (optional)") {
-                        SecureField("Leer = kostenlose Stufe", text: $viewModel.exaAPIKey)
+                    labeledField(L("Exa-API-Key (optional)")) {
+                        SecureField(L("Leer = kostenlose Stufe"), text: $viewModel.exaAPIKey)
                             .modifier(SettingsFieldStyle())
-                            .settingHelp("Ohne Key nutzt LernAssist die kostenlose, rate-limitierte Stufe des Exa-MCP. Der Key liegt im Schlüsselbund.")
+                            .settingHelp(L("Ohne Key nutzt LernAssist die kostenlose, rate-limitierte Stufe des Exa-MCP. Der Key liegt im Schlüsselbund."))
+                    }
+
+                    labeledField(L("Brave-Search-API-Key (für Brave-Fallback erforderlich)")) {
+                        SecureField(L("X-Subscription-Token (api.search.brave.com)"), text: $viewModel.braveAPIKey)
+                            .modifier(SettingsFieldStyle())
+                            .settingHelp(L("Wird nur genutzt, wenn oben in den Quellen „Brave Search“ eingeschaltet und hier ein gültiger API-Key hinterlegt ist. Der Key liegt im Schlüsselbund."))
                     }
 
                     SettingsRow(
-                        title: "Nutzung",
+                        title: L("Nutzung"),
                         subtitle: exaUsageSubtitle,
                         icon: "chart.bar",
                         tint: DS.Accent.amber,
-                        help: "Zählt die Exa-Suchen dieser App (heute und diesen Monat), mit oder ohne Key. Wie viel von der kostenlosen Stufe noch übrig ist, gibt Exa nicht heraus – mit Key zeigt das Exa-Dashboard den Verbrauch."
+                        help: L("Zählt die Exa-Suchen dieser App (heute und diesen Monat), mit oder ohne Key. Wie viel von der kostenlosen Stufe noch übrig ist, gibt Exa nicht heraus – mit Key zeigt das Exa-Dashboard den Verbrauch.")
                     ) {
                         UsageBadge(today: usage.today(.exa), month: usage.thisMonth(.exa), tint: DS.Accent.amber)
                     }
 
                     SettingsRow(
-                        title: "Fallback-Schwelle für Exa",
-                        subtitle: "Exa wird befragt, wenn SearXNG weniger als \(viewModel.research.exaMinWebResults) Treffer liefert."
+                        title: L("Fallback-Schwelle für Exa"),
+                        subtitle: L("Exa wird befragt, wenn SearXNG weniger als \(viewModel.research.exaMinWebResults) Treffer liefert.")
                     ) {
                         Stepper("", value: $viewModel.research.exaMinWebResults, in: 1...10)
                             .labelsHidden()
@@ -248,11 +195,11 @@ private struct ResearchSettingsSections: View {
                 }
             }
 
-            settingsSection(icon: "arrow.up.arrow.down.circle.fill", title: "Relevanz-Ranking (BM25 + Reranker)", tint: DS.Accent.emerald) {
+            settingsSection(icon: "arrow.up.arrow.down.circle.fill", title: L("Relevanz-Ranking (BM25 + Reranker)"), tint: DS.Accent.emerald) {
                 VStack(alignment: .leading, spacing: DS.Space.m) {
                     SettingsRow(
-                        title: "Reranker-Modus",
-                        subtitle: "Sortiert gefundene Textabsätze nach semantischer Relevanz zur Frage."
+                        title: L("Reranker-Modus"),
+                        subtitle: L("Sortiert gefundene Textabsätze nach semantischer Relevanz zur Frage.")
                     ) {
                         SoftDropdownMenu(label: viewModel.research.rerankerMode.label, width: 210) {
                             ForEach(RerankerMode.allCases, id: \.self) { mode in
@@ -273,23 +220,23 @@ private struct ResearchSettingsSections: View {
                         SettingsHairline()
 
                         HStack(alignment: .bottom, spacing: DS.Space.m) {
-                            labeledField("Reranker-Modell") {
-                                TextField("Qwen3-Reranker-0.6B-8bit-mlx", text: $viewModel.research.rerankerModel)
+                            labeledField(L("Reranker-Modell")) {
+                                TextField(L("Qwen3-Reranker-0.6B-8bit-mlx"), text: $viewModel.research.rerankerModel)
                                     .modifier(SettingsFieldStyle(monospaced: true))
                             }
                             .frame(maxWidth: .infinity)
 
-                            labeledField("oMLX-Profil") {
+                            labeledField(L("oMLX-Profil")) {
                                 SoftDropdownMenu(
-                                    label: omlxProfiles.first(where: { $0.id == viewModel.research.rerankerProfileID })?.name ?? "Automatisch"
+                                    label: omlxProfiles.first(where: { $0.id == viewModel.research.rerankerProfileID })?.name ?? L("Automatisch")
                                 ) {
                                     Button {
                                         viewModel.research.rerankerProfileID = nil
                                     } label: {
                                         if viewModel.research.rerankerProfileID == nil {
-                                            Label("Automatisch", systemImage: "checkmark")
+                                            Label(L("Automatisch"), systemImage: "checkmark")
                                         } else {
-                                            Text("Automatisch")
+                                            Text(L("Automatisch"))
                                         }
                                     }
                                     Divider()
@@ -312,14 +259,14 @@ private struct ResearchSettingsSections: View {
                                 if isTestingReranker {
                                     ProgressView().controlSize(.mini).scaleEffect(0.75)
                                 } else {
-                                    Text("Testen")
+                                    Text(L("Testen"))
                                 }
                             }
                             .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.emerald))
                         }
 
                         if omlxProfiles.isEmpty {
-                            Text("Kein oMLX-Profil vorhanden – der Reranker braucht ein oMLX-Profil (Einstellungen → Endpunkte).")
+                            Text(L("Kein oMLX-Profil vorhanden – der Reranker braucht ein oMLX-Profil (Einstellungen → Endpunkte)."))
                                 .font(.caption2).foregroundStyle(DS.Accent.amber)
                         }
                         if let rerankStatus {
@@ -329,57 +276,117 @@ private struct ResearchSettingsSections: View {
                 }
             }
 
-            settingsSection(icon: "photo.on.rectangle.angled", title: "Abbildungen aus der Recherche", tint: DS.Accent.emerald) {
+            settingsSection(icon: "photo.on.rectangle.angled", title: L("Abbildungen aus der Recherche"), tint: DS.Accent.emerald) {
                 SettingsRow(
-                    title: "Abbildungen anbieten",
-                    subtitle: "Passende Bilder aus Wikipedia, Webseiten und Fachartikeln. Das Modell zeigt eins mit [B#], die App fügt es mit Quelle in die Antwort ein.",
+                    title: L("Abbildungen anbieten"),
+                    subtitle: L("Passende Bilder aus Wikipedia, Webseiten und Fachartikeln. Das Modell zeigt eins mit [B#], die App fügt es mit Quelle in die Antwort ein."),
                     icon: "photo",
                     tint: DS.Accent.emerald,
-                    help: "Nur echte Bilder mit Bildunterschrift oder aussagekräftigem Alt-Text, mindestens 200 × 150 Pixel, höchstens 8 MB, keine Logos oder Icons, keine lokalen Adressen. Höchstens 3 pro Seite und 6 pro Suche; ist der Reranker an, wählt er die passendsten aus."
+                    help: L("Nur echte Bilder mit Bildunterschrift oder aussagekräftigem Alt-Text, mindestens 200 × 150 Pixel, höchstens 8 MB, keine Logos oder Icons, keine lokalen Adressen. Höchstens 3 pro Seite und 6 pro Suche; ist der Reranker an, wählt er die passendsten aus.")
                 ) {
                     Toggle("", isOn: $viewModel.research.imagesEnabled).toggleStyle(.switch).labelsHidden()
                 }
             }
 
-            settingsSection(icon: "text.quote", title: "Beleg-Budget für das Modell", tint: DS.Accent.blue) {
+            settingsSection(icon: "text.quote", title: L("Beleg-Budget für das Modell"), tint: DS.Accent.blue) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
-                    stepper("Max. Absätze gesamt", value: $viewModel.research.maxPassages, range: 2...20)
+                    stepper(L("Max. Absätze gesamt"), value: $viewModel.research.maxPassages, range: 2...20)
                     SettingsHairline()
-                    stepper("Max. Absätze pro Quelle", value: $viewModel.research.maxPassagesPerSource, range: 1...5)
+                    stepper(L("Max. Absätze pro Quelle"), value: $viewModel.research.maxPassagesPerSource, range: 1...5)
                     SettingsHairline()
-                    stepper("Token-Budget der Belege", value: $viewModel.research.tokenBudget, range: 500...12_000, step: 250)
+                    stepper(L("Token-Budget der Belege"), value: $viewModel.research.tokenBudget, range: 500...12_000, step: 250)
                     SettingsHairline()
-                    stepper("Absatzlänge (Zeichen)", value: $viewModel.research.passageChars, range: 250...1_500, step: 50)
+                    stepper(L("Absatzlänge (Zeichen)"), value: $viewModel.research.passageChars, range: 250...1_500, step: 50)
                     SettingsHairline()
-                    stepper("Volltexte laden (Seiten)", value: $viewModel.research.fullTextPages, range: 0...8)
+                    stepper(L("Volltexte laden (Seiten)"), value: $viewModel.research.fullTextPages, range: 0...8)
                     SettingsHairline()
-                    stepper("Treffer pro Quelle", value: $viewModel.research.resultsPerSource, range: 2...15)
+                    stepper(L("Treffer pro Quelle"), value: $viewModel.research.resultsPerSource, range: 2...15)
                 }
-                .settingHelp("Die Suche schickt nur die relevantesten Absätze mit Quellennummer [W#] an das Modell. Kleinere Werte sparen Kontext, größere geben mehr Material.")
+                .settingHelp(L("Die Suche schickt nur die relevantesten Absätze mit Quellennummer [W#] an das Modell. Kleinere Werte sparen Kontext, größere geben mehr Material."))
             }
 
-            settingsSection(icon: "checkmark.shield.fill", title: "Domain-Gewichtung & Filter", tint: DS.Accent.indigo) {
+            settingsSection(icon: "checkmark.shield.fill", title: L("Domain-Gewichtung & Filter"), tint: DS.Accent.indigo) {
                 VStack(alignment: .leading, spacing: DS.Space.m) {
-                    domainField("Vertrauenswürdig (stärkerer Bonus)", \.trustedDomains)
-                    domainField("Gute Quellen (leichter Bonus)", \.goodDomains)
-                    domainField("Blockierte Domains", \.blockedDomains)
+                    domainField(L("Vertrauenswürdig (stärkerer Bonus)"), \.trustedDomains)
+                    domainField(L("Gute Quellen (leichter Bonus)"), \.goodDomains)
+                    domainField(L("Blockierte Domains"), \.blockedDomains)
                 }
-                .settingHelp("Domains mit Komma trennen. Unterseiten zählen mit (z. B. „wikipedia.org“).")
+                .settingHelp(L("Domains mit Komma trennen. Unterseiten zählen mit (z. B. „wikipedia.org“)."))
             }
 
             SettingsDisclosureSection(
-                title: "Erweitert (Recherche & Ranking)",
-                subtitle: "Download-Timeouts, Dateigrößen, Reranker-Fenster und Cache-Dauer",
+                title: L("Erweitert (Recherche & Ranking)"),
+                subtitle: L("Download-Timeouts, Dateigrößen, Reranker-Fenster und Cache-Dauer"),
                 icon: "slider.horizontal.3",
                 tint: DS.Accent.cyan
             ) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Webseiten-Download Timeout",
-                        subtitle: "Maximalzeit für das Laden einer Webseite oder eines Online-PDFs.",
+                        title: L("Zeitbudget für die Quellen"),
+                        subtitle: L("Wer bis dahin nicht antwortet, wird bei dieser Suche übersprungen."),
+                        icon: "hourglass",
+                        tint: DS.Accent.cyan,
+                        help: L("Alle Quellen laufen gleichzeitig; die Suche wartet höchstens so lange auf sie (10–120 s, Standard 30 s).")
+                    ) {
+                        stepperBadge("\(Int(viewModel.research.sourceBudgetSeconds)) s", value: Binding(
+                            get: { Int(viewModel.research.sourceBudgetSeconds) },
+                            set: { viewModel.research.sourceBudgetSeconds = Double($0) }
+                        ), range: 10...120, step: 5)
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: L("Früher Abschluss ab … Treffern"),
+                        subtitle: L("Haben die Quellen zusammen so viele Treffer, wartet die Suche auf langsame Quellen nur noch 3 s."),
+                        icon: "flag.checkered",
+                        tint: DS.Accent.cyan,
+                        help: L("Nachzügler werden dann nicht abgewartet; das zählt nicht als Ausfall. 0 = immer das volle Zeitbudget abwarten (Standard 12).")
+                    ) {
+                        stepperBadge(viewModel.research.earlyFinishHits == 0 ? L("aus") : "\(viewModel.research.earlyFinishHits)",
+                                     value: $viewModel.research.earlyFinishHits, range: 0...60, step: 2)
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: L("Pause nach Anfragegrenze oder Ausfall"),
+                        subtitle: L("So lange wird eine Quelle nicht gefragt – nach einem Rate-Limit sofort, nach zwei Ausfällen hintereinander."),
+                        icon: "pause.circle",
+                        tint: DS.Accent.cyan,
+                        help: L("Eine einzelne Störung überspringt die Quelle nur bei dieser Suche. Leere Ergebnisse zählen nicht als Fehler (1–30 min, Standard 4 min).")
+                    ) {
+                        stepperBadge(L("\(Int(viewModel.research.sourcePauseMinutes)) min"), value: Binding(
+                            get: { Int(viewModel.research.sourcePauseMinutes) },
+                            set: { viewModel.research.sourcePauseMinutes = Double($0) }
+                        ), range: 1...30, step: 1)
+                    }
+
+                    PausedSourcesList()
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: L("SearXNG-Timeout"),
+                        subtitle: L("Maximalzeit, die SearXNG für eine Suche bekommt."),
                         icon: "timer",
                         tint: DS.Accent.cyan,
-                        help: "Höhere Werte helfen bei langsamen Servern oder unzuverlässiger Internetverbindung (5–60 s, Standard 15 s)."
+                        help: L("SearXNG wartet intern auf langsame Suchmaschinen. Das Zeitbudget für die Quellen gilt zusätzlich (10–120 s, Standard 70 s).")
+                    ) {
+                        stepperBadge("\(Int(viewModel.research.searxngTimeout)) s", value: Binding(
+                            get: { Int(viewModel.research.searxngTimeout) },
+                            set: { viewModel.research.searxngTimeout = Double($0) }
+                        ), range: 10...120, step: 5)
+                    }
+
+                    SettingsHairline()
+
+                    SettingsRow(
+                        title: L("Webseiten-Download Timeout"),
+                        subtitle: L("Maximalzeit für das Laden einer Webseite oder eines Online-PDFs."),
+                        icon: "timer",
+                        tint: DS.Accent.cyan,
+                        help: L("Höhere Werte helfen bei langsamen Servern oder unzuverlässiger Internetverbindung (5–60 s, Standard 15 s).")
                     ) {
                         stepperBadge("\(Int(viewModel.research.fetchTimeout)) s", value: Binding(
                             get: { Int(viewModel.research.fetchTimeout) },
@@ -390,13 +397,13 @@ private struct ResearchSettingsSections: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Max. Download-Größe",
-                        subtitle: "Maximale Dateigröße für Webseiten und PDFs bei der Recherche.",
+                        title: L("Max. Download-Größe"),
+                        subtitle: L("Maximale Dateigröße für Webseiten und PDFs bei der Recherche."),
                         icon: "arrow.down.doc",
                         tint: DS.Accent.cyan,
-                        help: "Schützt vor übermäßig großen Downloads bei der Websuche (1–50 MB, Standard 10 MB)."
+                        help: L("Schützt vor übermäßig großen Downloads bei der Websuche (1–50 MB, Standard 10 MB).")
                     ) {
-                        stepperBadge("\(Int(viewModel.research.maxDownloadMB)) MB", value: Binding(
+                        stepperBadge(L("\(Int(viewModel.research.maxDownloadMB)) MB"), value: Binding(
                             get: { Int(viewModel.research.maxDownloadMB) },
                             set: { viewModel.research.maxDownloadMB = Double($0) }
                         ), range: 1...50, step: 5)
@@ -405,11 +412,11 @@ private struct ResearchSettingsSections: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Reranker-Kandidatenfenster",
-                        subtitle: "Wie viele der besten Textstellen an den lokalen Reranker übergeben werden.",
+                        title: L("Reranker-Kandidatenfenster"),
+                        subtitle: L("Wie viele der besten Textstellen an den lokalen Reranker übergeben werden."),
                         icon: "list.number",
                         tint: DS.Accent.emerald,
-                        help: "Trade-off zwischen Reranking-Genauigkeit und Geschwindigkeit bei langen Seiten (10–200, Standard 60)."
+                        help: L("Trade-off zwischen Reranking-Genauigkeit und Geschwindigkeit bei langen Seiten (10–200, Standard 60).")
                     ) {
                         stepperBadge("\(viewModel.research.rerankerWindow)", value: $viewModel.research.rerankerWindow, range: 10...200, step: 10)
                     }
@@ -417,11 +424,11 @@ private struct ResearchSettingsSections: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Reranker-Timeout",
-                        subtitle: "Maximale Wartezeit für den lokalen Reranker pro Anfrage.",
+                        title: L("Reranker-Timeout"),
+                        subtitle: L("Maximale Wartezeit für den lokalen Reranker pro Anfrage."),
                         icon: "hourglass",
                         tint: DS.Accent.emerald,
-                        help: "Timeout für den oMLX-Reranker; bei Überschreitung wird die Keyword-Relevanz verwendet (2–30 s, Standard 8 s)."
+                        help: L("Timeout für den oMLX-Reranker; bei Überschreitung wird die Keyword-Relevanz verwendet (2–30 s, Standard 8 s).")
                     ) {
                         stepperBadge("\(Int(viewModel.research.rerankerTimeout)) s", value: Binding(
                             get: { Int(viewModel.research.rerankerTimeout) },
@@ -432,13 +439,13 @@ private struct ResearchSettingsSections: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Recherche-Cache Dauer",
-                        subtitle: "Wie lange Suchergebnisse und Webseiten gecacht bleiben.",
+                        title: L("Recherche-Cache Dauer"),
+                        subtitle: L("Wie lange Suchergebnisse und Webseiten gecacht bleiben."),
                         icon: "clock.arrow.circlepath",
                         tint: DS.Accent.cyan,
-                        help: "Wiederholte Suchen nach denselben Themen nutzen den Cache (1–60 min, Standard 10 min)."
+                        help: L("Wiederholte Suchen nach denselben Themen nutzen den Cache (1–60 min, Standard 10 min).")
                     ) {
-                        stepperBadge("\(viewModel.research.cacheMinutes) min", value: $viewModel.research.cacheMinutes, range: 1...60, step: 5)
+                        stepperBadge(L("\(viewModel.research.cacheMinutes) min"), value: $viewModel.research.cacheMinutes, range: 1...60, step: 5)
                     }
                 }
             }
@@ -462,7 +469,7 @@ private struct ResearchSettingsSections: View {
 
     private func domainField(_ title: String, _ keyPath: WritableKeyPath<ResearchSettings, [String]>) -> some View {
         labeledField(title) {
-            TextField("domain.de, …", text: Binding(
+            TextField(L("domain.de, …"), text: Binding(
                 get: { viewModel.research[keyPath: keyPath].joined(separator: ", ") },
                 set: { viewModel.research[keyPath: keyPath] = Self.list($0) }), axis: .vertical)
                 .modifier(SettingsFieldStyle())
@@ -479,7 +486,7 @@ private struct ResearchSettingsSections: View {
         guard let profile = viewModel.profiles.first(where: { $0.id == settings.rerankerProfileID })
                 ?? viewModel.activeProfile.flatMap({ $0.provider == .omlx ? $0 : nil })
                 ?? omlxProfiles.first else {
-            rerankStatus = "Kein oMLX-Profil gefunden."
+            rerankStatus = L("Kein oMLX-Profil gefunden.")
             return
         }
         isTestingReranker = true
@@ -492,9 +499,9 @@ private struct ResearchSettingsSections: View {
                 let scores = try await reranker.scores(query: "Wo findet der Citratzyklus statt?",
                                                        documents: ["Der Citratzyklus läuft in der Mitochondrienmatrix ab.", "Paris ist die Hauptstadt Frankreichs."])
                 let ok = scores.count == 2 && scores[0] > scores[1]
-                status = (ok ? "OK ✓ " : "Antwort unplausibel ") + String(format: "(%.1f s, Scores %.2f / %.2f)", Date().timeIntervalSince(start), scores.first ?? 0, scores.last ?? 0)
+                status = (ok ? L("OK ✓ ") : L("Antwort unplausibel ")) + String(format: "(%.1f s, Scores %.2f / %.2f)", Date().timeIntervalSince(start), scores.first ?? 0, scores.last ?? 0)
             } catch {
-                status = "Fehler: \(error.localizedDescription)"
+                status = L("Fehler: \(error.localizedDescription)")
             }
             await MainActor.run {
                 rerankStatus = status
@@ -513,9 +520,9 @@ struct UsageBadge: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            part("heute", today)
+            part(L("heute"), today)
             Text("·").foregroundStyle(.tertiary)
-            part("Monat", month)
+            part(L("Monat"), month)
         }
         .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
         .lineLimit(1)
@@ -523,9 +530,9 @@ struct UsageBadge: View {
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(Capsule().fill(tint.opacity(0.10)))
-        .help("Suchen dieser App über diese Quelle: heute \(today), diesen Monat \(month)")
+        .help(L("Suchen dieser App über diese Quelle: heute \(today), diesen Monat \(month)"))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Heute \(today) Suchen, diesen Monat \(month)")
+        .accessibilityLabel(L("Heute \(today) Suchen, diesen Monat \(month)"))
     }
 
     private func part(_ label: String, _ value: Int) -> some View {
@@ -546,5 +553,49 @@ struct UsageBadge: View {
         case ..<1_000_000: return format(Double(value) / 1_000, "k")
         default: return format(Double(value) / 1_000_000, "M")
         }
+    }
+}
+
+
+/// Gerade pausierte Recherche-Quellen mit „Pause aufheben“ (Version 4.0).
+private struct PausedSourcesList: View {
+    @State private var pauses: [(source: ResearchSource, pause: SourceHealth.Pause)] = []
+
+    var body: some View {
+        Group {
+            if !pauses.isEmpty {
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    Text(L("Gerade pausiert"))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(pauses, id: \.source) { item in
+                        HStack(spacing: DS.Space.s) {
+                            Image(systemName: item.pause.reason == .rateLimit ? "gauge.with.dots.needle.100percent" : "wifi.exclamationmark")
+                                .foregroundStyle(DS.Accent.amber)
+                            Text(item.source.shortName).font(.system(size: 12.5, weight: .medium))
+                            Text(item.pause.reason == .rateLimit ? L("Anfragegrenze") : L("nicht erreichbar"))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(L("bis \(item.pause.until.formatted(date: .omitted, time: .shortened))"))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button(L("Pause aufheben")) {
+                                Task {
+                                    await SourceHealth.shared.resume(item.source)
+                                    await reload()
+                                }
+                            }
+                            .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.cyan))
+                        }
+                    }
+                }
+                .padding(.top, DS.Space.xs)
+            }
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        let all = await SourceHealth.shared.allPauses()
+        pauses = all.map { (source: $0.key, pause: $0.value) }.sorted { $0.source.rawValue < $1.source.rawValue }
     }
 }

@@ -58,7 +58,11 @@ final class Version3FixTests: XCTestCase {
     @MainActor
     func testReasoningIsOmittedWhenPreserveThinkingIsOff() {
         let vm = ChatViewModel()
-        vm.preserveThinking = false
+        // Version 4.0: Preserve Thinking hängt am Modell.
+        var settings = ModelSettings()
+        settings.preserveThinking = false
+        ModelSettingsRegistry.shared.update([ModelSettings.key(for: vm.activeProfile?.model ?? ""): settings])
+        defer { ModelSettingsRegistry.shared.update([:]) }
         let msg = ChatMessage(role: "assistant", content: "Antwort", thinking: "Gedanke")
         let payload = vm.apiMessages(for: msg, provider: .omlx)
         XCTAssertNil(payload.first?["reasoning_content"])

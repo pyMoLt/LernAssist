@@ -446,7 +446,7 @@ final class Version3Tests: XCTestCase {
             return XCTFail("App submenu should exist")
         }
 
-        let settingsItem = appMenu.items.first(where: { $0.title.contains("Einstellungen") })
+        let settingsItem = appMenu.items.first(where: { $0.title.contains("Einstellungen") || $0.title.contains("Settings") })
         XCTAssertNotNil(settingsItem, "Settings item should be present in app menu")
         XCTAssertEqual(settingsItem?.keyEquivalent, ",", "Settings key equivalent should be ','")
     }

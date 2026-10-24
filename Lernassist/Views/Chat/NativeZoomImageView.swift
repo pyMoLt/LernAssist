@@ -82,9 +82,44 @@ class MouseWheelZoomScrollView: NSScrollView {
             let locationInView = self.contentView.convert(locationInWindow, from: nil)
 
             self.setMagnification(clampedMagnification, centeredAt: locationInView)
+            userZoomed = true
             return
         }
 
         super.scrollWheel(with: event)
+    }
+
+    /// Hat der Nutzer selbst gezoomt, bleibt sein Zoom; sonst passt sich das Bild dem Fenster an.
+    var userZoomed = false
+
+    override func magnify(with event: NSEvent) {
+        super.magnify(with: event)
+        userZoomed = true
+    }
+
+    /// Doppelklick: zurück zur eingepassten Ansicht.
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            userZoomed = false
+            fitToWindow()
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if !userZoomed { fitToWindow() }
+    }
+
+    /// Bild vollständig sichtbar, nie größer als Originalgröße, zentriert.
+    func fitToWindow() {
+        guard let doc = documentView, doc.frame.width > 0, doc.frame.height > 0,
+              bounds.width > 0, bounds.height > 0 else { return }
+        let fit = min(bounds.width / doc.frame.width, bounds.height / doc.frame.height)
+        magnification = max(minMagnification, min(1.0, fit))
+        let visible = contentView.bounds.size
+        contentView.bounds.origin = CGPoint(x: max(0, (doc.frame.width - visible.width) / 2),
+                                            y: max(0, (doc.frame.height - visible.height) / 2))
     }
 }

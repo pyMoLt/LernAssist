@@ -11,27 +11,26 @@ func settingsSection<Content: View, Trailing: View>(
     @ViewBuilder content: () -> Content
 ) -> some View {
     VStack(alignment: .leading, spacing: DS.Space.s) {
+        // Version 4: schlichte graue Abschnittsüberschrift (Vorlage), Symbol nur für Bedienhilfen.
         HStack(spacing: DS.Space.s) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(tint.opacity(0.14))
-                .frame(width: 22, height: 22)
-                .overlay(
-                    Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(tint)
-                )
-
             Text(title)
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .foregroundStyle(.primary)
-
+                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             trailing()
         }
-        .padding(.horizontal, 2)
+        .padding(.horizontal, DS.Space.m)
+        .padding(.top, DS.Space.s)
+        .modifier(SearchHighlight(title: title))
 
+        // Inhalt immer gebündelt: Lose Elemente bekämen sonst jedes einen eigenen Kartenhintergrund
+        // (Trennlinien erschienen als leere Kärtchen).
         AppCard {
-            content()
+            VStack(alignment: .leading, spacing: DS.Space.s) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -53,6 +52,42 @@ func labeledField<Content: View>(_ label: String, isModified: Bool = false, @Vie
             .font(.system(size: 11.5, weight: isModified ? .semibold : .medium, design: .rounded))
             .foregroundStyle(isModified ? DS.Ink.accent : .secondary)
         content()
+    }
+    .modifier(SearchHighlight(title: label))
+}
+
+// MARK: - Suche in den Einstellungen
+
+private struct SettingsHighlightKey: EnvironmentKey { static let defaultValue: String? = nil }
+private struct SettingsHighlightSectionKey: EnvironmentKey { static let defaultValue: String? = nil }
+
+extension EnvironmentValues {
+    /// Titel (in der aktuellen Sprache) der Einstellung, zu der die Suche gerade springt.
+    var settingsHighlight: String? {
+        get { self[SettingsHighlightKey.self] }
+        set { self[SettingsHighlightKey.self] = newValue }
+    }
+    /// Aufklappbarer Abschnitt (aktuelle Sprache), der für das Sprungziel geöffnet werden muss.
+    var settingsHighlightSection: String? {
+        get { self[SettingsHighlightSectionKey.self] }
+        set { self[SettingsHighlightSectionKey.self] = newValue }
+    }
+}
+
+/// Markiert eine Einstellung als Sprungziel der Suche (ID zum Scrollen + kurze Hervorhebung).
+struct SearchHighlight: ViewModifier {
+    let title: String
+    @Environment(\.settingsHighlight) private var highlight
+
+    func body(content: Content) -> some View {
+        content
+            .id("setting-" + title)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(DS.Accent.brand.opacity(highlight == title ? 0.16 : 0))
+                    .padding(-6)
+                    .animation(.easeInOut(duration: 0.3), value: highlight)
+            )
     }
 }
 
@@ -84,25 +119,16 @@ struct SettingsRow<Control: View>: View {
 
             control()
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 5)
+        .modifier(SearchHighlight(title: title))
     }
 
     private var label: some View {
         HStack(alignment: .center, spacing: DS.Space.m) {
-            if let icon {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(tint.opacity(0.13))
-                    .frame(width: 26, height: 26)
-                    .overlay(
-                        Image(systemName: icon)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(tint)
-                    )
-            }
-
+            // Version 4: Zeilen wie in der Vorlage ohne Symbol-Kachel – Text links, Bedienelement rechts.
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(.system(size: 13.5, weight: .medium, design: .rounded))
                     .foregroundStyle(.primary)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
@@ -222,6 +248,7 @@ struct SettingsDisclosureSection<Content: View>: View {
     var help: String? = nil
     @State private var isExpanded: Bool = false
     @ViewBuilder let content: () -> Content
+    @Environment(\.settingsHighlightSection) private var highlightSection
 
     private var headerHelp: String {
         if let help { return help }
@@ -237,22 +264,13 @@ struct SettingsDisclosureSection<Content: View>: View {
                 }
             } label: {
                 HStack(spacing: DS.Space.s) {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(tint.opacity(0.14))
-                        .frame(width: 22, height: 22)
-                        .overlay(
-                            Image(systemName: icon)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(tint)
-                        )
-
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .font(.system(size: 13.5, weight: .medium, design: .rounded))
                             .foregroundStyle(.primary)
                         if let subtitle {
                             Text(subtitle)
-                                .font(.caption2)
+                                .font(.system(size: 11.5))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -260,7 +278,7 @@ struct SettingsDisclosureSection<Content: View>: View {
                     Spacer()
 
                     HStack(spacing: 4) {
-                        Text(isExpanded ? "Ausblenden" : "Einblenden")
+                        Text(isExpanded ? L("Ausblenden") : L("Einblenden"))
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -271,8 +289,10 @@ struct SettingsDisclosureSection<Content: View>: View {
                     .padding(.vertical, 3)
                     .background(Capsule().fill(DS.Surface.control))
                 }
-                .padding(.horizontal, 2)
+                .padding(.horizontal, DS.Space.l + 2)
+                .padding(.vertical, DS.Space.m)
                 .contentShape(Rectangle())
+                .glassSurface(cornerRadius: DS.Radius.pill)
                 .settingHelp(headerHelp)
             }
             .buttonStyle(.plain)
@@ -283,6 +303,11 @@ struct SettingsDisclosureSection<Content: View>: View {
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+        .modifier(SearchHighlight(title: title))
+        .onAppear { if highlightSection == title { isExpanded = true } }
+        .onChange(of: highlightSection) { _, section in
+            if section == title { withAnimation(.easeInOut(duration: 0.18)) { isExpanded = true } }
         }
     }
 }

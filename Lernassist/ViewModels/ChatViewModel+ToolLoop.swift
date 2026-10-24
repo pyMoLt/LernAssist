@@ -212,9 +212,11 @@ extension ChatViewModel {
                             self.sessions[sessionIdx].messages.append(
                                 ChatMessage(role: "assistant", content: "",
                                             imageBase64: base64, imageID: UUID()))
-                        case .html(let html):
-                            self.sessions[sessionIdx].messages.append(
-                                ChatMessage(role: "assistant", content: "", htmlArtifact: html))
+                        case .html(let html, let allowedHosts):
+                            var message = ChatMessage(role: "assistant", content: "", htmlArtifact: html)
+                            message.htmlAllowedHosts = allowedHosts.isEmpty ? nil : allowedHosts
+                            self.sessions[sessionIdx].messages.append(message)
+                            HTMLArtifactFiles.save(html, messageID: message.id, sessionID: capturedSessionID)
                         case .quiz(let card):
                             var message = ChatMessage(role: "assistant", content: "")
                             message.quizCard = card
@@ -226,6 +228,10 @@ extension ChatViewModel {
                             updated[index].recalledScreenshot = number
                         case .researchImages(let refs):
                             updated[index].researchImages = refs
+                        case .researchStatus(let statuses):
+                            updated[index].researchStatus = statuses
+                        case .researchPhases(let phases):
+                            updated[index].researchPhases = phases
                         }
                     }
                 }
@@ -335,6 +341,7 @@ extension ChatViewModel {
             tool.configuration.settings = settings
             tool.configuration.reranker = reranker
             tool.configuration.exaAPIKey = exaAPIKey
+            tool.configuration.braveAPIKey = braveAPIKey
         }
         if let tool = registry.tool(named: "browse_url") as? BrowseURLTool {
             tool.configuration.settings = settings
@@ -352,6 +359,7 @@ extension ChatViewModel {
         let registry = ToolRegistry.shared
         if let searchTool = registry.tool(named: "web_search") as? WebSearchTool {
             searchTool.searxngURL = searxngURL
+            searchTool.configuration.searxngHeaders = searxngHeaders(for: activeSearXNGServer)
             searchTool.isEnabled = searchEnabled
         }
         if let browseTool = registry.tool(named: "browse_url") as? BrowseURLTool {
@@ -362,6 +370,11 @@ extension ChatViewModel {
         DownloadPermissions.shared.addAllowedDomain = { [weak self] host in
             guard let self, !self.downloadAllowedDomains.contains(host) else { return }
             self.downloadAllowedDomains.append(host)
+        }
+        HTMLLibraryPermissions.shared.allowedDomains = { [weak self] in self?.htmlLibraryDomains ?? [] }
+        HTMLLibraryPermissions.shared.addAllowedDomain = { [weak self] host in
+            guard let self, !self.htmlLibraryDomains.contains(host) else { return }
+            self.htmlLibraryDomains.append(host)
         }
         if let recall = registry.tool(named: "recall_screenshot") as? RecallScreenshotTool {
             recall.screenshotProvider = { [weak self] sessionID in self?.chatScreenshots(sessionID: sessionID) ?? [] }

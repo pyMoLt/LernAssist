@@ -12,27 +12,27 @@ nonisolated enum DownloadFileType: String, CaseIterable, Codable, Identifiable, 
 
     var label: String {
         switch self {
-        case .pdf: "PDF"
-        case .text: "Text und CSV"
-        case .data: "JSON und XML"
-        case .word: "Word und Textdokumente"
-        case .excel: "Excel und Tabellen"
-        case .images: "Bilder"
-        case .science: "Wissenschaftliche Datenformate"
-        case .archives: "Archive (ZIP, gzip)"
+        case .pdf: L("PDF")
+        case .text: L("Text und CSV")
+        case .data: L("JSON und XML")
+        case .word: L("Word und Textdokumente")
+        case .excel: L("Excel und Tabellen")
+        case .images: L("Bilder")
+        case .science: L("Wissenschaftliche Datenformate")
+        case .archives: L("Archive (ZIP, gzip)")
         }
     }
 
     var help: String {
         switch self {
-        case .pdf: "PDF-Dokumente."
-        case .text: "Klartext, CSV, TSV, Markdown und HTML-Seiten."
-        case .data: "JSON, GeoJSON, XML – typisch für Daten-APIs (z. B. Wetter)."
-        case .word: "Word (.doc, .docx), OpenDocument-Text, RTF."
-        case .excel: "Excel (.xls, .xlsx) und OpenDocument-Tabellen."
-        case .images: "PNG, JPEG, GIF, WebP, SVG. Von Python gespeicherte Bilder erscheinen im Chat."
-        case .science: "Parquet, NetCDF, HDF5, GRIB – z. B. Wetter- und Klimadaten."
-        case .archives: "ZIP, gzip und tar. Archive mit Programmen werden immer entfernt."
+        case .pdf: L("PDF-Dokumente.")
+        case .text: L("Klartext, CSV, TSV, Markdown und HTML-Seiten.")
+        case .data: L("JSON, GeoJSON, XML – typisch für Daten-APIs (z. B. Wetter).")
+        case .word: L("Word (.doc, .docx), OpenDocument-Text, RTF.")
+        case .excel: L("Excel (.xls, .xlsx) und OpenDocument-Tabellen.")
+        case .images: L("PNG, JPEG, GIF, WebP, SVG. Von Python gespeicherte Bilder erscheinen im Chat.")
+        case .science: L("Parquet, NetCDF, HDF5, GRIB – z. B. Wetter- und Klimadaten.")
+        case .archives: L("ZIP, gzip und tar. Archive mit Programmen werden immer entfernt.")
         }
     }
 
@@ -191,20 +191,20 @@ final class DownloadPermissions {
         // Tests öffnen nie einen Dialog: Unbekannte Domains gelten dort als abgelehnt.
         if AppStorageLocation.isRunningUnitTests { return false }
         let alert = NSAlert()
-        alert.messageText = "Python möchte ins Internet"
-        alert.informativeText = """
+        alert.messageText = L("Python möchte ins Internet")
+        alert.informativeText = L("""
         Ein Python-Skript des Modells möchte eine Verbindung zu
 
         \(host)
 
         aufbauen, z. B. um Daten herunterzuladen. Erlaube nur Domains, denen du vertraust – über eine \
         erlaubte Verbindung könnte Python auch Daten senden. Heruntergeladene Programme werden nie ausgeführt.
-        """
+        """)
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Einmal erlauben")
-        alert.addButton(withTitle: "Immer erlauben")
-        alert.addButton(withTitle: "Ablehnen")
-        switch alert.runModal() {
+        alert.addButton(withTitle: L("Einmal erlauben"))
+        alert.addButton(withTitle: L("Immer erlauben"))
+        alert.addButton(withTitle: L("Ablehnen"))
+        switch ModalActivity.run({ alert.runModal() }) {
         case .alertFirstButtonReturn:
             return true
         case .alertSecondButtonReturn:

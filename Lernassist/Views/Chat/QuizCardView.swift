@@ -15,7 +15,7 @@ struct QuizCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
-            Label("Abfrage", systemImage: "questionmark.bubble")
+            Label(L("Abfrage"), systemImage: "questionmark.bubble")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(DS.Ink.accent)
 
@@ -36,7 +36,7 @@ struct QuizCardView: View {
                 if showHint {
                     MarkdownView(markdown: hint, fontScale: 0.92)
                 } else {
-                    Button("Hinweis anzeigen") { withAnimation { showHint = true } }
+                    Button(L("Hinweis anzeigen")) { withAnimation { showHint = true } }
                         .buttonStyle(.borderless)
                         .font(.caption)
                 }
@@ -52,7 +52,7 @@ struct QuizCardView: View {
                     onRemember()
                     withAnimation(.snappy) { remembered = true }
                 } label: {
-                    Label(remembered ? "Als Karte gemerkt" : "Als Karte merken",
+                    Label(remembered ? L("Als Karte gemerkt") : L("Als Karte merken"),
                           systemImage: remembered ? "checkmark" : "rectangle.on.rectangle.angled")
                         .font(.caption.weight(.medium))
                 }
@@ -63,10 +63,9 @@ struct QuizCardView: View {
         }
         .padding(DS.Space.l)
         .frame(maxWidth: 560, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous).fill(.background))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.large, style: .continuous).strokeBorder(.quaternary))
+        .glassSurface(cornerRadius: DS.Radius.pill, elevated: true)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Abfrage: \(card.question)")
+        .accessibilityLabel(L("Abfrage: \(card.question)"))
     }
 
     private func state(of index: Int) -> (symbol: String, tint: Color)? {
@@ -108,7 +107,7 @@ struct QuizCardView: View {
         }
         .buttonStyle(.plain)
         .disabled(card.isAnswered)
-        .accessibilityLabel("Antwort \(letter): \(String(QuizText.inline(card.options[index]).characters))")
+        .accessibilityLabel(L("Antwort \(letter): \(String(QuizText.inline(card.options[index]).characters))"))
     }
 
     @ViewBuilder
@@ -120,11 +119,11 @@ struct QuizCardView: View {
                 .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(Color.secondary.opacity(0.08)))
         } else {
             HStack {
-                TextField("Deine Antwort …", text: $freeText, axis: .vertical)
+                TextField(L("Deine Antwort …"), text: $freeText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
                     .onSubmit(submitFreeText)
-                Button("Antworten", action: submitFreeText)
+                Button(L("Antworten"), action: submitFreeText)
                     .buttonStyle(.borderedProminent)
                     .disabled(freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }

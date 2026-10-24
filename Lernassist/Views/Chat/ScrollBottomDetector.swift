@@ -35,6 +35,8 @@ final class _ScrollDetectorView: NSView {
         var candidate: NSView? = superview
         while let v = candidate {
             if let sv = v as? NSScrollView {
+                // Dezente, automatisch ausblendende Scrollleiste (respektiert die Systemeinstellung).
+                sv.applyDiscreetScrollers()
 
                 // Jedes Live-Scroll-Event → sofort Auto-Scroll aus
                 liveObserver = NotificationCenter.default.addObserver(

@@ -39,7 +39,7 @@ struct InputArea: View {
                         HStack(spacing: 5) {
                             Image(systemName: "text.badge.plus")
                                 .font(.system(size: 11, weight: .semibold))
-                            Text("\(viewModel.queuedMessages.count) in Warteschlange")
+                            Text(L("\(viewModel.queuedMessages.count) in Warteschlange"))
                                 .font(.system(size: 11.5, weight: .medium, design: .rounded))
                         }
                         .foregroundStyle(DS.Accent.brand)
@@ -48,7 +48,7 @@ struct InputArea: View {
                         .background(Capsule().fill(DS.Accent.brand.opacity(0.12)))
                     }
                     .buttonStyle(.plain)
-                    .help("Wartende Nachrichten anzeigen")
+                    .help(L("Wartende Nachrichten anzeigen"))
                     .popover(isPresented: $showQueuedMessages, arrowEdge: .top) {
                         QueuedMessagesList(
                             messages: viewModel.queuedMessages,
@@ -71,7 +71,7 @@ struct InputArea: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     if docProcessor.currentStatus.estimatedTokens > 0 {
-                        Text("~ \(docProcessor.currentStatus.estimatedTokens) Tokens")
+                        Text(L("~ \(docProcessor.currentStatus.estimatedTokens) Tokens"))
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -116,9 +116,9 @@ struct InputArea: View {
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { isShowingMarkup = true }
-                            .accessibilityLabel("Screenshot-Vorschau")
+                            .accessibilityLabel(L("Screenshot-Vorschau"))
                             .accessibilityAddTraits(.isButton)
-                            .help("Klicken zum Markieren (Kreise, Pfeile, Rechtecke)")
+                            .help(L("Klicken zum Markieren (Kreise, Pfeile, Rechtecke)"))
 
                         VStack(spacing: 5) {
                             Button { isShowingMarkup = true } label: {
@@ -129,8 +129,8 @@ struct InputArea: View {
                                     .background(Circle().fill(DS.Accent.brand.opacity(0.12)))
                             }
                             .buttonStyle(.plain)
-                            .help("Markieren oder Ausschnitt wählen")
-                            .accessibilityLabel("Screenshot markieren")
+                            .help(L("Markieren oder Ausschnitt wählen"))
+                            .accessibilityLabel(L("Screenshot markieren"))
 
                             Button { lastCapturedImage = nil } label: {
                                 Image(systemName: "xmark")
@@ -140,8 +140,8 @@ struct InputArea: View {
                                     .background(Circle().fill(DS.Surface.control))
                             }
                             .buttonStyle(.plain)
-                            .help("Screenshot entfernen")
-                            .accessibilityLabel("Screenshot entfernen")
+                            .help(L("Screenshot entfernen"))
+                            .accessibilityLabel(L("Screenshot entfernen"))
                         }
                         Spacer()
                     }
@@ -154,8 +154,8 @@ struct InputArea: View {
                     HStack(spacing: 2) {
                         ComposerIconButton(
                             systemImage: "camera.viewfinder",
-                            help: "Screenshot aufnehmen (Interaktiv)",
-                            accessibilityLabel: "Screenshot aufnehmen",
+                            help: L("Screenshot aufnehmen (Interaktiv)"),
+                            accessibilityLabel: L("Screenshot aufnehmen"),
                             tint: DS.Accent.brand,
                             disabled: docProcessor.currentStatus.isProcessing,
                             action: capture
@@ -163,8 +163,8 @@ struct InputArea: View {
 
                         ComposerIconButton(
                             systemImage: "paperclip",
-                            help: "Datei hochladen (PDF, TXT, MD)",
-                            accessibilityLabel: "Datei anhängen",
+                            help: L("Datei hochladen (PDF, TXT, MD)"),
+                            accessibilityLabel: L("Datei anhängen"),
                             tint: DS.Accent.blue,
                             disabled: viewModel.isStreaming || docProcessor.currentStatus.isProcessing,
                             action: { showFilePicker = true }
@@ -197,7 +197,7 @@ struct InputArea: View {
                         // Gleiche Schrift und Einrückung wie das Textfeld, damit der Hinweis direkt
                         // hinter der Einfügemarke steht; verschwindet Stück für Stück beim Tippen.
                         if let hint = parameterGhost {
-                            (Text(inputText).foregroundColor(.clear) + Text(hint).foregroundColor(Color(nsColor: .tertiaryLabelColor)))
+                            Text("\(Text(inputText).foregroundColor(.clear))\(Text(hint).foregroundColor(Color(nsColor: .tertiaryLabelColor)))")
                                 .font(Font(NSFont.systemFont(ofSize: NSFont.systemFontSize)))
                                 .lineLimit(1)
                                 .padding(.leading, GrowingTextEditor.textInset.width + GrowingTextEditor.linePadding)
@@ -206,10 +206,11 @@ struct InputArea: View {
                                 .accessibilityHidden(true)
                         }
                         if inputText.isEmpty {
-                            Text("Frage stellen oder Screenshot senden…")
+                            Text(L("Frage stellen oder Screenshot senden…"))
                                 .font(.system(size: 13.5, design: .rounded))
                                 .foregroundStyle(.secondary)
-                                .padding(.leading, 4)
+                                // Knapp hinter der Einfügemarke, damit der Cursor links vom Text steht.
+                                .padding(.leading, GrowingTextEditor.textInset.width + GrowingTextEditor.linePadding + 3)
                                 .padding(.top, 3)
                                 .allowsHitTesting(false)
                         }
@@ -243,8 +244,8 @@ struct InputArea: View {
                                     .background(Circle().fill(DS.Accent.rose))
                             }
                             .buttonStyle(.plain)
-                            .help("Generierung abbrechen")
-                            .accessibilityLabel("Generierung abbrechen")
+                            .help(L("Generierung abbrechen"))
+                            .accessibilityLabel(L("Generierung abbrechen"))
 
                             if canSend {
                                 Button(action: handleSend) {
@@ -255,7 +256,7 @@ struct InputArea: View {
                                         .background(Circle().fill(DS.Accent.brand.opacity(0.14)))
                                 }
                                 .buttonStyle(.plain)
-                                .help("Zur Warteschlange hinzufügen – wird nach der aktuellen Antwort automatisch gesendet")
+                                .help(L("Zur Warteschlange hinzufügen – wird nach der aktuellen Antwort automatisch gesendet"))
                             }
                         } else {
                             Button(action: handleSend) {
@@ -275,8 +276,8 @@ struct InputArea: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(!canSend)
-                            .help("Senden (Return)")
-                            .accessibilityLabel("Senden")
+                            .help(L("Senden (Return)"))
+                            .accessibilityLabel(L("Senden"))
                         }
                     }
                     .padding(.bottom, 1)
@@ -397,7 +398,7 @@ struct InputArea: View {
         guard let name = parts.first?.lowercased(),
               let command = viewModel.slashCommandRegistry.commands.first(where: { $0.id == name || $0.aliases.contains(name) }),
               let hint = command.paramHint else { return nil }
-        return Self.remainingParameters(hint: hint, typedArguments: parts.count - 1)
+        return Self.remainingParameters(hint: L(dynamic: hint), typedArguments: parts.count - 1)
     }
 
     /// Zerlegt „[Anzahl] [Stufe] <Thema>“ in Platzhalter und lässt die bereits getippten weg.
@@ -626,14 +627,14 @@ struct SlashCommandList: View {
                                     .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
                                     .foregroundStyle(index == selectedIndex ? DS.Ink.accent : .primary)
                                 if let hint = cmd.paramHint {
-                                    Text(hint)
+                                    Text(L(dynamic: hint))
                                         .font(.system(size: 11, design: .rounded))
                                         .foregroundStyle(.tertiary)
                                         .lineLimit(1)
                                         .truncationMode(.tail)
                                 }
                                 Spacer(minLength: DS.Space.m)
-                                Text(cmd.description)
+                                Text(L(dynamic: cmd.description))
                                     .font(.system(size: 11.5, design: .rounded))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -649,7 +650,7 @@ struct SlashCommandList: View {
                         }
                         .buttonStyle(.plain)
                         .id(index)
-                        .accessibilityLabel("/\(cmd.id): \(cmd.description)")
+                        .accessibilityLabel("/\(cmd.id): \(L(dynamic: cmd.description))")
                     }
                 }
                 .padding(DS.Space.xs)
@@ -673,7 +674,7 @@ struct QueuedMessagesList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Warteschlange")
+            Text(L("Warteschlange"))
                 .font(.headline)
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
@@ -685,7 +686,7 @@ struct QueuedMessagesList: View {
                         Image(systemName: "photo")
                             .foregroundStyle(.secondary)
                     }
-                    Text(msg.text.isEmpty ? "[Screenshot]" : msg.text)
+                    Text(msg.text.isEmpty ? L("[Screenshot]") : msg.text)
                         .font(.callout)
                         .lineLimit(3)
                     Spacer()

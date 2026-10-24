@@ -5,6 +5,7 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
     case searxng
     case wikipedia
     case europePMC = "europepmc"
+    case pubmed
     case arxiv
     case stackExchange = "stackexchange"
     case openAlex = "openalex"
@@ -13,21 +14,43 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
     case openFDA = "openfda"
     /// Exa über MCP – nur Fallback, wenn die anderen Quellen zu wenig liefern.
     case exa
+    /// Brave Search über offizielle REST-API – nur Fallback, wenn aktiviert und API-Key vorhanden.
+    case brave
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .searxng:       return "SearXNG (Websuche)"
-        case .wikipedia:     return "Wikipedia"
-        case .europePMC:     return "Europe PMC (Medizin/Biologie)"
-        case .arxiv:         return "arXiv (Naturwissenschaft/Technik)"
+        case .searxng:       return L("SearXNG (Websuche)")
+        case .wikipedia:     return L("Wikipedia")
+        case .europePMC:     return L("Europe PMC (Medizin/Biologie)")
+        case .pubmed:        return L("PubMed (Medizin/Biologie)")
+        case .arxiv:         return L("arXiv (Naturwissenschaft/Technik)")
+        case .stackExchange: return L("Stack Exchange")
+        case .openAlex:      return L("OpenAlex (Fachliteratur aller Fächer)")
+        case .semanticScholar: return L("Semantic Scholar (Fachliteratur)")
+        case .medlinePlus:   return L("MedlinePlus (Gesundheitsthemen, Englisch)")
+        case .openFDA:       return L("openFDA (US-Fachinformationen zu Arzneimitteln)")
+        case .exa:           return L("Exa (Fallback über MCP)")
+        case .brave:         return L("Brave Search (Fallback mit API-Key)")
+        }
+    }
+
+    /// Kurzname für Statuszeilen.
+    var shortName: String {
+        switch self {
+        case .searxng: return "SearXNG"
+        case .wikipedia: return "Wikipedia"
+        case .europePMC: return "Europe PMC"
+        case .pubmed: return "PubMed"
+        case .arxiv: return "arXiv"
         case .stackExchange: return "Stack Exchange"
-        case .openAlex:      return "OpenAlex (Fachliteratur aller Fächer)"
-        case .semanticScholar: return "Semantic Scholar (Fachliteratur)"
-        case .medlinePlus:   return "MedlinePlus (Gesundheitsthemen, Englisch)"
-        case .openFDA:       return "openFDA (US-Fachinformationen zu Arzneimitteln)"
-        case .exa:           return "Exa (Fallback über MCP)"
+        case .openAlex: return "OpenAlex"
+        case .semanticScholar: return "Semantic Scholar"
+        case .medlinePlus: return "MedlinePlus"
+        case .openFDA: return "openFDA"
+        case .exa: return "Exa"
+        case .brave: return "Brave"
         }
     }
 
@@ -36,6 +59,7 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
         case .searxng:       return "magnifyingglass"
         case .wikipedia:     return "book.closed"
         case .europePMC:     return "cross.case"
+        case .pubmed:        return "stethoscope"
         case .arxiv:         return "atom"
         case .stackExchange: return "bubble.left.and.text.bubble.right"
         case .openAlex:      return "books.vertical"
@@ -43,21 +67,24 @@ nonisolated enum ResearchSource: String, Codable, CaseIterable, Identifiable, Se
         case .medlinePlus:   return "heart.text.square"
         case .openFDA:       return "pills"
         case .exa:           return "sparkle.magnifyingglass"
+        case .brave:         return "shield.lefthalf.filled"
         }
     }
 
     var help: String {
         switch self {
-        case .searxng:       return "Allgemeine Websuche über eine eigene SearXNG-Instanz."
-        case .wikipedia:     return "Artikel direkt über die Wikipedia-API – sauberer Text ohne Seitenmenüs."
-        case .europePMC:     return "Fachartikel mit Abstracts aus Europe PMC (enthält PubMed)."
-        case .arxiv:         return "Preprints aus Physik, Mathematik, Informatik, Biologie."
-        case .stackExchange: return "Beste Antworten von Stack Overflow und anderen Stack-Exchange-Seiten. Ohne Key etwa 300 Anfragen pro Tag."
-        case .openAlex:      return "Offener Katalog wissenschaftlicher Arbeiten aller Fächer, mit Abstracts. Kostenlos, ohne Key."
-        case .semanticScholar: return "Fachartikel mit Abstracts und Kurzfassungen. Ohne Key gemeinsamer, knapper Zugang – kann langsam sein."
-        case .medlinePlus:   return "Verständliche Übersichten zu Krankheiten und Gesundheitsthemen der US-Nationalbibliothek (Englisch)."
-        case .openFDA:       return "Amerikanische Fachinformationen (Indikation, Dosierung, Kontraindikationen) zu einem Wirkstoff. Für deutsche Präparate gibt es keine freie Schnittstelle."
-        case .exa:           return "KI-aufbereitete Websuche von Exa. Wird nur gefragt, wenn die anderen Quellen zu wenig liefern. Ohne Key: kostenlose Stufe."
+        case .searxng:       return L("Allgemeine Websuche über eine eigene SearXNG-Instanz.")
+        case .wikipedia:     return L("Artikel direkt über die Wikipedia-API – sauberer Text ohne Seitenmenüs.")
+        case .europePMC:     return L("Fachartikel mit Abstracts aus Europe PMC (enthält PubMed).")
+        case .pubmed:        return L("Fachartikel mit Abstracts direkt aus PubMed (NCBI). Kostenlos, ohne Key bis 3 Anfragen pro Sekunde; Abbildungen aus PubMed-Central-Artikeln.")
+        case .arxiv:         return L("Preprints aus Physik, Mathematik, Informatik, Biologie.")
+        case .stackExchange: return L("Beste Antworten von Stack Overflow und anderen Stack-Exchange-Seiten. Ohne Key etwa 300 Anfragen pro Tag.")
+        case .openAlex:      return L("Offener Katalog wissenschaftlicher Arbeiten aller Fächer, mit Abstracts. Kostenlos, ohne Key.")
+        case .semanticScholar: return L("Fachartikel mit Abstracts und Kurzfassungen. Ohne Key gemeinsamer, knapper Zugang – kann langsam sein.")
+        case .medlinePlus:   return L("Verständliche Übersichten zu Krankheiten und Gesundheitsthemen der US-Nationalbibliothek (Englisch).")
+        case .openFDA:       return L("Amerikanische Fachinformationen (Indikation, Dosierung, Kontraindikationen) zu einem Wirkstoff. Für deutsche Präparate gibt es keine freie Schnittstelle.")
+        case .exa:           return L("KI-aufbereitete Websuche von Exa. Wird nur gefragt, wenn die anderen Quellen zu wenig liefern. Ohne Key: kostenlose Stufe.")
+        case .brave:         return L("Unabhängiger Web-Index von Brave mit Zusatz-Textabsätzen. Standardmäßig aus; wird nur als Fallback gefragt, wenn aktiviert und ein Brave-API-Key hinterlegt ist.")
         }
     }
 }
@@ -71,8 +98,8 @@ nonisolated enum RerankerMode: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .off:  return "Aus (nur Keyword-Relevanz)"
-        case .auto: return "An (bei Fehler Keyword-Relevanz)"
+        case .off:  return L("Aus (nur Keyword-Relevanz)")
+        case .auto: return L("An (bei Fehler Keyword-Relevanz)")
         }
     }
 }
@@ -80,7 +107,22 @@ nonisolated enum RerankerMode: String, Codable, CaseIterable, Sendable {
 /// Alle Einstellungen der Websuche. Als ein Codable-Block in settings.json gespeichert –
 /// neue Felder brauchen nur einen Default in `init(from:)`.
 nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
-    var enabledSources: Set<ResearchSource> = [.searxng, .wikipedia, .europePMC, .arxiv, .stackExchange, .exa]
+    var enabledSources: Set<ResearchSource> = [.searxng, .wikipedia, .pubmed, .arxiv, .stackExchange, .exa]
+    /// Version der Standard-Quellen. 2 (Version 4.0): PubMed an, Europe PMC aus (Dienst gestört).
+    static let currentSourceDefaultsVersion = 2
+    var sourceDefaultsVersion = ResearchSettings.currentSourceDefaultsVersion
+
+    // Zuverlässigkeit (Version 4.0)
+    /// Gesamtzeit für die Quellen einer Suche; wer bis dahin nicht antwortet, wird übersprungen.
+    var sourceBudgetSeconds: Double = 30
+    /// Pause einer Quelle nach Rate-Limit oder zwei Ausfällen hintereinander (Minuten).
+    var sourcePauseMinutes: Double = 4
+    /// Zeitlimit für SearXNG (wartet intern auf langsame Suchmaschinen).
+    var searxngTimeout: Double = 70
+    /// Früher Abschluss: Haben die Quellen zusammen so viele Treffer geliefert, wartet die Suche auf
+    /// Nachzügler nur noch `earlyFinishGraceSeconds`. 0 = immer das volle Zeitbudget abwarten.
+    var earlyFinishHits: Int = 12
+    static let earlyFinishGraceSeconds: Double = 3
 
     // Treffer & Volltexte
     var resultsPerSource: Int = 6
@@ -169,6 +211,7 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         case rerankerMode, rerankerModel, rerankerProfileID, rerankerTimeout, rerankerWindow
         case wikipediaLanguage, stackExchangeSites, exaMinWebResults, exaResults
         case trustedDomains, goodDomains, blockedDomains, cacheMinutes, apiContactEmail, imagesEnabled
+        case sourceDefaultsVersion, sourceBudgetSeconds, sourcePauseMinutes, searxngTimeout, earlyFinishHits
     }
 
     init(from decoder: Decoder) throws {
@@ -200,6 +243,17 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         cacheMinutes = try c.decodeIfPresent(Int.self, forKey: .cacheMinutes) ?? d.cacheMinutes
         imagesEnabled = try c.decodeIfPresent(Bool.self, forKey: .imagesEnabled) ?? true
         apiContactEmail = try c.decodeIfPresent(String.self, forKey: .apiContactEmail) ?? ""
+        sourceBudgetSeconds = (try? c.decodeIfPresent(Double.self, forKey: .sourceBudgetSeconds)) ?? d.sourceBudgetSeconds
+        sourcePauseMinutes = (try? c.decodeIfPresent(Double.self, forKey: .sourcePauseMinutes)) ?? d.sourcePauseMinutes
+        searxngTimeout = (try? c.decodeIfPresent(Double.self, forKey: .searxngTimeout)) ?? d.searxngTimeout
+        earlyFinishHits = (try? c.decodeIfPresent(Int.self, forKey: .earlyFinishHits)) ?? d.earlyFinishHits
+        // Einmalige Umstellung älterer Einstellungen: PubMed statt des gestörten Europe PMC.
+        let version = (try? c.decodeIfPresent(Int.self, forKey: .sourceDefaultsVersion)) ?? 1
+        if version < 2, rawSources != nil {
+            enabledSources.remove(.europePMC)
+            enabledSources.insert(.pubmed)
+        }
+        sourceDefaultsVersion = Self.currentSourceDefaultsVersion
     }
 
     func encode(to encoder: Encoder) throws {
@@ -228,5 +282,10 @@ nonisolated struct ResearchSettings: Codable, Equatable, Sendable {
         try c.encode(cacheMinutes, forKey: .cacheMinutes)
         try c.encode(imagesEnabled, forKey: .imagesEnabled)
         try c.encode(apiContactEmail, forKey: .apiContactEmail)
+        try c.encode(sourceDefaultsVersion, forKey: .sourceDefaultsVersion)
+        try c.encode(sourceBudgetSeconds, forKey: .sourceBudgetSeconds)
+        try c.encode(sourcePauseMinutes, forKey: .sourcePauseMinutes)
+        try c.encode(searxngTimeout, forKey: .searxngTimeout)
+        try c.encode(earlyFinishHits, forKey: .earlyFinishHits)
     }
 }

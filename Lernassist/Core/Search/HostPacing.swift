@@ -19,10 +19,12 @@ actor HostPacing {
         case "api.semanticscholar.org": return 1.1   // ohne Key gemeinsamer, knapper Pool
         case "api.stackexchange.com":   return 1.0   // ohne Key 300 Anfragen pro Tag
         case "mcp.exa.ai":              return 1.0
+        case "api.search.brave.com":    return 1.0   // Brave Search API: Free-Stufe 1 Anfrage/s
         case "wsearch.nlm.nih.gov":     return 0.8   // MedlinePlus: max. 85 pro Minute
         case "www.ebi.ac.uk":           return 0.5   // Europe PMC: keine feste Grenze, maßvoll
         case "api.fda.gov":             return 0.3   // openFDA: 240 pro Minute
         case "api.openalex.org":        return 0.2   // OpenAlex: 10 pro Sekunde ohne Key
+        case "eutils.ncbi.nlm.nih.gov": return 0.4   // PubMed: max. 3 pro Sekunde ohne Key
         case "upload.wikimedia.org", "thumb.wikimedia.org": return 0.2   // Bild-CDN von Wikimedia
         case "cdn.ncbi.nlm.nih.gov":    return 0.3   // Abbildungen aus PMC-Artikeln
         default:
@@ -33,14 +35,16 @@ actor HostPacing {
         }
     }
 
-    /// Wartet, bis dieser Host wieder dran ist. Wirft, wenn er länger als 30 s pausiert.
+    /// Wartet, bis dieser Host wieder dran ist (Mindestabstand). Ist er nach einem Rate-Limit
+    /// pausiert, wird sofort übersprungen statt zu warten (Version 4.0: vorher bis zu 30 s Wartezeit
+    /// pro Suche, wenn ein Dienst ausgefallen war).
     func waitTurn(host rawHost: String) async throws {
         let host = rawHost.lowercased()
         let now = Date()
-        if let until = pausedUntil[host], until.timeIntervalSince(now) > 30 {
-            throw WebFetchError.httpStatus(429)
+        if let until = pausedUntil[host], until > now {
+            throw WebFetchError.rateLimited(429, until.timeIntervalSince(now))
         }
-        let start = max(now, nextStart[host] ?? now, pausedUntil[host] ?? now)
+        let start = max(now, nextStart[host] ?? now)
         nextStart[host] = start.addingTimeInterval(Self.spacing(for: host) + Double.random(in: 0...0.3))
         let wait = start.timeIntervalSinceNow
         if wait > 0 { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }

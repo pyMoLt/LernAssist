@@ -32,9 +32,9 @@ extension ChatViewModel {
         dateFormatter.timeStyle = .none // Keine Uhrzeit, um ständige KV-Cache-Invalidierung (jede Minute) zu verhindern
         dateFormatter.locale = Locale(identifier: "de_DE")
         let dateString = dateFormatter.string(from: Date())
-        let datePrompt = "\n[System: Das aktuelle Datum ist \(dateString). Berücksichtige dies bei zeitlichen Einordnungen. Antworte immer in der Sprache des Nutzers (meist Deutsch) und mische keine anderen Sprachen oder Schriftzeichen (z. B. Chinesisch) ein.]\n"
+        let formattingPrompt = LearningStyle.systemFormattingRules(dateString: dateString)
         
-        let systemContent = prompt(for: learningStyle) + datePrompt + ToolRegistry.shared.systemPromptAddition
+        let systemContent = prompt(for: learningStyle) + formattingPrompt + ToolRegistry.shared.systemPromptAddition
 
         var messages: [[String: Any]] = [["role": "system", "content": systemContent]]
         // Screenshots fortlaufend nummerieren ([Screenshot #N]) – Bezugspunkt für recall_screenshot.
@@ -185,6 +185,7 @@ extension ChatViewModel {
         if isFallbackAttempt || autoRetryCount > 0 {
             contentBuffer = ""
             thinkingBuffer = ""
+            toolDeltaBuffer = []
             if let sIdx = sessions.firstIndex(where: { $0.id == sessionId }),
                let mIdx = sessions[sIdx].messages.firstIndex(where: { $0.id == targetMsgId }) {
                 sessions[sIdx].messages[mIdx].content = ""
@@ -196,8 +197,8 @@ extension ChatViewModel {
         // Kontext-Budget vor dem Serialisieren anwenden.
         let effectiveMessages = Self.trimmedToContextBudget(
             messages,
-            contextWindow: profile.contextSizeOverride,
-            maxTokens: profile.params.maxTokens
+            contextWindow: ModelSettingsRegistry.shared.settings(for: profile.model).contextWindow ?? profile.contextSizeOverride,
+            maxTokens: ModelSettingsRegistry.shared.settings(for: profile.model).maxTokens ?? profile.params.maxTokens
         )
 
         // Client-Timer und Live-Telemetrie für die neue Antwort-Runde initialisieren:
@@ -220,11 +221,12 @@ extension ChatViewModel {
         // Tool-Schemas aus der Registry (nur aktive Tools, stabile Reihenfolge für KV-Cache).
         // Bewusst in JEDER Runde gleich, auch nach dem Tool-Limit – siehe toolFinalRoundNotice.
         let builder = ChatRequestBuilder(profile: profile)
-        let payload = builder.payload(messages: effectiveMessages, purpose: .chat, stream: true,
+        let streams = streamsResponses
+        let payload = builder.payload(messages: effectiveMessages, purpose: .chat, stream: streams,
                                       tools: ToolRegistry.shared.schemas)
         let request: URLRequest
         do {
-            request = try builder.urlRequest(payload: payload, stream: true)
+            request = try builder.urlRequest(payload: payload, stream: streams)
         } catch {
             AppLog.chat.error("Request-Aufbau fehlgeschlagen: \(error.localizedDescription)")
             currentMetrics.isPrefilling = false
@@ -386,7 +388,7 @@ extension ChatViewModel {
         let adapter = ProviderAdapters.adapter(for: profile.provider)
         currentStreamTask = Task { [weak self] in
             do {
-                for try await event in LLMClient.stream(request, format: adapter.wireFormat) {
+                for try await event in LLMClient.stream(request, format: adapter.wireFormat, buffered: !streams) {
                     guard let self, gen == self.streamGeneration else { return }
                     self.applyStreamEvent(event, sessionId: sessionId, targetMsgId: targetMsgId)
                 }
@@ -518,7 +520,12 @@ extension ChatViewModel {
         case .toolCall(let info):
             recordFirstTokenIfNeeded()
             streamedCharCount += info.arguments.count
-            updateSessionToolCall(sessionId: sessionId, messageId: targetMsgId, tool: info)
+            // Das erste Delta (Name) sofort zeigen, alle weiteren mit dem 5-Hz-Takt sammeln.
+            if toolDeltaBuffer.isEmpty, !info.name.isEmpty {
+                updateSessionToolCall(sessionId: sessionId, messageId: targetMsgId, tool: info)
+            } else {
+                toolDeltaBuffer.append(info)
+            }
         case .metrics(let metrics):
             var merged = metrics
             merged.isPrefilling = currentMetrics.isPrefilling
@@ -551,6 +558,11 @@ extension ChatViewModel {
     /// verzögerte die Anwendung nur: handleFinished las den Content, BEVOR der letzte Flush
     /// landete, und verpasste dadurch Inline-Tool-Calls im letzten Chunk.
     func flushBuffers(sessionId: UUID, targetMsgId: UUID) {
+        if !toolDeltaBuffer.isEmpty {
+            let deltas = toolDeltaBuffer
+            toolDeltaBuffer = []
+            applyToolDeltas(deltas, sessionId: sessionId, messageId: targetMsgId)
+        }
         guard !contentBuffer.isEmpty || !thinkingBuffer.isEmpty else { return }
         let c = contentBuffer
         let t = thinkingBuffer
@@ -576,6 +588,28 @@ extension ChatViewModel {
     /// `DispatchQueue.main.async` reihte das Delta hinter ein gleichzeitig eingetroffenes
     /// onFinish ein – handleFinished sah dann fehlende oder abgeschnittene Tool-Calls
     /// (Audit 2026-10-12, Chat-Kern H1).
+    /// Wendet gesammelte Tool-Deltas in EINEM Schreibvorgang an (ein Neuaufbau statt einer pro Token).
+    func applyToolDeltas(_ deltas: [ToolCallInfo], sessionId: UUID, messageId: UUID) {
+        guard
+            let sIdx = sessions.firstIndex(where: { $0.id == sessionId }),
+            let mIdx = sessions[sIdx].messages.firstIndex(where: { $0.id == messageId })
+        else { return }
+        var calls = sessions[sIdx].messages[mIdx].toolCalls ?? []
+        for tool in deltas { Self.merge(tool, into: &calls) }
+        sessions[sIdx].messages[mIdx].toolCalls = calls
+    }
+
+    /// Ein Delta in die Liste der Tool-Calls einarbeiten (gleiche Regeln wie bisher).
+    static func merge(_ tool: ToolCallInfo, into calls: inout [ToolCallInfo]) {
+        if let tIdx = calls.firstIndex(where: {
+            ($0.index != nil && $0.index == tool.index) || ($0.id == tool.id && !tool.id.isEmpty)
+        }) {
+            if !tool.arguments.isEmpty { calls[tIdx].arguments += tool.arguments }
+        } else {
+            calls.append(tool)
+        }
+    }
+
     func updateSessionToolCall(sessionId: UUID, messageId: UUID, tool: ToolCallInfo) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard
@@ -666,8 +700,23 @@ extension ChatViewModel {
     /// `reasoning_content` mit. Die Chat-Vorlage des Modells (oMLX/Qwen 3.6: `preserve_thinking`)
     /// entscheidet, ob sie es im Verlauf behält; Vorlagen ohne die Funktion ignorieren das Feld.
     /// Nebeneffekt: Der Prompt entspricht genau dem, was der Server im KV-Cache hat.
+    /// Preserve Thinking für das aktive Modell (Reiter „Modelle“, Standard an).
+    var preservesThinking: Bool {
+        ModelSettingsRegistry.shared.settings(for: activeProfile?.model ?? "").preserveThinking ?? true
+    }
+
+    /// Antworten streamen (Reiter „Modelle“, Standard an).
+    var streamsResponses: Bool {
+        ModelSettingsRegistry.shared.settings(for: activeProfile?.model ?? "").streaming ?? true
+    }
+
+    /// Bilder an das aktive Modell senden (Reiter „Modelle“, Standard an).
+    var sendsImages: Bool {
+        ModelSettingsRegistry.shared.settings(for: activeProfile?.model ?? "").vision ?? true
+    }
+
     func attachReasoning(of msg: ChatMessage, to entry: inout [String: Any]) {
-        guard preserveThinking, let thinking = msg.thinking,
+        guard preservesThinking, let thinking = msg.thinking,
               !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         entry["reasoning_content"] = thinking
     }
@@ -683,8 +732,14 @@ extension ChatViewModel {
                      recalledScreenshot: ((Int) -> String?)? = nil) -> [[String: Any]] {
         switch msg.role {
         case "user":
-            let attachImage = !msg.isImageContextFrozen || keepMultipleImagesInHistory
+            let attachImage = (!msg.isImageContextFrozen || keepMultipleImagesInHistory) && sendsImages
             let tag = screenshotNumber.map { "[Screenshot #\($0)]" } ?? "[Screenshot]"
+            // Modell ohne Bildeingabe: Beschreibung statt Bild, sobald eine vorliegt.
+            if !sendsImages, msg.imageID != nil || msg.imageBase64 != nil {
+                let description = msg.frozenImageContext ?? msg.imageDescription ?? ""
+                let note = description.isEmpty ? "\(tag) (Bild nicht gesendet: Modell ohne Bildeingabe)" : "\(tag) Beschreibung: \(description)"
+                return [["role": "user", "content": msg.content.isEmpty ? note : "\(msg.content)\n\n\(note)"]]
+            }
             if attachImage, let b64 = Self.imagePayloadBase64(for: msg) {
                 let text = msg.content.isEmpty ? "Beschreibe diesen Screenshot." : msg.content
                 let tagged = screenshotNumber == nil ? text : "\(tag) \(text)"
@@ -718,7 +773,7 @@ extension ChatViewModel {
                 let text: String
                 if !msg.content.isEmpty {
                     text = msg.content
-                } else if !preserveThinking, let thinking = msg.thinking, !thinking.isEmpty {
+                } else if !preservesThinking, let thinking = msg.thinking, !thinking.isEmpty {
                     text = Self.thinkingOnlyContent(thinking)
                 } else {
                     text = "" // Mit tool_calls ist ein leerer String bei OpenAI erlaubt
@@ -734,7 +789,7 @@ extension ChatViewModel {
                 }
                 // Erneut abgerufene Screenshots folgen als Bildnachricht auf die Tool-Ergebnisse.
                 for tc in normalizedCalls {
-                    guard let number = tc.recalledScreenshot,
+                    guard sendsImages, let number = tc.recalledScreenshot,
                           let b64 = recalledScreenshot?(number) else { continue }
                     result.append(EndpointManager.userImageMessage(text: "[Screenshot #\(number), erneut abgerufen]",
                                                                    base64: b64, provider: provider))
@@ -751,7 +806,7 @@ extension ChatViewModel {
             let text: String
             if !msg.content.isEmpty {
                 text = msg.content
-            } else if !preserveThinking, let thinking = msg.thinking, !thinking.isEmpty {
+            } else if !preservesThinking, let thinking = msg.thinking, !thinking.isEmpty {
                 text = Self.thinkingOnlyContent(thinking)
             } else {
                 text = " " // Fallback um HTTP 400 Bad Request bei leerem Content zu vermeiden

@@ -53,11 +53,11 @@ struct DocumentBadgeView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else if doc.status == .completed {
-                        Text("Verarbeitung abgeschlossen")
+                        Text(L("Verarbeitung abgeschlossen"))
                             .font(.caption2)
                             .foregroundStyle(.green)
                     } else if doc.status == .failed {
-                        Text("Fehler bei der Verarbeitung")
+                        Text(L("Fehler bei der Verarbeitung"))
                             .font(.caption2)
                             .foregroundStyle(.red)
                     }
@@ -81,7 +81,7 @@ struct DocumentBadgeView: View {
                             .background(Circle().fill(DS.Ink.quiz.opacity(0.1)))
                     }
                     .buttonStyle(.plain)
-                    .help("Karteikarten aus diesem Dokument erzeugen")
+                    .help(L("Karteikarten aus diesem Dokument erzeugen"))
 
                     Button {
                         NotificationCenter.default.post(name: .studyDocumentRequested, object: nil,
@@ -94,7 +94,7 @@ struct DocumentBadgeView: View {
                             .background(Circle().fill(DS.Ink.quiz.opacity(0.1)))
                     }
                     .buttonStyle(.plain)
-                    .help("Quiz aus diesem Dokument erzeugen")
+                    .help(L("Quiz aus diesem Dokument erzeugen"))
 
                     Button(action: { showPreview = true }) {
                         Image(systemName: "eye")
@@ -225,7 +225,7 @@ struct DocumentPreviewModal: View {
             // Content
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Extrahierter Inhalt:")
+                    Text(L("Extrahierter Inhalt:"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     

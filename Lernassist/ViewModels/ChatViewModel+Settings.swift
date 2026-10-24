@@ -33,7 +33,6 @@ extension ChatViewModel {
             toolStates: ToolRegistry.shared.enabledStates(),
             autoLabelingEnabled: autoLabelingEnabled,
             autoImageToTextEnabled: autoImageToTextEnabled,
-            isSemanticSearchEnabled: isSemanticSearchEnabled,
             imageExtractionDetail: imageExtractionDetail,
             extractImagesFromPDF: extractImagesFromPDF,
             appTheme: appTheme,
@@ -57,6 +56,15 @@ extension ChatViewModel {
         settings.flashcardDifficulty = flashcardDifficulty
         settings.pythonDownloadMaxMB = pythonDownloadMaxMB
         settings.downloadAllowedDomains = downloadAllowedDomains
+        settings.htmlLibraryDomains = htmlLibraryDomains
+        settings.appearance = appearance
+        settings.appLanguage = appLanguage
+        settings.modelSettings = modelSettings
+        settings.modelSettingsMigrated = true
+        settings.searxngServers = searxngServers
+        settings.activeSearXNGServerID = activeSearXNGServerID
+        settings.connectionWatchEnabled = connectionWatchEnabled
+        settings.connectionWatchSystemNotices = connectionWatchSystemNotices
         settings.pythonInternetEnabled = pythonInternetEnabled
         settings.pythonMaxDownloadsPerRun = pythonMaxDownloadsPerRun
         settings.pythonDownloadTypes = pythonDownloadTypes
@@ -79,9 +87,25 @@ extension ChatViewModel {
         SettingsStore.shared.save(currentPersistedSettings())
     }
 
+    /// Einmalig (Version 4.0): Denken an/aus, Budget und Preserve Thinking hängen jetzt am Modell –
+    /// bisherige Werte aus den Profilen und der globalen Einstellung werden übernommen.
+    static func migratedModelSettings(from s: PersistedSettings) -> [String: ModelSettings] {
+        var models = s.modelSettings
+        guard !s.modelSettingsMigrated else { return models }
+        for profile in s.profiles where !profile.model.isEmpty {
+            let key = ModelSettings.key(for: profile.model)
+            var entry = models[key] ?? ModelSettings()
+            if profile.thinkingMode != .serverDefault, entry.thinking == nil { entry.thinking = profile.thinkingMode }
+            if let budget = profile.thinkingBudget, entry.thinkingBudget == nil { entry.thinkingBudget = budget }
+            if !s.preserveThinking, entry.preserveThinking == nil { entry.preserveThinking = false }
+            if !entry.isEmpty { models[key] = entry }
+        }
+        return models
+    }
+
     func loadSettings() {
         let s = SettingsStore.shared.load()
-        customPrompts = s.customPrompts
+        customPrompts = LearningStyle.migratedFromLegacyPrompts(s.customPrompts)
         profiles = s.profiles
         activeProfileID = s.activeProfileID ?? s.profiles.first?.id
         fallbackProfileID = s.fallbackProfileID
@@ -89,7 +113,12 @@ extension ChatViewModel {
             learningStyle = style
         }
         searchEnabled = s.searchEnabled
-        searxngURL = s.searxngURL
+        let catalog = Self.searxngCatalog(from: s)
+        searxngServers = catalog.servers
+        activeSearXNGServerID = catalog.activeID
+        searxngURL = catalog.servers.first(where: { $0.id == catalog.activeID })?.url ?? s.searxngURL
+        connectionWatchEnabled = s.connectionWatchEnabled
+        connectionWatchSystemNotices = s.connectionWatchSystemNotices
         maxBrowseCharacters = s.maxBrowseCharacters
         maxToolRounds = min(max(s.maxToolRounds, 1), 25)
         keepMultipleImagesInHistory = s.keepMultipleImagesInHistory
@@ -119,7 +148,6 @@ extension ChatViewModel {
         autoLabelingEnabled = s.autoLabelingEnabled
         autoImageToTextEnabled = s.autoImageToTextEnabled
         extractImagesFromPDF = s.extractImagesFromPDF
-        isSemanticSearchEnabled = s.isSemanticSearchEnabled
         imageExtractionDetail = s.imageExtractionDetail
         appTheme = s.appTheme
         chatFontSize = s.chatFontSize
@@ -141,6 +169,10 @@ extension ChatViewModel {
         flashcardDifficulty = s.flashcardDifficulty
         pythonDownloadMaxMB = s.pythonDownloadMaxMB
         downloadAllowedDomains = s.downloadAllowedDomains
+        htmlLibraryDomains = s.htmlLibraryDomains
+        appearance = s.appearance
+        appLanguage = s.appLanguage
+        modelSettings = Self.migratedModelSettings(from: s)
         pythonInternetEnabled = s.pythonInternetEnabled
         pythonMaxDownloadsPerRun = s.pythonMaxDownloadsPerRun
         pythonDownloadTypes = s.pythonDownloadTypes
@@ -256,9 +288,13 @@ extension ChatViewModel {
             case .nothingListening:
                 return "✗ Auf dieser Adresse/Port lauscht nichts (Verbindung verweigert). Prüfe mit „docker ps“ das Port-Mapping deines Containers. Auf dem Rechner, auf dem der Container läuft, ist es http://127.0.0.1:8082. Von einem anderen Gerät aus muss der Hostname oder die IP dieses Rechners mit :8082 eingetragen werden (z. B. über ein VPN wie Tailscale) – localhost zeigt dort nur auf das eigene Gerät."
             case .timeout:
-                return "✗ Adresse spricht an, antwortet aber nicht innerhalb von 8 s. Läuft der Container wirklich (docker ps) und ist er healthy?"
+                return "✗ Keine Antwort innerhalb von 8 s. Ist das Gerät hinter der Adresse an und erreichbar (eine veraltete Tailscale-Adresse schweigt einfach)? Läuft der Container (docker ps)?"
+            case .httpStatus(let code) where code == 401:
+                return "✗ HTTP 401: Der Server verlangt eine Anmeldung. Beim Such-Server die Anmeldung (z. B. Bearer-Token) eintragen bzw. prüfen."
+            case .httpStatus(let code) where code == 429:
+                return "✗ HTTP 429: SearXNG begrenzt die Anfragen (Limiter). Bei einer privaten Instanz hinter einem Proxy in der settings.yml „limiter: false“ setzen oder den Proxy als vertrauenswürdig eintragen."
             case .httpStatus(let code) where code == 403 || code == 410:
-                return "✗ SearXNG antwortet mit HTTP \(code): Die JSON-API ist serverseitig deaktiviert. In der SearXNG-settings.yml unter search → formats „json“ ergänzen und den Container neu starten."
+                return "✗ SearXNG antwortet mit HTTP \(code): Entweder fehlt die Anmeldung, oder die JSON-API ist serverseitig deaktiviert. In der SearXNG-settings.yml unter search → formats „json“ ergänzen und den Container neu starten."
             case .httpStatus(let code):
                 return "✗ SearXNG antwortet mit HTTP \(code) – ungewöhnlich. Instanz-Logs prüfen (docker logs <Container>)."
             case .notSearXNG:
@@ -269,7 +305,58 @@ extension ChatViewModel {
         }
     }
 
-    func testSearxngConnection(baseURL: String) async -> SearXNGPingResult {
+    /// Katalog aus den gespeicherten Einstellungen; ältere Einstellungen mit nur einer Adresse
+    /// bekommen einen Eintrag „Lokal“ bzw. „Remote“.
+    static func searxngCatalog(from s: PersistedSettings) -> (servers: [SearXNGServer], activeID: UUID?) {
+        var servers = s.searxngServers
+        let url = s.searxngURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if servers.isEmpty, !url.isEmpty { servers = [SearXNGServer.migrated(from: url)] }
+        let active = servers.first(where: { $0.id == s.activeSearXNGServerID }) ?? servers.first
+        return (servers, active?.id)
+    }
+
+    var activeSearXNGServer: SearXNGServer? {
+        searxngServers.first { $0.id == activeSearXNGServerID }
+    }
+
+    /// Anmelde-Header eines Such-Servers (Geheimnis aus dem Schlüsselbund).
+    func searxngHeaders(for server: SearXNGServer?) -> [String: String] {
+        guard let server, server.auth != .none else { return [:] }
+        return server.authHeaders(secret: KeychainStore.secret(account: server.keychainAccount))
+    }
+
+    func selectSearXNGServer(_ id: UUID) {
+        guard let server = searxngServers.first(where: { $0.id == id }) else { return }
+        activeSearXNGServerID = id
+        searxngURL = server.url
+        syncToolRegistry()
+    }
+
+    /// Eintrag ändern oder hinzufügen; beim aktiven Eintrag gelten Adresse und Anmeldung sofort.
+    func saveSearXNGServer(_ server: SearXNGServer, secret: String?) {
+        if let index = searxngServers.firstIndex(where: { $0.id == server.id }) {
+            searxngServers[index] = server
+        } else {
+            searxngServers.append(server)
+        }
+        if let secret { KeychainStore.setSecret(secret, account: server.keychainAccount) }
+        if activeSearXNGServerID == nil { activeSearXNGServerID = server.id }
+        if server.id == activeSearXNGServerID, searxngURL != server.url { searxngURL = server.url }
+        syncToolRegistry()
+    }
+
+    func deleteSearXNGServer(_ id: UUID) {
+        guard let server = searxngServers.first(where: { $0.id == id }) else { return }
+        KeychainStore.setSecret("", account: server.keychainAccount)
+        searxngServers.removeAll { $0.id == id }
+        if activeSearXNGServerID == id {
+            activeSearXNGServerID = searxngServers.first?.id
+            searxngURL = searxngServers.first?.url ?? ""
+        }
+        syncToolRegistry()
+    }
+
+    func testSearxngConnection(baseURL: String, headers: [String: String] = [:]) async -> SearXNGPingResult {
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return .invalidURL }
         if !base.lowercased().hasPrefix("http") { base = "http://" + base }
@@ -284,6 +371,7 @@ extension ChatViewModel {
 
         var request = URLRequest(url: url, timeoutInterval: 8.0)
         request.setValue("LernAssist/1.0", forHTTPHeaderField: "User-Agent")
+        headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)

@@ -35,7 +35,6 @@ struct PersistedSettings: Codable {
     /// den "/no_think"-Texttag gleichzeitig, da je nach Server/Modell nur einer davon greift.
     var disableThinkingForBackgroundJobs: Bool
     /// Phase 8: RAG/Semantische Suche (Experimentell)
-    var isSemanticSearchEnabled: Bool
     /// Phase 7G: Detailgrad der Bildextraktion aus PDFs (z.B. "Kurz", "Normal", "Detailliert")
     var imageExtractionDetail: String
     /// Steuert, ob beim Hochladen von PDFs jede Seite an das Vision-Modell gesendet wird, um Bilder zu beschreiben
@@ -74,6 +73,23 @@ struct PersistedSettings: Codable {
     var pythonMaxDownloadsPerRun: Int = 10
     var pythonDownloadTypes: [DownloadFileType] = DownloadFileType.defaults
     var downloadAllowedDomains: [String] = []
+    /// Immer erlaubte Domains für externe Bibliotheken in HTML-Ausgaben (eigene Liste).
+    var htmlLibraryDomains: [String] = []
+    /// Darstellung (Version 4): Akzent, Glas, Farbfeld, Bewegung.
+    var appearance = AppearanceSettings()
+    /// Sprache der Oberfläche (Standard Englisch).
+    var appLanguage: AppLanguage = .english
+    /// Einstellungen pro Modell (Schlüssel: `ModelSettings.key`).
+    var modelSettings: [String: ModelSettings] = [:]
+    /// Denken/Preserve Thinking wurden einmalig aus Profilen und globaler Einstellung übernommen.
+    var modelSettingsMigrated = false
+    /// Katalog der Such-Server (SearXNG); leer = aus `searxngURL` übernehmen.
+    var searxngServers: [SearXNGServer] = []
+    var activeSearXNGServerID: UUID?
+    /// Verbindungswächter: prüft Endpunkte und Such-Server im Leerlauf und meldet Probleme.
+    var connectionWatchEnabled = true
+    /// Zusätzlich Mitteilungen von macOS, wenn die App im Hintergrund ist.
+    var connectionWatchSystemNotices = true
     var flashcardDifficulty: StudyDifficulty = .medium
     /// Ziel-Behaltensrate für die Karteikarten-Wiederholung (FSRS).
     var flashcardRetention: Double = 0.9
@@ -121,7 +137,6 @@ struct PersistedSettings: Codable {
             toolStates: [:],
             autoLabelingEnabled: true,
             autoImageToTextEnabled: true,
-            isSemanticSearchEnabled: false,
             imageExtractionDetail: "Normal",
             extractImagesFromPDF: true,
             appTheme: "System",
@@ -164,7 +179,6 @@ struct PersistedSettings: Codable {
         toolStates: [String: Bool] = [:],
         autoLabelingEnabled: Bool = true,
         autoImageToTextEnabled: Bool = true,
-        isSemanticSearchEnabled: Bool = false,
         imageExtractionDetail: String = "Normal",
         extractImagesFromPDF: Bool = true,
         appTheme: String = "System",
@@ -204,7 +218,6 @@ struct PersistedSettings: Codable {
         self.toolStates = toolStates
         self.autoLabelingEnabled = autoLabelingEnabled
         self.autoImageToTextEnabled = autoImageToTextEnabled
-        self.isSemanticSearchEnabled = isSemanticSearchEnabled
         self.imageExtractionDetail = imageExtractionDetail
         self.extractImagesFromPDF = extractImagesFromPDF
         self.appTheme = appTheme
@@ -236,14 +249,15 @@ struct PersistedSettings: Codable {
         case learningStyle, customPrompts, searchEnabled, searxngURL, maxBrowseCharacters, maxToolRounds
         case keepMultipleImagesInHistory, hotkeys, toolStates, hotkeyDefaultsVersion
         case autoLabelingEnabled, autoImageToTextEnabled
-        case isSemanticSearchEnabled, imageExtractionDetail, extractImagesFromPDF
+        case imageExtractionDetail, extractImagesFromPDF
         case appTheme, chatFontSize, isMenuBarApp, disableThinkingForBackgroundJobs, showMenuBarIcon
         // Phase H – konfigurierbare Werte der neuen Features:
         case autoCompactSuggestionsEnabled, autoCompactThreshold, youtubeSubtitleLanguage, youtubeTranscriptCharLimit
         case compactSummaryTokens, compactKeepLastMessages, research, autoInstallPythonPackages
         case customArchiveFolders, autoArchiveDays, flashcardRetention, setupCompleted, preserveThinking
         case quizDifficulty, flashcardDifficulty
-        case pythonDownloadMaxMB, downloadAllowedDomains
+        case pythonDownloadMaxMB, downloadAllowedDomains, htmlLibraryDomains, appearance, appLanguage, modelSettings, modelSettingsMigrated,
+             searxngServers, activeSearXNGServerID, connectionWatchEnabled, connectionWatchSystemNotices
         case pythonInternetEnabled, pythonMaxDownloadsPerRun, pythonDownloadTypes
         case pythonSandboxTimeout, pythonMaxOutputCharacters, pythonMaxScriptVersions, pythonPlotDpi, documentCacheDuration
         case flashcardAgainDelayMinutes, flashcardCardsPerResponse, titleRefinementTurns, documentImageBudget, inlineExplainRadius
@@ -273,7 +287,6 @@ struct PersistedSettings: Codable {
         toolStates = try c.decodeIfPresent([String: Bool].self, forKey: .toolStates) ?? [:]
         autoLabelingEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoLabelingEnabled) ?? true
         autoImageToTextEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoImageToTextEnabled) ?? true
-        isSemanticSearchEnabled = try c.decodeIfPresent(Bool.self, forKey: .isSemanticSearchEnabled) ?? false
         imageExtractionDetail = try c.decodeIfPresent(String.self, forKey: .imageExtractionDetail) ?? "Normal"
         extractImagesFromPDF = try c.decodeIfPresent(Bool.self, forKey: .extractImagesFromPDF) ?? true
         appTheme = try c.decodeIfPresent(String.self, forKey: .appTheme) ?? "System"
@@ -306,6 +319,15 @@ struct PersistedSettings: Codable {
         quizDifficulty = (try? c.decodeIfPresent(StudyDifficulty.self, forKey: .quizDifficulty)) ?? .medium
         pythonDownloadMaxMB = min(200, max(1, try c.decodeIfPresent(Int.self, forKey: .pythonDownloadMaxMB) ?? 25))
         downloadAllowedDomains = try c.decodeIfPresent([String].self, forKey: .downloadAllowedDomains) ?? []
+        htmlLibraryDomains = (try? c.decodeIfPresent([String].self, forKey: .htmlLibraryDomains)) ?? []
+        appearance = (try? c.decodeIfPresent(AppearanceSettings.self, forKey: .appearance)) ?? AppearanceSettings()
+        appLanguage = (try? c.decodeIfPresent(AppLanguage.self, forKey: .appLanguage)) ?? .english
+        modelSettings = (try? c.decodeIfPresent([String: ModelSettings].self, forKey: .modelSettings)) ?? [:]
+        modelSettingsMigrated = (try? c.decodeIfPresent(Bool.self, forKey: .modelSettingsMigrated)) ?? false
+        searxngServers = (try? c.decodeIfPresent([SearXNGServer].self, forKey: .searxngServers)) ?? []
+        activeSearXNGServerID = try? c.decodeIfPresent(UUID.self, forKey: .activeSearXNGServerID)
+        connectionWatchEnabled = (try? c.decodeIfPresent(Bool.self, forKey: .connectionWatchEnabled)) ?? true
+        connectionWatchSystemNotices = (try? c.decodeIfPresent(Bool.self, forKey: .connectionWatchSystemNotices)) ?? true
         pythonInternetEnabled = try c.decodeIfPresent(Bool.self, forKey: .pythonInternetEnabled) ?? true
         pythonMaxDownloadsPerRun = min(50, max(1, try c.decodeIfPresent(Int.self, forKey: .pythonMaxDownloadsPerRun) ?? 10))
         pythonDownloadTypes = (try? c.decodeIfPresent([String].self, forKey: .pythonDownloadTypes))
@@ -361,7 +383,6 @@ struct PersistedSettings: Codable {
         try c.encode(toolStates, forKey: .toolStates)
         try c.encode(autoLabelingEnabled, forKey: .autoLabelingEnabled)
         try c.encode(autoImageToTextEnabled, forKey: .autoImageToTextEnabled)
-        try c.encode(isSemanticSearchEnabled, forKey: .isSemanticSearchEnabled)
         try c.encode(imageExtractionDetail, forKey: .imageExtractionDetail)
         try c.encode(extractImagesFromPDF, forKey: .extractImagesFromPDF)
         try c.encode(appTheme, forKey: .appTheme)
@@ -383,6 +404,15 @@ struct PersistedSettings: Codable {
         try c.encode(quizDifficulty, forKey: .quizDifficulty)
         try c.encode(pythonDownloadMaxMB, forKey: .pythonDownloadMaxMB)
         try c.encode(downloadAllowedDomains, forKey: .downloadAllowedDomains)
+        try c.encode(htmlLibraryDomains, forKey: .htmlLibraryDomains)
+        try c.encode(appearance, forKey: .appearance)
+        try c.encode(appLanguage, forKey: .appLanguage)
+        try c.encode(modelSettings, forKey: .modelSettings)
+        try c.encode(modelSettingsMigrated, forKey: .modelSettingsMigrated)
+        try c.encode(searxngServers, forKey: .searxngServers)
+        try c.encodeIfPresent(activeSearXNGServerID, forKey: .activeSearXNGServerID)
+        try c.encode(connectionWatchEnabled, forKey: .connectionWatchEnabled)
+        try c.encode(connectionWatchSystemNotices, forKey: .connectionWatchSystemNotices)
         try c.encode(pythonInternetEnabled, forKey: .pythonInternetEnabled)
         try c.encode(pythonMaxDownloadsPerRun, forKey: .pythonMaxDownloadsPerRun)
         try c.encode(pythonDownloadTypes.map(\.rawValue), forKey: .pythonDownloadTypes)

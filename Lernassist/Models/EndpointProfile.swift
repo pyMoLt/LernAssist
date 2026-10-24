@@ -12,21 +12,21 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
 
     var displayName: String {
         switch self {
-        case .openAICompatible: return "OpenAI-kompatibel"
-        case .lmStudioNative:   return "LM Studio Native (/api/v0)"
-        case .ollama:           return "Ollama (/api/chat)"
-        case .mlx:              return "MLX (Apple Silicon)"
-        case .omlx:             return "oMLX"
+        case .openAICompatible: return L("OpenAI-kompatibel")
+        case .lmStudioNative:   return L("LM Studio Native (/api/v0)")
+        case .ollama:           return L("Ollama (/api/chat)")
+        case .mlx:              return L("MLX (Apple Silicon)")
+        case .omlx:             return L("oMLX")
         }
     }
 
     var shortLabel: String {
         switch self {
-        case .openAICompatible: return "OpenAI-compat"
-        case .lmStudioNative:   return "LM Studio"
-        case .ollama:           return "Ollama"
-        case .mlx:              return "MLX"
-        case .omlx:             return "oMLX"
+        case .openAICompatible: return L("OpenAI-compat")
+        case .lmStudioNative:   return L("LM Studio")
+        case .ollama:           return L("Ollama")
+        case .mlx:              return L("MLX")
+        case .omlx:             return L("oMLX")
         }
     }
 
@@ -63,7 +63,7 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
     var helpText: String {
         switch self {
         case .openAICompatible:
-            return """
+            return L("""
             **OpenAI-kompatibles Format** (POST /v1/chat/completions)
 
             Kompatibel mit:
@@ -78,9 +78,9 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
             Metriken: Token-Counts im letzten Chunk mit stream_options.include_usage=true.
             Groq liefert zusätzlich completion_time für exakte Tok/s-Berechnung.
             TPS wird für andere Provider clientseitig berechnet.
-            """
+            """)
         case .lmStudioNative:
-            return """
+            return L("""
             **LM Studio Native API** (POST /api/v0/chat/completions)
 
             Liefert echte, server-seitige Metriken im stats-Objekt:
@@ -92,9 +92,9 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
 
             Auth: Authorization: Bearer <key> (optional)
             Metriken: stats.tokens_per_second im letzten Chunk.
-            """
+            """)
         case .ollama:
-            return """
+            return L("""
             **Ollama Native API** (POST /api/chat)
 
             Format: NDJSON (Newline-Delimited JSON)
@@ -107,9 +107,9 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
 
             Auth: Keine Authentication nötig (Standard).
             Modell-Liste: GET /api/tags
-            """
+            """)
         case .mlx:
-            return """
+            return L("""
             **MLX LM Server** (POST /v1/chat/completions)
 
             OpenAI-kompatible API für Modelle, die mit
@@ -120,9 +120,9 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
             Auth: Keine Authentication nötig.
             Metriken: Standard OpenAI usage-Objekt.
             TPS wird clientseitig berechnet.
-            """
+            """)
         case .omlx:
-            return """
+            return L("""
             **oMLX** (POST /v1/chat/completions, Port 8072)
 
             OpenAI-kompatibler MLX-Server mit Modellverwaltung:
@@ -134,7 +134,7 @@ nonisolated enum EndpointProvider: String, Codable, CaseIterable, Sendable {
             Remote (Tailscale): oMLX muss auf der Tailscale-IP lauschen,
             dann ist ein API-Key Pflicht.
             Metriken: echte Server-Tok/s und TTFT im usage-Objekt.
-            """
+            """)
         }
     }
 }
@@ -150,9 +150,9 @@ nonisolated enum ThinkingMode: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .serverDefault: return "Server-Standard"
-        case .on:            return "An"
-        case .off:           return "Aus"
+        case .serverDefault: return L("Server-Standard")
+        case .on:            return L("An")
+        case .off:           return L("Aus")
         }
     }
 }

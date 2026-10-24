@@ -23,7 +23,7 @@ struct ChatScreenshotPanel: View {
             HStack {
                 Image(systemName: "photo.stack")
                     .foregroundStyle(DS.Ink.accent)
-                Text("Bilder dieses Chats")
+                Text(L("Bilder dieses Chats"))
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
@@ -44,7 +44,7 @@ struct ChatScreenshotPanel: View {
                     Image(systemName: "photo")
                         .font(.system(size: 40))
                         .foregroundStyle(.secondary)
-                    Text("Noch keine Screenshots in diesem Chat vorhanden.")
+                    Text(L("Noch keine Screenshots in diesem Chat vorhanden."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 8)
@@ -88,7 +88,7 @@ private struct ChatImageCell: View {
                 Circle()
                     .fill(message.imageDescription != nil ? Color.green : Color.orange)
                     .frame(width: 8, height: 8)
-                Text(message.imageDescription != nil ? "Beschrieben" : "Noch nicht verarbeitet")
+                Text(message.imageDescription != nil ? L("Beschrieben") : L("Noch nicht verarbeitet"))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -100,12 +100,12 @@ private struct ChatImageCell: View {
                 Button(action: { Task { await copyImage() } }) {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Bild kopieren")
+                .help(L("Bild kopieren"))
 
                 Button(action: { Task { await askQuestion() } }) {
                     Image(systemName: "questionmark.bubble")
                 }
-                .help("Rückfrage stellen")
+                .help(L("Rückfrage stellen"))
             }
             .buttonStyle(.plain)
             .font(.caption)

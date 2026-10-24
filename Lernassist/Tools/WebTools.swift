@@ -4,12 +4,17 @@ import Foundation
 struct ResearchToolConfiguration {
     var settings = ResearchSettings()
     var searxngURL = ""
+    /// Anmeldung am Such-Server (z. B. `Authorization: Bearer …`).
+    var searxngHeaders: [String: String] = [:]
     var reranker: Reranker?
     var exaAPIKey = ""
+    var braveAPIKey = ""
     var maxBrowseCharacters = 10_000
 
     func pipeline() -> WebResearchPipeline {
-        WebResearchPipeline(settings: settings, searxngURL: searxngURL, reranker: reranker, exaAPIKey: exaAPIKey)
+        var pipeline = WebResearchPipeline(settings: settings, searxngURL: searxngURL, reranker: reranker, exaAPIKey: exaAPIKey, braveAPIKey: braveAPIKey)
+        pipeline.searxngHeaders = searxngHeaders
+        return pipeline
     }
 }
 
@@ -46,12 +51,12 @@ Leitlinien und aktuelle Informationen. Formuliere eine kurze, präzise Suchanfra
 Fachbegriffe). Zitiere die Belege in deiner Antwort mit [W#]. Belege können Abbildungen enthalten \
 ([B#] mit Beschreibung) – hilft eine zur Erklärung, schreibe [B#] allein in eine Zeile, und zwar dort, wo du über \
 das Gezeigte sprichst (direkt vor oder nach dem Absatz, auf den sich das Bild bezieht); die App zeigt es dort an. \
-Nicht nutzen für einfache Rechnungen oder Dinge, die du sicher weißt.
+Nicht nutzen für einfache Rechnungen oder Dinge, die du sicher weißt. Führe keine redundanten Folgesuchen durch, sobald die benötigten Fakten vorliegen.
 """
     let parameters: [String: Any] = [
         "type": "object",
         "properties": [
-            "query": ["type": "string", "description": "Kurze Suchanfrage mit Fachbegriffen, z. B. „Citratzyklus Regulation Enzyme“"]
+            "query": ["type": "string", "description": "Kurze Suchanfrage mit Fachbegriffen, z. B. „Fast Fourier Transform Algorithmus“ oder „Citratzyklus Regulation“"]
         ],
         "required": ["query"]
     ]
@@ -70,14 +75,20 @@ Nicht nutzen für einfache Rechnungen oder Dinge, die du sicher weißt.
             return .failure("Fehler: Ungültige Tool-Argumente – erwartet: {\"query\": \"...\"}.")
         }
         let result = await configuration.pipeline().run(query)
+        let status: [ToolArtifact] = (result.statuses.isEmpty ? [] : [.researchStatus(result.statuses)])
+            + (result.phases.isEmpty ? [] : [.researchPhases(result.phases)])
         if result.passages.isEmpty, result.consultedSources.isEmpty || result.notes.count >= result.consultedSources.count {
-            // Alle Quellen fehlgeschlagen (nicht: „nichts gefunden“) → als Fehler melden.
+            // Alle Quellen fehlgeschlagen (nicht: „nichts gefunden“) → als Fehler melden. Kein
+            // automatisches Wiederholen mehr (Version 4.0): Ausgefallene und begrenzte Quellen
+            // pausiert der Quellen-Zustand, ein sofortiger zweiter Versuch träfe sie wieder.
             let detail = result.notes.isEmpty ? "Keine Quelle aktiviert oder erreichbar." : result.notes.joined(separator: "\n")
-            return .failure("Suche fehlgeschlagen:\n\(detail)", kind: .transient)
+            var failure = ToolResult.failure("Suche fehlgeschlagen:\n\(detail)")
+            failure.artifacts = status
+            return failure
         }
         return ToolResult(content: ToolPromptHelpers.externalContent(result.modelText),
                           source: result.passages.first?.url,
-                          artifacts: result.images.isEmpty ? [] : [.researchImages(result.images)])
+                          artifacts: (result.images.isEmpty ? [] : [.researchImages(result.images)]) + status)
     }
 }
 

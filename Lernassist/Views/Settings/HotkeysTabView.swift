@@ -11,10 +11,10 @@ struct HotkeysTabView: View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
             settingsSection(
                 icon: "keyboard.fill",
-                title: "Globale Tastenkürzel",
+                title: L("Globale Tastenkürzel"),
                 tint: DS.Accent.rose,
                 trailing: {
-                    Button("Auf Standard zurücksetzen") {
+                    Button(L("Auf Standard zurücksetzen")) {
                         for action in HotkeyAction.allCases {
                             if let def = Hotkey.defaultMap[action] {
                                 viewModel.updateHotkey(def, for: action)
@@ -25,7 +25,7 @@ struct HotkeysTabView: View {
                 }
             ) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
-                    Text("Klicke auf ein Kürzel-Feld und drücke die gewünschte Tastenkombination (mindestens ⌘, ⌥ oder ⌃).")
+                    Text(L("Klicke auf ein Kürzel-Feld und drücke die gewünschte Tastenkombination (mindestens ⌘, ⌥ oder ⌃)."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.bottom, 4)
@@ -69,7 +69,7 @@ private struct HotkeyRow: View {
             }
 
             if let collidingActionName {
-                Text("⚠️ Kollidiert mit „\(collidingActionName)“ – nur eine der beiden Aktionen wird ausgelöst.")
+                Text(L("⚠️ Kollidiert mit „\(collidingActionName)“ – nur eine der beiden Aktionen wird ausgelöst."))
                     .font(.caption2)
                     .foregroundStyle(DS.Accent.amber)
             }
@@ -138,7 +138,7 @@ final class HotkeyTextField: NSTextField {
 
     private func startRecording() {
         isRecording = true
-        stringValue = "Taste drücken…"
+        stringValue = L("Taste drücken…")
         layer?.borderColor = NSColor.controlAccentColor.cgColor
         layer?.borderWidth = 2
         window?.makeFirstResponder(self)
@@ -192,7 +192,7 @@ final class HotkeyTextField: NSTextField {
 
     func update(hotkey: Hotkey) {
         if hotkey.keyCode < 0 || hotkey.modifiers == 0 {
-            stringValue = "Nicht belegt"
+            stringValue = L("Nicht belegt")
             textColor = .secondaryLabelColor
         } else {
             stringValue = hotkey.displayString

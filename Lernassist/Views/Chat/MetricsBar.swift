@@ -37,12 +37,12 @@ struct MetricsBar: View {
                     } else {
                         switch viewModel.lmStudioStatus {
                         case .loading(let m):
-                            Text("Lade \(shortModelName(m))…")
+                            Text(L("Lade \(shortModelName(m))…"))
                                 .font(.system(size: 11, weight: .medium, design: .rounded))
                                 .foregroundStyle(DS.Accent.amber)
                                 .lineLimit(1)
                         case .unreachable:
-                            Text("Server offline")
+                            Text(L("Server offline"))
                                 .font(.system(size: 11, weight: .medium, design: .rounded))
                                 .foregroundStyle(DS.Accent.rose)
                         case .loaded, .idle:
@@ -55,8 +55,8 @@ struct MetricsBar: View {
             }
         }
         .buttonStyle(.plain)
-        .help("Live-Telemetrie (Prompt Processing & Token Speed) sowie Schnell-Modellauswahl")
-        .accessibilityLabel("Telemetrie und Modell: \(viewModel.activeProfile?.model ?? "kein Modell")")
+        .help(L("Live-Telemetrie (Prompt Processing & Token Speed) sowie Schnell-Modellauswahl"))
+        .accessibilityLabel(L("Telemetrie und Modell: \(viewModel.activeProfile?.model ?? L("kein Modell"))"))
         .popover(isPresented: $showDetails, arrowEdge: .bottom) {
             detailPopover(metrics: metrics)
         }
@@ -78,7 +78,7 @@ struct MetricsBar: View {
         } else if metrics.isPrefilling && isStreaming {
             // Phase 1: Prompt Processing (Prefill) läuft
             HStack(spacing: 6) {
-                Text("Prefill")
+                Text(L("Prefill"))
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(DS.Accent.amber)
                 if metrics.promptTokens > 0 {
@@ -105,11 +105,11 @@ struct MetricsBar: View {
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                     }
                     .foregroundStyle(DS.Accent.amber)
-                    .help(String(format: "Prompt Processing: %.0f tok/s", prefill))
+                    .help(String(format: L("Prompt Processing: %.0f tok/s"), prefill))
                 }
 
                 if let tps = metrics.tokensPerSecond {
-                    Text(String(format: "%.1f tok/s", tps))
+                    Text(String(format: L("%.1f tok/s"), tps))
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(tpsColor(tps))
                 }
@@ -163,7 +163,7 @@ struct MetricsBar: View {
     private func compactTelemetry(metrics: ChatMetrics, isStreaming: Bool) -> some View {
         HStack(spacing: 6) {
             if metrics.isPrefilling && isStreaming {
-                Text("Prefill")
+                Text(L("Prefill"))
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(DS.Accent.amber)
             } else {
@@ -173,13 +173,13 @@ struct MetricsBar: View {
                         Text(String(format: "%.0f", prefill)).font(.system(size: 10, weight: .medium, design: .monospaced))
                     }
                     .foregroundStyle(DS.Accent.amber)
-                    .help(String(format: "Prompt Processing: %.0f tok/s", prefill))
+                    .help(String(format: L("Prompt Processing: %.0f tok/s"), prefill))
                 }
                 if let tps = metrics.tokensPerSecond {
-                    Text(String(format: "%.0f tok/s", tps))
+                    Text(String(format: L("%.0f tok/s"), tps))
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(tpsColor(tps))
-                        .help(String(format: "Token Speed: %.1f tok/s", tps))
+                        .help(String(format: L("Token Speed: %.1f tok/s"), tps))
                 }
             }
         }
@@ -243,13 +243,13 @@ struct MetricsBar: View {
             // 3. Großer mitlaufender Sparkline-Graph
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label("Token-Speed (live)", systemImage: "waveform.path.ecg")
+                    Label(L("Token-Speed (live)"), systemImage: "waveform.path.ecg")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
                     if let maxTps = metrics.tpsHistory.max(), let minTps = metrics.tpsHistory.min(), !metrics.tpsHistory.isEmpty {
-                        Text(String(format: "Min %.0f · Peak %.0f tok/s", minTps, maxTps))
+                        Text(String(format: L("Min %.0f · Peak %.0f tok/s"), minTps, maxTps))
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -283,11 +283,11 @@ struct MetricsBar: View {
     private var popoverModelSwitcherHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Live-Telemetrie & Modell", systemImage: "gauge.with.dots.needle.67percent")
+                Label(L("Live-Telemetrie & Modell"), systemImage: "gauge.with.dots.needle.67percent")
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                 Spacer()
                 if viewModel.isUsingFallback {
-                    Text("Fallback aktiv")
+                    Text(L("Fallback aktiv"))
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(DS.Accent.amber)
                         .padding(.horizontal, 6)
@@ -326,7 +326,7 @@ struct MetricsBar: View {
                                 Image(systemName: "server.rack")
                                     .font(.system(size: 10))
                                     .foregroundStyle(DS.Accent.brand)
-                                Text(viewModel.activeProfile?.name ?? "Profil")
+                                Text(viewModel.activeProfile?.name ?? L("Profil"))
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
                                     .lineLimit(1)
                                 Image(systemName: "chevron.up.chevron.down")
@@ -349,7 +349,7 @@ struct MetricsBar: View {
 
                         Menu {
                             if models.isEmpty {
-                                Text("Keine Modell-Liste geladen")
+                                Text(L("Keine Modell-Liste geladen"))
                             } else {
                                 ForEach(models, id: \.id) { m in
                                     Button {
@@ -409,7 +409,7 @@ struct MetricsBar: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .help("Verfügbare Modelle vom Server aktualisieren")
+                        .help(L("Verfügbare Modelle vom Server aktualisieren"))
                     }
                 }
             }
@@ -420,7 +420,7 @@ struct MetricsBar: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Circle().fill(DS.Accent.amber).frame(width: 6, height: 6)
-                Text("PROMPT PROCESSING")
+                Text(L("PROMPT PROCESSING"))
                     .font(.system(size: 9.5, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
             }
@@ -434,7 +434,7 @@ struct MetricsBar: View {
                     Text(String(format: "%.0f", prefillTps))
                         .font(.system(size: 17, weight: .bold, design: .monospaced))
                         .foregroundStyle(DS.Accent.amber)
-                    Text("tok/s")
+                    Text(L("tok/s"))
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -445,7 +445,7 @@ struct MetricsBar: View {
             }
 
             HStack {
-                Text("1. Token (TTFT)")
+                Text(L("1. Token (TTFT)"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -454,7 +454,7 @@ struct MetricsBar: View {
             }
 
             HStack {
-                Text("Prompt-Tokens")
+                Text(L("Prompt-Tokens"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -479,7 +479,7 @@ struct MetricsBar: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Circle().fill(color).frame(width: 6, height: 6)
-                Text("TOKEN SPEED")
+                Text(L("TOKEN SPEED"))
                     .font(.system(size: 9.5, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
             }
@@ -489,7 +489,7 @@ struct MetricsBar: View {
                     Text(String(format: "%.1f", tps))
                         .font(.system(size: 17, weight: .bold, design: .monospaced))
                         .foregroundStyle(color)
-                    Text("tok/s")
+                    Text(L("tok/s"))
                         .font(.system(size: 10.5, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
@@ -500,7 +500,7 @@ struct MetricsBar: View {
             }
 
             HStack {
-                Text("Output-Tokens")
+                Text(L("Output-Tokens"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -509,11 +509,11 @@ struct MetricsBar: View {
             }
 
             HStack {
-                Text("Gesamtdauer")
+                Text(L("Gesamtdauer"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(metrics.totalDuration.map { String(format: "%.1f s", $0) } ?? (viewModel.isStreaming ? "läuft…" : "—"))
+                Text(metrics.totalDuration.map { String(format: "%.1f s", $0) } ?? (viewModel.isStreaming ? L("läuft…") : "—"))
                     .font(.system(size: 10.5, weight: .medium, design: .monospaced))
             }
         }
@@ -536,11 +536,11 @@ struct MetricsBar: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Kontext-Auslastung")
+                Text(L("Kontext-Auslastung"))
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("\(metrics.totalTokens) / \(cSize) Tokens (\(Int(fill * 100))%)")
+                Text(L("\(metrics.totalTokens) / \(cSize) Tokens (\(Int(fill * 100))%)"))
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(fill > 0.85 ? DS.Accent.rose : .primary)
             }
@@ -553,7 +553,7 @@ struct MetricsBar: View {
                             LinearGradient(
                                 colors: fill > 0.85
                                     ? [DS.Accent.amber, DS.Accent.rose]
-                                    : [DS.Accent.brandLight, DS.Accent.cyan],
+                                    : [Theme.companion(Theme.current.accent), DS.Accent.cyan],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
@@ -565,11 +565,11 @@ struct MetricsBar: View {
 
             if metrics.cachedTokens > 0 {
                 HStack {
-                    Label("KV-Cache Treffer", systemImage: "memorychip")
+                    Label(L("KV-Cache Treffer"), systemImage: "memorychip")
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("\(metrics.cachedTokens) Tokens (\(Int(metrics.cacheHitRate * 100))%)")
+                    Text(L("\(metrics.cachedTokens) Tokens (\(Int(metrics.cacheHitRate * 100))%)"))
                         .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(DS.Accent.emerald)
                 }

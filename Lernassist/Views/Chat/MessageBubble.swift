@@ -14,7 +14,8 @@ struct MessageBubble: View, Equatable {
         lhs.isStreaming == rhs.isStreaming &&
         lhs.isContinuation == rhs.isContinuation &&
         lhs.embedded == rhs.embedded &&
-        lhs.fontScale == rhs.fontScale
+        lhs.fontScale == rhs.fontScale &&
+        lhs.canRegenerate == rhs.canRegenerate
     }
     let message: ChatMessage
     /// Referenz auf den ChatViewModel (nur für das InlineExplainPopover; bewusst kein
@@ -31,6 +32,10 @@ struct MessageBubble: View, Equatable {
     /// sein, sonst überspringt SwiftUIs Diffing die Neuberechnung bei einer reinen Größenänderung,
     /// wenn sich sonst nichts an der Nachricht geändert hat.
     var fontScale: Double = 1.0
+    /// Letzte Antwort im Chat: „Neu generieren“ anbieten (Teil der Gleichheit, damit die Aktion
+    /// beim nächsten Austausch von der alten Antwort verschwindet).
+    var canRegenerate = false
+    var onRegenerate: (() -> Void)? = nil
     /// Optional: Callback für "Andere Erklärung"-Button (nur Assistent-Nachrichten)
     var onExplainDifferently: (() -> Void)? = nil
     /// Optional: Callback für "Confidence Score"-Button
@@ -59,6 +64,8 @@ struct MessageBubble: View, Equatable {
         isContinuation: Bool = false,
         embedded: Bool = false,
         fontScale: Double = 1.0,
+        canRegenerate: Bool = false,
+        onRegenerate: (() -> Void)? = nil,
         onExplainDifferently: (() -> Void)? = nil,
         onCheckConfidence: (() -> Void)? = nil,
         onVerify: (() -> Void)? = nil,
@@ -73,6 +80,8 @@ struct MessageBubble: View, Equatable {
         self.isContinuation = isContinuation
         self.embedded = embedded
         self.fontScale = fontScale
+        self.canRegenerate = canRegenerate
+        self.onRegenerate = onRegenerate
         self.onExplainDifferently = onExplainDifferently
         self.onCheckConfidence = onCheckConfidence
         self.onVerify = onVerify
@@ -85,16 +94,25 @@ struct MessageBubble: View, Equatable {
 
     private var isUser: Bool { message.role == "user" }
     
+    /// Hat die Nachricht sichtbaren Inhalt (Text oder Fallback-Plots dieses Turns)?
+    private var hasRenderableContent: Bool {
+        if embedded {
+            return WorkStep.hasAnswerText(message) || (!isStreaming && !chatViewModel.turnPlots(for: message.id).isEmpty)
+        }
+        return !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (!isStreaming && !chatViewModel.turnPlots(for: message.id).isEmpty)
+    }
+
     /// Verhindert das Anzeigen von komplett leeren "Geister-Bubbles"
     private var isCompletelyEmpty: Bool {
         if embedded {
-            return !WorkStep.hasAnswerText(message) && message.imageID == nil && message.htmlArtifact == nil
+            return !hasRenderableContent && message.imageID == nil && message.htmlArtifact == nil
                 && message.quizCard == nil && message.errorMessage == nil
         }
         // Ein Thought-Prozess ist NIEMALS leer
         if message.thinking != nil { return false }
         if let tools = message.toolCalls, !tools.isEmpty { return false }
-        if !message.content.isEmpty { return false }
+        if hasRenderableContent { return false }
         if message.imageID != nil { return false }
         if message.htmlArtifact != nil { return false }
         if message.quizCard != nil { return false }
@@ -129,7 +147,7 @@ struct MessageBubble: View, Equatable {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Frage im neuen Zweig bearbeiten – der bisherige Chat bleibt erhalten")
+                .help(L("Frage im neuen Zweig bearbeiten – der bisherige Chat bleibt erhalten"))
             }
             VStack(alignment: .trailing, spacing: DS.Space.s) {
                 if let imgID = message.imageID {
@@ -189,7 +207,14 @@ struct MessageBubble: View, Equatable {
 
                 // Tool-Artefakt: interaktives HTML (coding_sandbox), sandboxed direkt gerendert
                 if let html = message.htmlArtifact {
-                    HTMLArtifactView(html: html)
+                    HTMLArtifactView(
+                        html: html,
+                        allowedHosts: message.htmlAllowedHosts ?? [],
+                        isCollapsed: message.artifactCollapsed ?? false,
+                        onToggleCollapse: { chatViewModel.toggleArtifactCollapsed(messageId: message.id) },
+                        fileURL: { chatViewModel.artifactFileURL(for: message) },
+                        heightKey: "artifact-\(message.id)"
+                    )
                 }
 
                 // Tool-Artefakt: interaktive Abfragekarte (quiz_card)
@@ -223,13 +248,13 @@ struct MessageBubble: View, Equatable {
                     // Allererste Phase: noch kein Thinking-Eintrag da, nur Leerzeichen oder nichts
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
-                        Text("Denkt nach...")
+                        Text(L("Denkt nach..."))
                             .font(.caption).foregroundStyle(.secondary).italic()
                     }
                 }
 
-                // Hauptinhalt (eingebettet: nur echter Antworttext, Zwischenstand steht in den Schritten)
-                if embedded ? WorkStep.hasAnswerText(message) : !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Hauptinhalt (eingebettet: nur echter Antworttext bzw. Fallback-Plot, Zwischenstand steht in den Schritten)
+                if hasRenderableContent {
                     contentView
 
                     // Quellen-Nachweis
@@ -258,7 +283,7 @@ struct MessageBubble: View, Equatable {
                     // Hat Thinking, Content kommt aber noch
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
-                        Text("Formuliert Antwort...").font(.caption).foregroundStyle(.secondary).italic()
+                        Text(L("Formuliert Antwort...")).font(.caption).foregroundStyle(.secondary).italic()
                     }
                 }
 
@@ -282,7 +307,7 @@ struct MessageBubble: View, Equatable {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(DS.Accent.rose)
-                Text("Antwort fehlgeschlagen")
+                Text(L("Antwort fehlgeschlagen"))
                     .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.primary)
             }
@@ -293,17 +318,17 @@ struct MessageBubble: View, Equatable {
             HStack(spacing: DS.Space.s) {
                 if let retry = onRetryFailed {
                     Button(action: retry) {
-                        Label("Erneut versuchen", systemImage: "arrow.clockwise")
+                        Label(L("Erneut versuchen"), systemImage: "arrow.clockwise")
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.indigo, prominent: true))
-                    .help("Dieselbe Frage nochmal senden – mit frischem Payload")
+                    .help(L("Dieselbe Frage nochmal senden – mit frischem Payload"))
                 }
                 if let rollback = onRollbackFailed {
                     Button(action: rollback) {
-                        Label("Frage bearbeiten", systemImage: "square.and.pencil")
+                        Label(L("Frage bearbeiten"), systemImage: "square.and.pencil")
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.primary))
-                    .help("Antwort und Frage zurücksetzen – der Text landet bearbeitbar im Eingabefeld")
+                    .help(L("Antwort und Frage zurücksetzen – der Text landet bearbeitbar im Eingabefeld"))
                 }
             }
         }
@@ -413,8 +438,8 @@ struct MessageBubble: View, Equatable {
             // ── Kopieren ──────────────────────────────────────────────
             MessageActionItem(
                 icon: didCopy ? "checkmark" : "doc.on.doc",
-                label: didCopy ? "Kopiert" : "Kopieren",
-                help: "Antwort in die Zwischenablage kopieren",
+                label: didCopy ? L("Kopiert") : L("Kopieren"),
+                help: L("Antwort in die Zwischenablage kopieren"),
                 alwaysShowLabel: didCopy,
                 action: {
                     NSPasteboard.general.clearContents()
@@ -426,13 +451,24 @@ struct MessageBubble: View, Equatable {
                 }
             )
 
+            // ── Neu generieren (nur letzte Antwort) ──────────────────
+            if canRegenerate, let regenerate = onRegenerate {
+                MessageActionDivider()
+                MessageActionItem(
+                    icon: "arrow.clockwise",
+                    label: L("Neu generieren"),
+                    help: L("Diese Antwort verwerfen und zur selben Frage neu erzeugen lassen"),
+                    action: regenerate
+                )
+            }
+
             // ── Als Karte merken ─────────────────────────────────────
             if !embeddedQuizOnly {
                 MessageActionDivider()
                 MessageActionItem(
                     icon: "rectangle.on.rectangle.angled",
-                    label: "Als Karte merken",
-                    help: "Diese Erklärung zu 1–3 Karteikarten verdichten (Panel „Karten“ → Wiederholen)",
+                    label: L("Als Karte merken"),
+                    help: L("Diese Erklärung zu 1–3 Karteikarten verdichten (Panel „Karten“ → Wiederholen)"),
                     action: { chatViewModel.rememberAsFlashcards(messageId: message.id) }
                 )
             }
@@ -442,8 +478,8 @@ struct MessageBubble: View, Equatable {
                 MessageActionDivider()
                 MessageActionItem(
                     icon: "arrow.triangle.2.circlepath",
-                    label: "Andere Erklärung",
-                    help: "Erkläre mit anderer Analogie oder einem anderen Beispiel",
+                    label: L("Andere Erklärung"),
+                    help: L("Erkläre mit anderer Analogie oder einem anderen Beispiel"),
                     action: explain
                 )
             }
@@ -453,8 +489,8 @@ struct MessageBubble: View, Equatable {
                 MessageActionDivider()
                 MessageActionItem(
                     icon: "gauge.with.needle",
-                    label: "Wie sicher?",
-                    help: "KI nach Konfidenz und möglichen Unsicherheiten in der Antwort fragen",
+                    label: L("Wie sicher?"),
+                    help: L("KI nach Konfidenz und möglichen Unsicherheiten in der Antwort fragen"),
                     action: confidence
                 )
             }
@@ -464,8 +500,8 @@ struct MessageBubble: View, Equatable {
                 MessageActionDivider()
                 MessageActionItem(
                     icon: "checkmark.seal",
-                    label: "Verifizieren",
-                    help: "Zwingt das Modell, die Aussage per Websuche zu überprüfen",
+                    label: L("Verifizieren"),
+                    help: L("Zwingt das Modell, die Aussage per Websuche zu überprüfen"),
                     action: verify
                 )
             }
@@ -475,8 +511,8 @@ struct MessageBubble: View, Equatable {
                 MessageActionDivider()
                 MessageActionItem(
                     icon: "arrow.triangle.branch",
-                    label: "Abzweigen",
-                    help: "Ab hier einen eigenen Chat-Zweig starten – die Historie bis zu dieser Antwort wird kopiert",
+                    label: L("Abzweigen"),
+                    help: L("Ab hier einen eigenen Chat-Zweig starten – die Historie bis zu dieser Antwort wird kopiert"),
                     action: branch
                 )
             }
@@ -485,12 +521,12 @@ struct MessageBubble: View, Equatable {
             MessageActionDivider()
             MessageShareActionItem(
                 text: message.content,
-                help: "Antwort über das System-Menü teilen (Mail, Notizen, AirDrop …)"
+                help: L("Antwort über das System-Menü teilen (Mail, Notizen, AirDrop …)")
             )
 
             // ── Exportieren (PDF/Markdown, z. B. Lernzettel aus /summary) ──
             MessageActionDivider()
-            MessageExportActionItem(text: message.content)
+            MessageExportActionItem(text: renderedMarkdown, rawMarkdown: message.content)
         }
         .padding(.horizontal, 5)
         .padding(.vertical, 3)
@@ -501,14 +537,26 @@ struct MessageBubble: View, Equatable {
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    private var renderedMarkdown: String {
+        ChatViewModel.linkCitations(
+            in: ChatViewModel.embedResearchImages(
+                in: ChatViewModel.applyingDisplayFixes(message.content, message.displayFixes),
+                images: chatViewModel.researchImages(for: message.id),
+                turnPlots: chatViewModel.turnPlots(for: message.id)
+            ),
+            links: chatViewModel.citationLinks(for: message.id)
+        )
+    }
+
     // Hauptinhalt
     @ViewBuilder
     private var contentView: some View {
-        MarkdownView(markdown: ChatViewModel.linkCitations(
-                        in: ChatViewModel.embedResearchImages(in: message.content,
-                                                             images: chatViewModel.researchImages(for: message.id)),
-                        links: chatViewModel.citationLinks(for: message.id)),
-                     fontScale: fontScale) { text in
+        MarkdownView(markdown: renderedMarkdown,
+                     fontScale: fontScale,
+                     heightKey: "\(message.id)-\(fontScale)",
+                     onRepairDiagram: { source, error in
+                         chatViewModel.repairDiagram(messageId: message.id, source: source, error: error)
+                     }) { text in
             self.selectedExplanation = ExplanationRequest(text: text)
         }
             // Antworten als ruhiger Fließtext ohne Kasten (Phase 6): Inhalt bleibt opak und
@@ -529,7 +577,43 @@ private struct MessageActionDivider: View {
     }
 }
 
-/// Kompakter Symbol-Knopf; die Beschriftung gleitet erst beim Überfahren hinein.
+/// Beschriftung eines Symbol-Knopfs als kleine Blase über (oder, nahe am oberen Fensterrand,
+/// unter) dem Knopf. Sie schwebt über allem und schiebt die Leiste nicht – die Knöpfe bleiben
+/// beim Entlangfahren an ihrem Platz.
+private struct ActionHoverLabel: ViewModifier {
+    let text: String?
+    let isShown: Bool
+    /// Abstand zum oberen Fensterrand; darunter ist kein Platz für die Blase nach oben.
+    @State private var topInWindow: CGFloat = .infinity
+    private static let minRoomAbove: CGFloat = 90
+
+    func body(content: Content) -> some View {
+        let below = topInWindow < Self.minRoomAbove
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { topInWindow = $0 }
+            .overlay(alignment: below ? .bottom : .top) {
+                if let text, isShown {
+                    Text(text)
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .foregroundStyle(Color.primary.opacity(0.88))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(DS.Surface.pill)
+                            .shadow(color: .black.opacity(0.14), radius: 6, y: 2))
+                        .overlay(Capsule().stroke(DS.Ink.hairline, lineWidth: 0.75))
+                        .alignmentGuide(below ? .bottom : .top) { d in below ? d[.top] - 5 : d[.bottom] + 5 }
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
+            }
+            .zIndex(isShown ? 1 : 0)
+    }
+}
+
+/// Kompakter Symbol-Knopf; der Name erscheint beim Überfahren als Blase (`ActionHoverLabel`).
 private struct MessageActionItem: View {
     let icon: String
     let label: String?
@@ -540,17 +624,9 @@ private struct MessageActionItem: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 9.5, weight: .medium))
-                if let label, isHovered || alwaysShowLabel {
-                    Text(label)
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: icon)
+                .font(.system(size: 9.5, weight: .medium))
+                .frame(minWidth: 12)
             .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
             .padding(.horizontal, 6)
             .padding(.vertical, 3.5)
@@ -561,7 +637,8 @@ private struct MessageActionItem: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
+        .modifier(ActionHoverLabel(text: label, isShown: isHovered || alwaysShowLabel))
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
         .help(help)
         .accessibilityLabel(label ?? help)
     }
@@ -570,24 +647,17 @@ private struct MessageActionItem: View {
 /// Exportiert die Antwort als PDF (wie im Chat gerendert) oder Markdown.
 private struct MessageExportActionItem: View {
     let text: String
+    var rawMarkdown: String? = nil
     @State private var isHovered = false
 
     var body: some View {
         Menu {
-            Button("Als PDF sichern …") { StudySheetExporter.shared.exportPDF(text, suggestedName: StudySheetExporter.fileName(from: text)) }
-            Button("Als Markdown sichern …") { StudySheetExporter.shared.exportMarkdown(text, suggestedName: StudySheetExporter.fileName(from: text)) }
+            Button(L("Als PDF sichern …")) { StudySheetExporter.shared.exportPDF(text, suggestedName: StudySheetExporter.fileName(from: rawMarkdown ?? text)) }
+            Button(L("Als Markdown sichern …")) { StudySheetExporter.shared.exportMarkdown(rawMarkdown ?? text, suggestedName: StudySheetExporter.fileName(from: rawMarkdown ?? text)) }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.down.doc")
-                    .font(.system(size: 9.5, weight: .medium))
-                if isHovered {
-                    Text("Exportieren")
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "arrow.down.doc")
+                .font(.system(size: 9.5, weight: .medium))
+                .frame(minWidth: 12)
             .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
             .padding(.horizontal, 6)
             .padding(.vertical, 3.5)
@@ -598,9 +668,10 @@ private struct MessageExportActionItem: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
-        .help("Antwort als PDF oder Markdown sichern (z. B. Lernzettel aus /summary)")
-        .accessibilityLabel("Exportieren")
+        .modifier(ActionHoverLabel(text: L("Exportieren"), isShown: isHovered))
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
+        .help(L("Antwort als PDF oder Markdown sichern (z. B. Lernzettel aus /summary)"))
+        .accessibilityLabel(L("Exportieren"))
     }
 }
 
@@ -618,17 +689,9 @@ private struct MessageShareActionItem: View {
                 picker.show(relativeTo: rect, of: contentView, preferredEdge: .minY)
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 9.5, weight: .medium))
-                if isHovered {
-                    Text("Teilen")
-                        .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                        .lineLimit(1)
-                        .transition(.opacity.combined(with: .move(edge: .leading)))
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 9.5, weight: .medium))
+                .frame(minWidth: 12)
             .foregroundStyle(isHovered ? Color.primary.opacity(0.88) : Color.secondary.opacity(0.75))
             .padding(.horizontal, 6)
             .padding(.vertical, 3.5)
@@ -639,9 +702,10 @@ private struct MessageShareActionItem: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in withAnimation(.easeOut(duration: 0.15)) { isHovered = hovering } }
+        .modifier(ActionHoverLabel(text: L("Teilen"), isShown: isHovered))
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
         .help(help)
-        .accessibilityLabel("Teilen")
+        .accessibilityLabel(L("Teilen"))
     }
 }
 

@@ -44,10 +44,10 @@ final class ToolRegistry {
         guard !names.isEmpty else { return "" }
         var rules = ["Nutze Tools nur, wenn sie wirklich helfen – einfache Fragen beantwortest du direkt."]
         if names.contains("web_search") {
-            rules.append("Bei Fakten, Zahlen, Leitlinien oder Aktuellem, bei denen du unsicher bist: `web_search`. Zitiere [W#] nur für Belege, die dir `web_search` in diesem Gespräch tatsächlich geliefert hat – ohne Suche keine [W#]-Angaben, und erfinde keine Quellen.")
+            rules.append("Bei Fakten, Zahlen, Leitlinien oder Aktuellem, bei denen du unsicher bist: `web_search` (führe keine redundanten Folgesuchen durch, sobald die benötigten Fakten vorliegen). Zitiere [W#] nur für Belege, die dir `web_search` in diesem Gespräch tatsächlich geliefert hat – ohne Suche keine [W#]-Angaben, und erfinde keine Quellen.")
         }
         if names.contains("coding_sandbox") {
-            rules.append("Geht es um Datenauswertung, Berechnungen, Grafiken oder interaktive Darstellungen, führe Code mit `coding_sandbox` aus, statt ihn nur in den Chat zu schreiben – Python oder HTML, je nachdem was passt (typisch: Python für Daten und Plots, HTML/JS für Interaktives und Simulationen). Geht es um den Code selbst (erklären, besprechen, üben), schreibe ihn in den Chat.")
+            rules.append("Geht es um Datenauswertung, Berechnungen, Grafiken oder interaktive Darstellungen, führe Code mit `coding_sandbox` aus, statt ihn nur in den Chat zu schreiben – Python oder HTML, je nachdem was passt (typisch: Python für Daten und Plots, HTML/JS für Interaktives und Simulationen). Erzeugte oder gelieferte Grafiken erhalten eine `[B#]`-Nummer und werden mit `[B#]` in einer eigenen Zeile eingebunden. Geht es um den Code selbst (erklären, besprechen, üben), schreibe ihn in den Chat.")
         }
         if names.contains("recall_screenshot") {
             rules.append("Musst du eine frühere Folie genau ansehen, hole sie mit `recall_screenshot`.")
@@ -75,6 +75,12 @@ final class ToolRegistry {
     func execute(name: String, arguments: String, sessionID: String?) async -> ToolResult {
         guard let tool = tool(named: name), tool.isEnabled else {
             return .failure("Tool '\(name)' ist nicht verfügbar oder deaktiviert.")
+        }
+        // Ungültiges JSON kleiner Modelle (Python-Literale, Kommas am Ende, abgeschnitten …) reparieren.
+        var arguments = arguments
+        if !ToolArgumentRepair.isValid(arguments), let repaired = ToolArgumentRepair.repair(arguments) {
+            AppLog.tools.info("Tool '\(name)': Argumente repariert")
+            arguments = repaired
         }
         var result = await tool.run(arguments: arguments, sessionID: sessionID)
         var attempt = 1

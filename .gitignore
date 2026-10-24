@@ -27,3 +27,4 @@ backups/
 *.log
 *.sb
 *.profraw
+__pycache__/

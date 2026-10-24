@@ -30,7 +30,8 @@ class NativeWindowManager {
     ///   - view: Die SwiftUI-View, die als Fensterinhalt dienen soll.
     ///   - title: Der Titel des Fensters.
     ///   - initialSize: Die Startgröße des Fensters.
-    static func openWindow<V: View>(for view: V, title: String, initialSize: CGSize = CGSize(width: 800, height: 600)) {
+    static func openWindow<V: View>(for view: V, title: String, initialSize: CGSize = CGSize(width: 800, height: 600),
+                                    fullScreen: Bool = false) {
         let hostingController = NSHostingController(rootView: view)
         
         let window = NSWindow(
@@ -48,6 +49,11 @@ class NativeWindowManager {
         // Unser neues Fenster muss mindestens das gleiche Level haben, 
         // um nicht unsichtbar im Hintergrund zu verschwinden!
         window.level = .popUpMenu
+        // Vollbild (grüner Knopf / Doppelklick auf eine Ausgabe): Fenster dieser Ebene dürfen
+        // nicht in den Vollbildmodus – beim Wechsel auf normale Ebene, das schwebende Hauptpanel
+        // solange ausblenden (es würde sonst über dem Vollbild liegen).
+        window.collectionBehavior = [.fullScreenPrimary]
+        let fullScreenObservers = FullScreenObservers(window: window)
         
         // ARC: Fenster behalten, solange es offen ist
         activeWindows.append(window)
@@ -71,6 +77,7 @@ class NativeWindowManager {
             if let token = box.token {
                 NotificationCenter.default.removeObserver(token)
             }
+            fullScreenObservers.remove()
         }
         
         // Zentriere das Fenster auf dem Bildschirm
@@ -82,6 +89,16 @@ class NativeWindowManager {
         
         // Um sicherzugehen, dass das Fenster auch über der aktuellen App schwebt und nicht im Hintergrund landet
         NSApp.activate(ignoringOtherApps: true)
+
+        if fullScreen {
+            window.level = .normal
+            window.toggleFullScreen(nil)
+        }
+    }
+
+    /// Das schwebende Hauptpanel der App.
+    static var mainPanel: NSWindow? {
+        NSApp.windows.first { ($0 as? NSPanel)?.isFloatingPanel == true && $0.contentView is NSVisualEffectView }
     }
 }
 
@@ -89,4 +106,40 @@ class NativeWindowManager {
 /// Hält den Beobachter-Token, damit der Schließen-Handler ihn nach dem Zuweisen entfernen kann.
 private final class WindowObserverBox: @unchecked Sendable {
     var token: NSObjectProtocol?
+}
+
+/// Wechselt beim Vollbild die Fensterebene und blendet das schwebende Hauptpanel aus.
+private final class FullScreenObservers: @unchecked Sendable {
+    private var tokens: [NSObjectProtocol] = []
+    private var panelWasVisible = false
+
+    @MainActor
+    init(window: NSWindow) {
+        let center = NotificationCenter.default
+        tokens.append(center.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                window?.level = .normal
+                let panel = NativeWindowManager.mainPanel
+                self?.panelWasVisible = panel?.isVisible ?? false
+                panel?.orderOut(nil)
+            }
+        })
+        tokens.append(center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                window?.level = .popUpMenu
+                if self?.panelWasVisible == true { NativeWindowManager.mainPanel?.orderFront(nil) }
+                self?.panelWasVisible = false
+            }
+        })
+        tokens.append(center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if self?.panelWasVisible == true { NativeWindowManager.mainPanel?.orderFront(nil) }
+            }
+        })
+    }
+
+    func remove() {
+        tokens.forEach(NotificationCenter.default.removeObserver)
+        tokens.removeAll()
+    }
 }

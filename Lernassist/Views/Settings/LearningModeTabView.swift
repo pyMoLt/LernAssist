@@ -22,7 +22,7 @@ struct LearningModeTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            settingsSection(icon: "brain.head.profile", title: "Aktiver Lernmodus", tint: DS.Accent.amber) {
+            settingsSection(icon: "brain.head.profile", title: L("Aktiver Lernmodus"), tint: DS.Accent.amber) {
                 VStack(alignment: .leading, spacing: DS.Space.xs) {
                     ForEach(LearningStyle.allCases, id: \.self) { style in
                         let isSelected = viewModel.learningStyle == style
@@ -34,7 +34,7 @@ struct LearningModeTabView: View {
                                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(isSelected ? DS.Ink.accent : .secondary.opacity(0.5))
-                                Text(style.rawValue)
+                                Text(L(dynamic: style.rawValue))
                                     .font(.system(.subheadline, design: .rounded).weight(isSelected ? .semibold : .regular))
                                     .foregroundStyle(DS.Ink.primary)
                                 Spacer()
@@ -51,10 +51,10 @@ struct LearningModeTabView: View {
                 }
             }
 
-            settingsSection(icon: "rectangle.on.rectangle.angled", title: "Karteikarten", tint: DS.Accent.indigo) {
+            settingsSection(icon: "rectangle.on.rectangle.angled", title: L("Karteikarten"), tint: DS.Accent.indigo) {
                 SettingsRow(
-                    title: "Ziel-Behaltensrate",
-                    subtitle: "Wie sicher du dich bei einer Wiederholung erinnern sollst. Höher = häufiger wiederholen.",
+                    title: L("Ziel-Behaltensrate"),
+                    subtitle: L("Wie sicher du dich bei einer Wiederholung erinnern sollst. Höher = häufiger wiederholen."),
                     icon: "target",
                     tint: DS.Accent.indigo
                 ) {
@@ -65,18 +65,18 @@ struct LearningModeTabView: View {
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .frame(width: 40, alignment: .trailing)
                     }
-                    .settingHelp("Wiederholungsplanung nach FSRS-5 (wie Anki). 90 % ist der empfohlene Standard; 85 % spart Zeit, 95 % verdoppelt etwa die Wiederholungen.")
+                    .settingHelp(L("Wiederholungsplanung nach FSRS-5 (wie Anki). 90 % ist der empfohlene Standard; 85 % spart Zeit, 95 % verdoppelt etwa die Wiederholungen."))
                 }
             }
 
-            settingsSection(icon: "dial.medium", title: "Schwierigkeit", tint: DS.Accent.rose) {
+            settingsSection(icon: "dial.medium", title: L("Schwierigkeit"), tint: DS.Accent.rose) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Abfragen im Chat",
+                        title: L("Abfragen im Chat"),
                         subtitle: viewModel.quizDifficulty.quizGuidance,
                         icon: "questionmark.bubble",
                         tint: DS.Accent.rose,
-                        help: "Gilt für Quizkarten im Chat („teste mich“, /quiz). Mit „/quiz 10 schwer Niere“ lässt sich die Stufe für ein einzelnes Quiz überschreiben."
+                        help: L("Gilt für Quizkarten im Chat („teste mich“, /quiz). Mit „/quiz 10 schwer Niere“ lässt sich die Stufe für ein einzelnes Quiz überschreiben.")
                     ) {
                         difficultyMenu(selection: $viewModel.quizDifficulty)
                     }
@@ -84,11 +84,11 @@ struct LearningModeTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Karteikarten",
+                        title: L("Karteikarten"),
                         subtitle: viewModel.flashcardDifficulty.cardGuidance,
                         icon: "rectangle.on.rectangle.angled",
                         tint: DS.Accent.indigo,
-                        help: "Gilt für neu erzeugte Karteikarten („Als Karte merken“ und „Karten erzeugen“). Bestehende Karten bleiben unverändert."
+                        help: L("Gilt für neu erzeugte Karteikarten („Als Karte merken“ und „Karten erzeugen“). Bestehende Karten bleiben unverändert.")
                     ) {
                         difficultyMenu(selection: $viewModel.flashcardDifficulty)
                     }
@@ -96,41 +96,41 @@ struct LearningModeTabView: View {
             }
 
             SettingsDisclosureSection(
-                title: "Erweitert (Karteikarten)",
-                subtitle: "Wiederholungsintervalle nach Fehlschlägen und Karten-Extraktion",
+                title: L("Erweitert (Karteikarten)"),
+                subtitle: L("Wiederholungsintervalle nach Fehlschlägen und Karten-Extraktion"),
                 icon: "slider.horizontal.3",
                 tint: DS.Accent.indigo
             ) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Wiederholung nach „Nochmal“",
-                        subtitle: "Zeitabstand, nach dem eine vergessene Karteikarte erneut abgefragt wird.",
+                        title: L("Wiederholung nach „Nochmal“"),
+                        subtitle: L("Zeitabstand, nach dem eine vergessene Karteikarte erneut abgefragt wird."),
                         icon: "arrow.uturn.backward.circle",
                         tint: DS.Accent.rose,
-                        help: "Pause bis zur erneuten Abfrage einer vergessenen Karte in derselben Sitzung (Lapse, 1–60 min, Standard 10 min)."
+                        help: L("Pause bis zur erneuten Abfrage einer vergessenen Karte in derselben Sitzung (Lapse, 1–60 min, Standard 10 min).")
                     ) {
-                        stepperBadge("\(viewModel.flashcardAgainDelayMinutes) min", value: $viewModel.flashcardAgainDelayMinutes, range: 1...60, step: 1)
+                        stepperBadge(L("\(viewModel.flashcardAgainDelayMinutes) min"), value: $viewModel.flashcardAgainDelayMinutes, range: 1...60, step: 1)
                     }
 
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Karten pro Antwort („Als Karte merken“)",
-                        subtitle: "Wie viele Karten das Modell aus einer Erklärung extrahiert.",
+                        title: L("Karten pro Antwort („Als Karte merken“)"),
+                        subtitle: L("Wie viele Karten das Modell aus einer Erklärung extrahiert."),
                         icon: "rectangle.stack.badge.plus",
                         tint: DS.Accent.indigo,
-                        help: "Obergrenze für generierte Karten bei der Aktion „Als Karte merken“ (1–5 Karten, Standard 3)."
+                        help: L("Obergrenze für generierte Karten bei der Aktion „Als Karte merken“ (1–5 Karten, Standard 3).")
                     ) {
                         stepperBadge("\(viewModel.flashcardCardsPerResponse)", value: $viewModel.flashcardCardsPerResponse, range: 1...5, step: 1)
                     }
                 }
             }
 
-            settingsSection(icon: "text.bubble.fill", title: "System-Prompts anpassen", tint: DS.Accent.indigo) {
+            settingsSection(icon: "text.bubble.fill", title: L("System-Prompts anpassen"), tint: DS.Accent.indigo) {
                 VStack(alignment: .leading, spacing: DS.Space.m) {
                     SettingsRow(
-                        title: "Lernmodus-Prompt bearbeiten",
-                        subtitle: "Wähle den Modus aus, dessen Instruktion unten angepasst werden soll.",
+                        title: L("Lernmodus-Prompt bearbeiten"),
+                        subtitle: L("Wähle den Modus aus, dessen Instruktion unten angepasst werden soll."),
                         icon: selectedPromptStyle.symbol,
                         tint: DS.Accent.indigo
                     ) {
@@ -145,14 +145,14 @@ struct LearningModeTabView: View {
                                     selectedPromptStyle = style
                                 } label: {
                                     if selectedPromptStyle == style {
-                                        Label(style.rawValue, systemImage: "checkmark")
+                                        Label(L(dynamic: style.rawValue), systemImage: "checkmark")
                                     } else {
-                                        Label(style.rawValue, systemImage: style.symbol)
+                                        Label(L(dynamic: style.rawValue), systemImage: style.symbol)
                                     }
                                 }
                             }
                         }
-                        .settingHelp("Bearbeite die Prompts für jeden Lernmodus. Leer lassen = Werkseinstellung.")
+                        .settingHelp(L("Bearbeite die Prompts für jeden Lernmodus. Leer lassen = Werkseinstellung."))
                     }
 
                     TextEditor(text: $promptDraft)
@@ -167,17 +167,17 @@ struct LearningModeTabView: View {
 
                     HStack {
                         if isCustom {
-                            Label("Eigener System-Prompt aktiv", systemImage: "pencil.circle.fill")
+                            Label(L("Eigener System-Prompt aktiv"), systemImage: "pencil.circle.fill")
                                 .font(.caption)
                                 .foregroundStyle(DS.Accent.indigo)
                         } else {
-                            Label("Werkseinstellung aktiv", systemImage: "checkmark.circle.fill")
+                            Label(L("Werkseinstellung aktiv"), systemImage: "checkmark.circle.fill")
                                 .font(.caption)
                                 .foregroundStyle(DS.Accent.emerald)
                         }
                         Spacer()
                         if isCustom {
-                            Button("Auf Standard zurücksetzen") {
+                            Button(L("Auf Standard zurücksetzen")) {
                                 viewModel.customPrompts.removeValue(forKey: selectedPromptStyle.rawValue)
                                 promptDraft = selectedPromptStyle.defaultPrompt
                             }

@@ -27,11 +27,11 @@ struct ScreenshotMarkupView: View {
         }
         var label: String {
             switch self {
-            case .crop: return "Ausschnitt wählen (nur dieser Bereich wird gesendet)"
-            case .pen: return "Stift"
-            case .rectangle: return "Rechteck"
-            case .arrow: return "Pfeil"
-            case .ellipse: return "Kreis"
+            case .crop: return L("Ausschnitt wählen (nur dieser Bereich wird gesendet)")
+            case .pen: return L("Stift")
+            case .rectangle: return L("Rechteck")
+            case .arrow: return L("Pfeil")
+            case .ellipse: return L("Kreis")
             }
         }
     }
@@ -119,10 +119,10 @@ struct ScreenshotMarkupView: View {
 
     private var header: some View {
         HStack {
-            Text("Screenshot markieren")
+            Text(L("Screenshot markieren"))
                 .font(.headline)
             Spacer()
-            Button("Abbrechen", action: onCancel)
+            Button(L("Abbrechen"), action: onCancel)
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
         }
@@ -170,7 +170,7 @@ struct ScreenshotMarkupView: View {
             }
             .buttonStyle(.plain)
             .disabled(strokes.isEmpty)
-            .help("Letzte Markierung rückgängig machen")
+            .help(L("Letzte Markierung rückgängig machen"))
 
             Button(action: { strokes.removeAll(); cropRect = nil }) {
                 Image(systemName: "trash")
@@ -179,11 +179,11 @@ struct ScreenshotMarkupView: View {
             }
             .buttonStyle(.plain)
             .disabled(strokes.isEmpty && cropRect == nil)
-            .help("Alle Markierungen entfernen")
+            .help(L("Alle Markierungen entfernen"))
 
             Spacer(minLength: 8)
 
-            Button(cropRect == nil ? "Fertig" : "Ausschnitt übernehmen") {
+            Button(cropRect == nil ? L("Fertig") : L("Ausschnitt übernehmen")) {
                 onDone(finalImage(), cropRect != nil)
             }
             .buttonStyle(.borderedProminent)

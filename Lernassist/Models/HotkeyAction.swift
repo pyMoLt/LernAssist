@@ -15,11 +15,11 @@ enum HotkeyAction: String, CaseIterable, Codable, Identifiable {
 
     var label: String {
         switch self {
-        case .toggleWindow:  return "Fenster ein-/ausblenden"
-        case .screenshot:    return "Screenshot aufnehmen"
-        case .newChat:       return "Neuer Chat"
-        case .toggleSidebar: return "Sidebar ein-/ausblenden"
-        case .explainSelection: return "Auswahl erklären (systemweit)"
+        case .toggleWindow:  return L("Fenster ein-/ausblenden")
+        case .screenshot:    return L("Screenshot aufnehmen")
+        case .newChat:       return L("Neuer Chat")
+        case .toggleSidebar: return L("Sidebar ein-/ausblenden")
+        case .explainSelection: return L("Auswahl erklären (systemweit)")
         }
     }
 

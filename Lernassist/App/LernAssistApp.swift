@@ -24,13 +24,13 @@ private struct SettingsRedirectView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("Einstellungen")
+            Text(L("Einstellungen"))
                 .font(.headline)
-            Text("Das Einstellungen-Fenster der App öffnet sich gleich automatisch.\nFalls nicht:")
+            Text(L("Das Einstellungen-Fenster der App öffnet sich gleich automatisch.\nFalls nicht:"))
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Einstellungen öffnen") {
+            Button(L("Einstellungen öffnen")) {
                 NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
             }
         }
@@ -68,6 +68,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Menüleisten-Symbol – siehe setupGlobalKeyboardShortcutFallback() für den Fall, dass die
         // App gar keine eigene System-Menüleiste zeigt (activation policy .accessory).
         setupMainMenu()
+        // Sprachwechsel: Menüs neu aufbauen (SwiftUI baut sich selbst neu auf).
+        NotificationCenter.default.addObserver(forName: .appLanguageChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setupMainMenu() }
+        }
         setupGlobalKeyboardShortcutFallback()
         ScrollChaining.shared.install()
 
@@ -280,7 +284,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "LernAssist einrichten"
+        window.title = L("LernAssist einrichten")
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.isMovableByWindowBackground = false
@@ -313,7 +317,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Berechtigungen einrichten"
+        panel.title = L("Berechtigungen einrichten")
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         // Nie beliebigen Panel-/Sheet-Hintergrund als Drag-Fläche verwenden. Unter macOS 26
@@ -354,27 +358,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
 
-        appMenu.addItem(withTitle: "Über LernAssist", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L("Über LernAssist"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        let settingsItem = appMenu.addItem(withTitle: "Einstellungen …", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
+        let settingsItem = appMenu.addItem(withTitle: L("Einstellungen …"), action: #selector(openSettingsFromMenu), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "LernAssist ausblenden", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        let hideOthers = appMenu.addItem(withTitle: "Andere ausblenden", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: L("LernAssist ausblenden"), action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: L("Andere ausblenden"), action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
-        appMenu.addItem(withTitle: "Alle einblenden", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: L("Alle einblenden"), action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "LernAssist beenden", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: L("LernAssist beenden"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         // Ablage: Fenster zurückholen (das Panel ist sonst nur per Hotkey/Dock erreichbar) und
         // neuer Chat per ⌘N.
         let fileMenuItem = NSMenuItem()
         mainMenu.addItem(fileMenuItem)
-        let fileMenu = NSMenu(title: "Ablage")
+        let fileMenu = NSMenu(title: L("Ablage"))
         fileMenuItem.submenu = fileMenu
-        let newChat = fileMenu.addItem(withTitle: "Neuer Chat", action: #selector(newChatFromMenu), keyEquivalent: "n")
+        let newChat = fileMenu.addItem(withTitle: L("Neuer Chat"), action: #selector(newChatFromMenu), keyEquivalent: "n")
         newChat.target = self
-        let showItem = fileMenu.addItem(withTitle: "LernAssist-Fenster zeigen", action: #selector(showWindowFromMenu), keyEquivalent: "0")
+        let showItem = fileMenu.addItem(withTitle: L("LernAssist-Fenster zeigen"), action: #selector(showWindowFromMenu), keyEquivalent: "0")
         showItem.target = self
 
         // Bearbeiten-Menü: OHNE dieses Menü brechen Cmd+C/V/X/A/Z in JEDEM Textfeld der App
@@ -387,15 +391,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // in der App kaputtgemacht.
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
-        let editMenu = NSMenu(title: "Bearbeiten")
+        let editMenu = NSMenu(title: L("Bearbeiten"))
         editMenuItem.submenu = editMenu
-        editMenu.addItem(withTitle: "Rückgängig", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "Wiederholen", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(withTitle: L("Rückgängig"), action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: L("Wiederholen"), action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "Ausschneiden", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "Kopieren", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Einfügen", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        editMenu.addItem(withTitle: "Alles auswählen", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: L("Ausschneiden"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: L("Kopieren"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: L("Einfügen"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: L("Alles auswählen"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(NSMenuItem.separator())
+        let findItem = editMenu.addItem(withTitle: L("Im Chat suchen …"), action: #selector(findInChatFromMenu), keyEquivalent: "f")
+        findItem.target = self
+
+        // Darstellung: Seitenleiste und Schriftgröße im Chat.
+        let viewMenuItem = NSMenuItem()
+        mainMenu.addItem(viewMenuItem)
+        let viewMenu = NSMenu(title: Loc.current == .english ? "View" : "Darstellung")
+        viewMenuItem.submenu = viewMenu
+        let sidebarItem = viewMenu.addItem(withTitle: L("Seitenleiste ein-/ausblenden"), action: #selector(toggleSidebarFromMenu), keyEquivalent: "s")
+        sidebarItem.keyEquivalentModifierMask = [.command, .option]
+        sidebarItem.target = self
+        viewMenu.addItem(NSMenuItem.separator())
+        let biggerItem = viewMenu.addItem(withTitle: L("Schrift größer"), action: #selector(increaseChatFontFromMenu), keyEquivalent: "+")
+        biggerItem.target = self
+        let smallerItem = viewMenu.addItem(withTitle: L("Schrift kleiner"), action: #selector(decreaseChatFontFromMenu), keyEquivalent: "-")
+        smallerItem.target = self
+        let resetItem = viewMenu.addItem(withTitle: L("Normale Schriftgröße"), action: #selector(resetChatFontFromMenu), keyEquivalent: "0")
+        resetItem.keyEquivalentModifierMask = [.command, .option]
+        resetItem.target = self
 
         NSApp.mainMenu = mainMenu
     }
@@ -541,13 +565,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         let menu = NSMenu()
 
-        let openItem = NSMenuItem(title: "Fenster öffnen", action: #selector(openWindowFromStatusMenu), keyEquivalent: "")
+        let openItem = NSMenuItem(title: L("Fenster öffnen"), action: #selector(openWindowFromStatusMenu), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let quitItem = NSMenuItem(title: "LernAssist beenden", action: #selector(quitFromStatusMenu), keyEquivalent: "")
+        let quitItem = NSMenuItem(title: L("LernAssist beenden"), action: #selector(quitFromStatusMenu), keyEquivalent: "")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -623,7 +647,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let tick = DispatchSemaphore(value: 0)
                 DispatchQueue.main.async { tick.signal() }
                 let responsive = tick.wait(timeout: .now() + 0.5) == .success
-                missedTicks = responsive ? 0 : missedTicks + 1
+                // Ein offener modaler Dialog blockiert den Main-Thread absichtlich.
+                missedTicks = responsive || ModalActivity.isActive ? 0 : missedTicks + 1
                 // 4 s statt 6 s Erkennung (Nutzer-Report: Force-Quit kam teils vor dem Report)
                 // und 3 s Sample-Dauer für belastbarere Backtraces.
                 if missedTicks >= 2 {
@@ -750,6 +775,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showWindowFromMenu() { showWindow() }
 
+    @objc func findInChatFromMenu() {
+        showWindow()
+        NotificationCenter.default.post(name: .findInChat, object: nil)
+    }
+
+    @objc func toggleSidebarFromMenu() {
+        NotificationCenter.default.post(name: .toggleSidebar, object: nil)
+    }
+
+    @objc func increaseChatFontFromMenu() { adjustChatFont(by: 0.05) }
+    @objc func decreaseChatFontFromMenu() { adjustChatFont(by: -0.05) }
+    @objc func resetChatFontFromMenu() { viewModel?.chatFontSize = 1.0 }
+
+    private func adjustChatFont(by delta: Double) {
+        guard let viewModel else { return }
+        let value = ((viewModel.chatFontSize + delta) * 100).rounded() / 100
+        viewModel.chatFontSize = min(1.5, max(0.8, value))
+    }
+
     @objc func openSettingsFromMenu() {
         showWindow()
         NotificationCenter.default.post(name: .openSettingsRequested, object: nil)
@@ -778,6 +822,9 @@ extension Notification.Name {
     static let externalScreenshotCaptured = Notification.Name("ExternalScreenshotCaptured")
     static let screenshotRequested        = Notification.Name("ScreenshotRequested")
     static let toggleSidebar              = Notification.Name("ToggleSidebar")
+    static let findInChat                 = Notification.Name("FindInChat")
+    static let appLanguageChanged         = Notification.Name("AppLanguageChanged")
+    static let repairRequested            = Notification.Name("RepairRequested")
     static let hotkeySettingsChanged      = Notification.Name("HotkeySettingsChanged")
     /// Öffnet das Settings-Sheet, optional auf einem bestimmten Tab (userInfo["tab"] als String).
     static let openSettingsRequested      = Notification.Name("OpenSettingsRequested")

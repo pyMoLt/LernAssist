@@ -41,12 +41,16 @@ nonisolated struct ChatRequestBuilder {
         }
 
         let params = profile.params
+        // Einstellungen des Modells (Reiter „Modelle“) haben Vorrang vor dem Profil.
+        let modelSettings = ModelSettingsRegistry.shared.settings(for: model(for: purpose))
         if case .chat = purpose {
-            if let t = params.temperature { payload["temperature"] = t }
-            if let p = params.topP { payload["top_p"] = p }
-            if let k = params.topK { payload["top_k"] = k }
-            if let m = params.maxTokens { payload["max_tokens"] = m }
-            if let pp = params.presencePenalty { payload["presence_penalty"] = pp }
+            if let t = modelSettings.temperature ?? params.temperature { payload["temperature"] = t }
+            if let p = modelSettings.topP ?? params.topP { payload["top_p"] = p }
+            if let k = modelSettings.topK ?? params.topK { payload["top_k"] = k }
+            if let m = modelSettings.maxTokens ?? params.maxTokens { payload["max_tokens"] = m }
+            if let mp = modelSettings.minP { payload["min_p"] = mp }
+            if let rp = modelSettings.repetitionPenalty { payload["repetition_penalty"] = rp }
+            if let pp = modelSettings.presencePenalty ?? params.presencePenalty { payload["presence_penalty"] = pp }
             if let fp = params.frequencyPenalty { payload["frequency_penalty"] = fp }
             if let seed = params.seed { payload["seed"] = seed }
             if let stop = params.stop, !stop.isEmpty { payload["stop"] = stop }
@@ -55,7 +59,7 @@ nonisolated struct ChatRequestBuilder {
                 payload["tool_choice"] = "auto"
             }
         } else {
-            if let t = params.temperature { payload["temperature"] = t }
+            if let t = modelSettings.temperature ?? params.temperature { payload["temperature"] = t }
         }
         if let maxTokens { payload["max_tokens"] = maxTokens }
         if let jsonSchema {
@@ -69,12 +73,28 @@ nonisolated struct ChatRequestBuilder {
         case .background(_, let disableThinking):
             if disableThinking { payload = EndpointManager.disableThinkingModifiers(payload) }
         case .chat:
-            payload = Self.applyThinking(profile.thinkingMode, budget: profile.thinkingBudget, to: payload)
+            payload = Self.applyModelSettings(modelSettings, to: payload)
         case .inline:
             // „Text erklären“ ist eine schnelle Nebenfrage: ohne Thinking, damit sofort Text kommt.
             payload = EndpointManager.disableThinkingModifiers(payload)
         }
         return ProviderAdapters.adapter(for: profile.provider).adapt(payload: payload)
+    }
+
+    /// Denken, Denkstärke und Schalter der Chat-Vorlage aus den Modell-Einstellungen.
+    /// `chat_template_kwargs` werden zusammengeführt (enable_thinking, preserve_thinking,
+    /// verification, eigene Schalter); `reasoning_effort` reicht oMLX an die Vorlage weiter.
+    static func applyModelSettings(_ settings: ModelSettings, to payload: [String: Any]) -> [String: Any] {
+        var p = applyThinking(settings.thinking ?? .serverDefault, budget: settings.thinkingBudget, to: payload)
+        if let effort = settings.reasoningEffort, !effort.isEmpty { p["reasoning_effort"] = effort }
+        var kwargs = p["chat_template_kwargs"] as? [String: Any] ?? [:]
+        if let preserve = settings.preserveThinking { kwargs["preserve_thinking"] = preserve }
+        if settings.verification == true { kwargs["verification"] = true }
+        for (key, value) in settings.templateKwargs where !key.trimmingCharacters(in: .whitespaces).isEmpty {
+            kwargs[key.trimmingCharacters(in: .whitespaces)] = ModelSettings.jsonValue(value)
+        }
+        if !kwargs.isEmpty { p["chat_template_kwargs"] = kwargs }
+        return p
     }
 
     /// Setzt die Thinking-Steuerung. `chat_template_kwargs.enable_thinking` verstehen oMLX,

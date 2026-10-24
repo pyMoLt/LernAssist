@@ -45,7 +45,7 @@ struct SidebarView: View {
             else if date >= startOfWeek { week.append(session) }
             else { older.append(session) }
         }
-        return [("Angepinnt", pinned), ("Heute", today), ("Gestern", yesterday), ("Diese Woche", week), ("Älter", older)]
+        return [(L("Angepinnt"), pinned), (L("Heute"), today), (L("Gestern"), yesterday), (L("Diese Woche"), week), (L("Älter"), older)]
             .filter { !$0.sessions.isEmpty }
     }
 
@@ -64,6 +64,7 @@ struct SidebarView: View {
                 ForEach(sessionGroups, id: \.title) { group in
                     Section {
                         ForEach(group.sessions) { session in
+                            // Dezente Scrollleiste der Chat-Liste (liegt in der List, findet deren ScrollView).
                             SessionRow(
                                 session: session,
                                 canDelete: viewModel.sessions.count > 1,
@@ -73,13 +74,14 @@ struct SidebarView: View {
                                 onMoveToFolder: { folder in viewModel.moveSessionToFolder(id: session.id, folder: folder) },
                                 onTogglePin: { viewModel.togglePin(id: session.id) },
                                 onSetSubject: {
-                                    if let subject = FolderPrompt.ask(title: "Fach für „\(session.title)“",
-                                                                       message: "Allgemeines Fach, z. B. Physiologie oder Algorithmen. Leer lassen = KI entscheidet.",
+                                    if let subject = FolderPrompt.ask(title: L("Fach für „\(session.title)“"),
+                                                                       message: L("Allgemeines Fach, z. B. Physiologie oder Algorithmen. Leer lassen = KI entscheidet."),
                                                                        initial: session.subject ?? "", allowEmpty: true) {
                                         viewModel.setSubject(id: session.id, subject: subject)
                                     }
                                 }
                             )
+                            .background(DiscreetScrollers())
                             .tag(session.id)
                             .itemProvider { NSItemProvider(object: session.id.uuidString as NSString) }
                         }
@@ -93,7 +95,7 @@ struct SidebarView: View {
                     Button {
                         ArchiveWindowController.show(viewModel: viewModel, mode: .archive, search: debouncedSearchText)
                     } label: {
-                        Label("\(archiveSearchHits) Treffer im Archiv", systemImage: "archivebox")
+                        Label(L("\(archiveSearchHits) Treffer im Archiv"), systemImage: "archivebox")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -108,7 +110,13 @@ struct SidebarView: View {
 
             footer
         }
-        .background(DS.Surface.sidebar)
+        // Version 4: Seitenleiste als schwebende Karte über dem Farbfeld (Vorlage). Sie reicht bis
+        // nach oben; die Fensterknöpfe liegen in der Karte, der Inhalt beginnt darunter.
+        .padding(.top, 28)
+        .glassSurface(cornerRadius: 11, elevated: true)
+        .padding(.leading, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
         .sheet(isPresented: $isShowingGallery) {
             ScreenshotGalleryView(viewModel: viewModel)
         }
@@ -119,13 +127,15 @@ struct SidebarView: View {
     private var header: some View {
         HStack(spacing: DS.Space.s + 2) {
             LernAssistBrandIcon(size: 28)
-            Text("LernAssist")
+            Text(L("LernAssist"))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
-            SidebarIconButton(systemImage: "square.and.pencil", help: "Neuer Chat (⌘N)") {
+            SidebarIconButton(systemImage: "square.and.pencil", help: L("Neuer Chat (⌘N)")) {
                 viewModel.createNewChat()
             }
-            .accessibilityLabel("Neuer Chat")
+            .accessibilityLabel(L("Neuer Chat"))
         }
         .padding(.horizontal, DS.Space.m)
         .padding(.top, DS.Space.m)
@@ -139,9 +149,11 @@ struct SidebarView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(DS.Ink.accent)
                     .frame(width: 18)
-                Text("Alle Screenshots")
+                Text(L("Alle Screenshots"))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
@@ -161,7 +173,7 @@ struct SidebarView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .font(.caption)
-            TextField("Chats durchsuchen …", text: $searchText)
+            TextField(L("Chats durchsuchen …"), text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.caption)
                 .onChange(of: searchText) { _, newValue in
@@ -187,7 +199,7 @@ struct SidebarView: View {
                         .font(.caption)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Suche leeren")
+                .accessibilityLabel(L("Suche leeren"))
             }
         }
         .padding(.horizontal, DS.Space.s)
@@ -219,9 +231,9 @@ struct SidebarView: View {
                         withAnimation(.snappy(duration: 0.2)) { subjectFilter = nil }
                     } label: {
                         if subjectFilter == nil {
-                            Label("Alle", systemImage: "checkmark")
+                            Label(L("Alle"), systemImage: "checkmark")
                         } else {
-                            Text("Alle")
+                            Text(L("Alle"))
                         }
                     }
                     Divider()
@@ -237,7 +249,7 @@ struct SidebarView: View {
                         }
                     }
                 } label: {
-                    Text(subjectFilter ?? "Alle")
+                    Text(subjectFilter ?? L("Alle"))
                         .font(.system(size: 11, weight: subjectFilter == nil ? .medium : .semibold, design: .rounded))
                         .foregroundStyle(subjectFilter == nil ? .secondary : DS.Ink.accent)
                         .padding(.horizontal, 10)
@@ -247,7 +259,7 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("Fach-Filter: \(subjectFilter ?? "Alle")")
+                .accessibilityLabel(L("Fach-Filter: \(subjectFilter ?? L("Alle"))"))
 
                 Spacer(minLength: 0)
             }
@@ -260,7 +272,7 @@ struct SidebarView: View {
 
     private var footer: some View {
         HStack(spacing: DS.Space.xs) {
-            SidebarFooterButton(title: "Archiv", systemImage: "archivebox",
+            SidebarFooterButton(title: L("Archiv"), systemImage: "archivebox",
                                 count: viewModel.archivedSessions.count, highlighted: isArchiveDropTargeted) {
                 ArchiveWindowController.show(viewModel: viewModel, mode: .archive)
             }
@@ -268,7 +280,7 @@ struct SidebarView: View {
             .onDrop(of: [.text], isTargeted: $isArchiveDropTargeted) { providers in
                 handleDrop(providers) { viewModel.archiveSession(id: $0) }
             }
-            SidebarFooterButton(title: "Papierkorb", systemImage: "trash",
+            SidebarFooterButton(title: L("Papierkorb"), systemImage: "trash",
                                 count: viewModel.trashedSessions.count, highlighted: false) {
                 ArchiveWindowController.show(viewModel: viewModel, mode: .trash)
             }
@@ -323,17 +335,21 @@ private struct SidebarFooterButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: systemImage)
                     .font(.system(size: 11, weight: .medium))
                 Text(title)
                     .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 if count > 0 {
                     Text("\(count)")
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
             }
+            .lineLimit(1)
             .foregroundStyle(isHovered || highlighted ? DS.Ink.accent : .secondary)
             .padding(.horizontal, DS.Space.s)
             .padding(.vertical, 5)
@@ -341,8 +357,8 @@ private struct SidebarFooterButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("\(title) öffnen")
-        .accessibilityLabel(count > 0 ? "\(title), \(count) Chats" : title)
+        .help(L("\(title) öffnen"))
+        .accessibilityLabel(count > 0 ? L("\(title), \(count) Chats") : title)
         .onHover { isHovered = $0 }
     }
 }
@@ -375,12 +391,12 @@ private struct SessionRow: View {
                     .font(.system(size: 9))
             }
             if isEditing {
-                TextField("Titel", text: $draftTitle, onCommit: commitRename)
+                TextField(L("Titel"), text: $draftTitle, onCommit: commitRename)
                     .textFieldStyle(.plain)
                     .focused($isFieldFocused)
                     .onExitCommand { isEditing = false }
             } else {
-                Text(session.title)
+                Text(session.displayTitle)
                     .font(.system(size: 12.5, design: .rounded))
                     .lineLimit(1)
                     .onTapGesture(count: 2) { beginEditing() }
@@ -394,8 +410,8 @@ private struct SessionRow: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Archivieren")
-                .accessibilityLabel("Chat archivieren")
+                .help(L("Archivieren"))
+                .accessibilityLabel(L("Chat archivieren"))
                 .transition(.opacity)
             }
         }
@@ -403,29 +419,29 @@ private struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovered = hovering } }
         .swipeActions(edge: .leading) {
-            Button(action: onArchive) { Label("Archiv", systemImage: "archivebox") }
+            Button(action: onArchive) { Label(L("Archiv"), systemImage: "archivebox") }
                 .tint(DS.Ink.accent)
         }
         .swipeActions(edge: .trailing) {
             if canDelete {
-                Button(action: onDelete) { Label("In Papierkorb", systemImage: "trash") }
+                Button(action: onDelete) { Label(L("In Papierkorb"), systemImage: "trash") }
                     .tint(.red)
             }
         }
         .contextMenu {
-            Button("Umbenennen") { beginEditing() }
-            Button(isPinned ? "Nicht mehr anpinnen" : "Anpinnen") { onTogglePin() }
+            Button(L("Umbenennen")) { beginEditing() }
+            Button(isPinned ? L("Nicht mehr anpinnen") : L("Anpinnen")) { onTogglePin() }
             if let onSetSubject {
-                Button(session.subject.map { "Fach ändern (\($0)) …" } ?? "Fach festlegen …") { onSetSubject() }
+                Button(session.subject.map { "Fach ändern (\($0)) …" } ?? L("Fach festlegen …")) { onSetSubject() }
             }
             Divider()
-            Button("Archivieren") { onArchive() }
-            Button("In Archiv-Ordner …") {
-                if let folder = FolderPrompt.ask(title: "In welchen Archiv-Ordner?") { onMoveToFolder(folder) }
+            Button(L("Archivieren")) { onArchive() }
+            Button(L("In Archiv-Ordner …")) {
+                if let folder = FolderPrompt.ask(title: L("In welchen Archiv-Ordner?")) { onMoveToFolder(folder) }
             }
             if canDelete {
                 Divider()
-                Button("In den Papierkorb", role: .destructive) { onDelete() }
+                Button(L("In den Papierkorb"), role: .destructive) { onDelete() }
             }
         }
     }
@@ -445,17 +461,17 @@ private struct SessionRow: View {
 // MARK: - Ordnername abfragen
 
 enum FolderPrompt {
-    static func ask(title: String, message: String = "Name des Archiv-Ordners:", initial: String = "", allowEmpty: Bool = false) -> String? {
+    static func ask(title: String, message: String = L("Name des Archiv-Ordners:"), initial: String = "", allowEmpty: Bool = false) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Abbrechen")
+        alert.addButton(withTitle: L("OK"))
+        alert.addButton(withTitle: L("Abbrechen"))
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
         input.stringValue = initial
         alert.accessoryView = input
         alert.window.initialFirstResponder = input
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        guard ModalActivity.run({ alert.runModal() }) == .alertFirstButtonReturn else { return nil }
         let name = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty && !allowEmpty ? nil : name
     }

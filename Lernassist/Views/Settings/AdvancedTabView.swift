@@ -8,61 +8,96 @@ struct AdvancedTabView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.l) {
-            settingsSection(icon: "lock.shield.fill", title: "Einrichtung & Berechtigungen", tint: DS.Accent.emerald) {
+            settingsSection(icon: "lock.shield.fill", title: L("Einrichtung & Berechtigungen"), tint: DS.Accent.emerald) {
                 SettingsRow(
-                    title: "Einrichtungs-Assistent",
-                    subtitle: "Rolle dieses Macs, Verbindung zu oMLX, Recherche und Berechtigungen in fünf Schritten.",
+                    title: L("Einrichtungs-Assistent"),
+                    subtitle: L("Rolle dieses Macs, Verbindung zu oMLX, Recherche und Berechtigungen in fünf Schritten."),
                     icon: "wand.and.stars",
                     tint: DS.Accent.emerald
                 ) {
-                    Button("Assistent starten") {
+                    Button(L("Assistent starten")) {
                         NotificationCenter.default.post(name: .showSetupAssistant, object: nil)
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.emerald, prominent: true))
-                    .settingHelp("Führt durch die komplette Einrichtung – z. B. auf einem Gerät, das die Modelle eines Servers im Netzwerk nutzt. Bestehende Chats bleiben unberührt.")
+                    .settingHelp(L("Führt durch die komplette Einrichtung – z. B. auf einem Gerät, das die Modelle eines Servers im Netzwerk nutzt. Bestehende Chats bleiben unberührt."))
                 }
 
                 SettingsHairline()
 
                 SettingsRow(
-                    title: "Berechtigungs-Assistent",
-                    subtitle: "Prüft Zugriffs-Hilfen („Auswahl erklären“) und Bildschirmaufnahme (Screenshots) mit Live-Status.",
+                    title: L("Berechtigungs-Assistent"),
+                    subtitle: L("Prüft Zugriffs-Hilfen („Auswahl erklären“) und Bildschirmaufnahme (Screenshots) mit Live-Status."),
                     icon: "checkmark.shield.fill",
                     tint: DS.Accent.emerald
                 ) {
-                    Button("Assistent öffnen") {
+                    Button(L("Assistent öffnen")) {
                         NotificationCenter.default.post(name: .showPermissionOnboarding, object: nil)
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.emerald, prominent: true))
-                    .settingHelp("Zeigt das Berechtigungs-Fenster erneut – nützlich nach Updates oder wenn ein Hotkey still nichts tut.")
+                    .settingHelp(L("Zeigt das Berechtigungs-Fenster erneut – nützlich nach Updates oder wenn ein Hotkey still nichts tut."))
                 }
             }
 
-            settingsSection(icon: "archivebox.fill", title: "Chats", tint: DS.Accent.blue) {
+            settingsSection(icon: "wifi", title: L("Verbindungswächter"), tint: DS.Accent.cyan, trailing: {
+                if viewModel.connectionWatchEnabled {
+                    Button(L("Jetzt prüfen")) { Task { await ConnectionWatch.shared.checkNow() } }
+                        .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.cyan))
+                        .controlSize(.small)
+                }
+            }) {
+                VStack(alignment: .leading, spacing: DS.Space.s) {
+                    SettingsRow(
+                        title: L("Verbindungen im Leerlauf prüfen"),
+                        subtitle: L("Etwa eine Minute nach dem Start und dann alle 5 Minuten: aktiver Endpunkt, Fallback und Such-Server. Probleme erscheinen als Hinweis im Chat."),
+                        icon: "wifi.exclamationmark",
+                        tint: DS.Accent.cyan
+                    ) {
+                        Toggle("", isOn: $viewModel.connectionWatchEnabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .settingHelp(L("Nicht während einer Antwort. Ein Fehler wird erst nach einer zweiten Prüfung gemeldet. Weggeklickte Hinweise kommen erst wieder, wenn die Verbindung zwischendurch funktioniert hat."))
+                    }
+                    if viewModel.connectionWatchEnabled {
+                        SettingsHairline()
+                        SettingsRow(
+                            title: L("Mitteilungen von macOS"),
+                            subtitle: L("Zusätzlich eine Mitteilung, wenn LernAssist gerade im Hintergrund ist."),
+                            icon: "bell.badge",
+                            tint: DS.Accent.cyan
+                        ) {
+                            Toggle("", isOn: $viewModel.connectionWatchSystemNotices)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                        }
+                    }
+                }
+            }
+
+            settingsSection(icon: "archivebox.fill", title: L("Chats"), tint: DS.Accent.blue) {
                 SettingsRow(
-                    title: "Automatisch archivieren",
-                    subtitle: "Chats ohne Aktivität wandern ins Archiv (Sidebar unten → Archiv) und bleiben dort lesbar.",
+                    title: L("Automatisch archivieren"),
+                    subtitle: L("Chats ohne Aktivität wandern ins Archiv (Sidebar unten → Archiv) und bleiben dort lesbar."),
                     icon: "clock.arrow.circlepath",
                     tint: DS.Accent.blue
                 ) {
                     Picker("", selection: $viewModel.autoArchiveDays) {
-                        Text("nach 7 Tagen").tag(7)
-                        Text("nach 14 Tagen").tag(14)
-                        Text("nach 30 Tagen").tag(30)
-                        Text("nach 90 Tagen").tag(90)
+                        Text(L("nach 7 Tagen")).tag(7)
+                        Text(L("nach 14 Tagen")).tag(14)
+                        Text(L("nach 30 Tagen")).tag(30)
+                        Text(L("nach 90 Tagen")).tag(90)
                         Text("nie").tag(0)
                     }
                     .labelsHidden()
                     .frame(width: 150)
-                    .settingHelp("Wird beim App-Start geprüft. Karteikarten archivierter Chats bleiben in der Wiederholung.")
+                    .settingHelp(L("Wird beim App-Start geprüft. Karteikarten archivierter Chats bleiben in der Wiederholung."))
                 }
             }
 
-            settingsSection(icon: "gearshape.2.fill", title: "Hintergrundprozesse", tint: DS.Accent.indigo) {
+            settingsSection(icon: "gearshape.2.fill", title: L("Hintergrundprozesse"), tint: DS.Accent.indigo) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Automatische Chat-Titel (Auto-Labeling)",
-                        subtitle: "Erstellt nach der ersten Antwort im Hintergrund einen prägnanten Titel.",
+                        title: L("Automatische Chat-Titel (Auto-Labeling)"),
+                        subtitle: L("Erstellt nach der ersten Antwort im Hintergrund einen prägnanten Titel."),
                         icon: "tag.fill",
                         tint: DS.Accent.indigo
                     ) {
@@ -74,8 +109,8 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Bild-zu-Text-Konvertierung im Hintergrund",
-                        subtitle: "Wandelt ältere Screenshots in Textbeschreibungen um, um KV-Cache zu sparen.",
+                        title: L("Bild-zu-Text-Konvertierung im Hintergrund"),
+                        subtitle: L("Wandelt ältere Screenshots in Textbeschreibungen um, um KV-Cache zu sparen."),
                         icon: "text.viewfinder",
                         tint: DS.Accent.cyan
                     ) {
@@ -87,8 +122,8 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Eingebettete Bilder aus Dokumenten analysieren",
-                        subtitle: "Beschreibt Folien und Abbildungen aus PDFs/Word/PowerPoint per Vision-Modell.",
+                        title: L("Eingebettete Bilder aus Dokumenten analysieren"),
+                        subtitle: L("Beschreibt Folien und Abbildungen aus PDFs/Word/PowerPoint per Vision-Modell."),
                         icon: "doc.viewfinder",
                         tint: DS.Accent.amber
                     ) {
@@ -99,8 +134,8 @@ struct AdvancedTabView: View {
 
                     if viewModel.extractImagesFromPDF {
                         SettingsRow(
-                            title: "Detailgrad der Bildextraktion",
-                            subtitle: "Bestimmt die Ausführlichkeit der Bildbeschreibungen.",
+                            title: L("Detailgrad der Bildextraktion"),
+                            subtitle: L("Bestimmt die Ausführlichkeit der Bildbeschreibungen."),
                             icon: "slider.horizontal.below.rectangle",
                             tint: DS.Accent.amber
                         ) {
@@ -130,8 +165,8 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Thinking bei Hintergrund-Jobs deaktivieren",
-                        subtitle: "Schaltet den internen Denkprozess für Titel & Zusammenfassungen ab (sofern vom Server unterstützt).",
+                        title: L("Thinking bei Hintergrund-Jobs deaktivieren"),
+                        subtitle: L("Schaltet den internen Denkprozess für Titel & Zusammenfassungen ab (sofern vom Server unterstützt)."),
                         icon: "bolt.fill",
                         tint: DS.Accent.amber
                     ) {
@@ -142,11 +177,11 @@ struct AdvancedTabView: View {
                 }
             }
 
-            settingsSection(icon: "arrow.triangle.merge", title: "Kontext-Kompaktierung (/compact)", tint: DS.Accent.blue) {
+            settingsSection(icon: "arrow.triangle.merge", title: L("Kontext-Kompaktierung (/compact)"), tint: DS.Accent.blue) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Kompakt-Vorschlag automatisch einblenden",
-                        subtitle: "Zeigt einen „Zusammenfassen“-Hinweis, sobald sich das Kontextfenster füllt.",
+                        title: L("Kompakt-Vorschlag automatisch einblenden"),
+                        subtitle: L("Zeigt einen „Zusammenfassen“-Hinweis, sobald sich das Kontextfenster füllt."),
                         icon: "sparkles.rectangle.stack",
                         tint: DS.Accent.blue
                     ) {
@@ -157,7 +192,7 @@ struct AdvancedTabView: View {
 
                     if viewModel.autoCompactSuggestionsEnabled {
                         HStack(spacing: DS.Space.m) {
-                            Text("Schwellwert")
+                            Text(L("Schwellwert"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Slider(value: $viewModel.autoCompactThreshold, in: 0.5...0.9, step: 0.05)
@@ -172,13 +207,13 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Ziel-Länge der Zusammenfassung",
-                        subtitle: "Richtwert in Tokens für die komprimierte Gesprächszusammenfassung.",
+                        title: L("Ziel-Länge der Zusammenfassung"),
+                        subtitle: L("Richtwert in Tokens für die komprimierte Gesprächszusammenfassung."),
                         icon: "text.alignleft",
                         tint: DS.Accent.blue
                     ) {
                         HStack(spacing: DS.Space.s) {
-                            Text("\(viewModel.compactSummaryTokens) tok")
+                            Text(L("\(viewModel.compactSummaryTokens) tok"))
                                 .font(.system(.caption, design: .monospaced).weight(.semibold))
                                 .foregroundStyle(DS.Accent.indigo)
                                 .padding(.horizontal, 8)
@@ -192,8 +227,8 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Letzte Nachrichten wörtlich behalten",
-                        subtitle: "Anzahl der jüngsten Nachrichten, die unverändert erhalten bleiben.",
+                        title: L("Letzte Nachrichten wörtlich behalten"),
+                        subtitle: L("Anzahl der jüngsten Nachrichten, die unverändert erhalten bleiben."),
                         icon: "bubble.left.and.bubble.right",
                         tint: DS.Accent.blue
                     ) {
@@ -211,16 +246,16 @@ struct AdvancedTabView: View {
                 }
             }
 
-            settingsSection(icon: "play.rectangle.fill", title: "YouTube-Transkripte", tint: DS.Accent.rose) {
+            settingsSection(icon: "play.rectangle.fill", title: L("YouTube-Transkripte"), tint: DS.Accent.rose) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Bevorzugte Untertitel-Sprache",
-                        subtitle: "Wird beim Importieren von YouTube-Lernvideos vorrangig geladen.",
+                        title: L("Bevorzugte Untertitel-Sprache"),
+                        subtitle: L("Wird beim Importieren von YouTube-Lernvideos vorrangig geladen."),
                         icon: "captions.bubble",
                         tint: DS.Accent.rose
                     ) {
                         SoftDropdownMenu(
-                            label: viewModel.youtubeSubtitleLanguage == "de" ? "Deutsch" : (viewModel.youtubeSubtitleLanguage == "en" ? "Englisch" : "Erste verfügbare Spur"),
+                            label: viewModel.youtubeSubtitleLanguage == "de" ? L("Deutsch") : (viewModel.youtubeSubtitleLanguage == "en" ? L("Englisch") : L("Erste verfügbare Spur")),
                             width: 185
                         ) {
                             ForEach([
@@ -244,8 +279,8 @@ struct AdvancedTabView: View {
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Max. Zeichen pro YouTube-Transkript",
-                        subtitle: "Schützt das Kontextfenster bei sehr langen Vorlesungsaufzeichnungen.",
+                        title: L("Max. Zeichen pro YouTube-Transkript"),
+                        subtitle: L("Schützt das Kontextfenster bei sehr langen Vorlesungsaufzeichnungen."),
                         icon: "character.cursor.ibeam",
                         tint: DS.Accent.rose
                     ) {
@@ -257,44 +292,46 @@ struct AdvancedTabView: View {
             }
 
             SettingsDisclosureSection(
-                title: "Erweitert (Dokumente & Textauswahl)",
-                subtitle: "Bild-Beschreibungsbudget für Dokumente und Kontextradius für „Text erklären“",
+                title: L("Erweitert (Dokumente & Textauswahl)"),
+                subtitle: L("Bild-Beschreibungsbudget für Dokumente und Kontextradius für „Text erklären“"),
                 icon: "slider.horizontal.3",
                 tint: DS.Accent.amber
             ) {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     SettingsRow(
-                        title: "Dokument-Bild-Budget",
-                        subtitle: "Maximale Anzahl von Bildern pro Dokument, die per KI-Vision beschrieben werden.",
+                        title: L("Dokument-Bild-Budget"),
+                        subtitle: L("Maximale Anzahl von Bildern pro Dokument, die per KI-Vision beschrieben werden."),
                         icon: "photo.badge.checkmark",
                         tint: DS.Accent.amber,
-                        help: "Verhindert übermäßige Vision-Aufrufe bei langen Skripten oder Präsentationen mit vielen Folien (0–50 Bilder, Standard 12)."
+                        help: L("Verhindert übermäßige Vision-Aufrufe bei langen Skripten oder Präsentationen mit vielen Folien (0–50 Bilder, Standard 12).")
                     ) {
-                        stepperBadge("\(viewModel.documentImageBudget) Bilder", value: $viewModel.documentImageBudget, range: 0...50, step: 2)
+                        stepperBadge(L("\(viewModel.documentImageBudget) Bilder"), value: $viewModel.documentImageBudget, range: 0...50, step: 2)
                     }
 
                     SettingsHairline()
 
                     SettingsRow(
-                        title: "Kontextradius für „Text erklären“",
-                        subtitle: "Zeichenmenge vor und nach der Textauswahl für präzise Begriffserklärungen.",
+                        title: L("Kontextradius für „Text erklären“"),
+                        subtitle: L("Zeichenmenge vor und nach der Textauswahl für präzise Begriffserklärungen."),
                         icon: "character.cursor.ibeam",
                         tint: DS.Accent.indigo,
-                        help: "Bestimmt, wie viel Textumfeld der markierten Textstelle an das Modell für die Erklärung übergeben wird (100–1200 Zeichen, Standard 400 Zeichen)."
+                        help: L("Bestimmt, wie viel Textumfeld der markierten Textstelle an das Modell für die Erklärung übergeben wird (100–1200 Zeichen, Standard 400 Zeichen).")
                     ) {
-                        stepperBadge("± \(viewModel.inlineExplainRadius) Zeichen", value: $viewModel.inlineExplainRadius, range: 100...1200, step: 50)
+                        stepperBadge(L("± \(viewModel.inlineExplainRadius) Zeichen"), value: $viewModel.inlineExplainRadius, range: 100...1200, step: 50)
                     }
                 }
             }
 
-            settingsSection(icon: "arrow.counterclockwise.circle.fill", title: "Standardwerte", tint: DS.Accent.rose) {
+            StorageLocationsSection(viewModel: viewModel)
+
+            settingsSection(icon: "arrow.counterclockwise.circle.fill", title: L("Standardwerte"), tint: DS.Accent.rose) {
                 SettingsRow(
-                    title: "Standardwerte wiederherstellen",
-                    subtitle: "Setzt technische Grenzwerte, Timeouts und Budgets zurück. Endpunkte, Modelle samt Sampling, Prompts, Lernstil, Darstellung, Hotkeys, Schalter und Quellen bleiben.",
+                    title: L("Standardwerte wiederherstellen"),
+                    subtitle: L("Setzt technische Grenzwerte, Timeouts und Budgets zurück. Endpunkte, Modelle samt Sampling, Prompts, Lernstil, Darstellung, Hotkeys, Schalter und Quellen bleiben."),
                     icon: "arrow.counterclockwise",
                     tint: DS.Accent.rose
                 ) {
-                    Button("Zurücksetzen …") {
+                    Button(L("Zurücksetzen …")) {
                         showResetConfirmation = true
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
@@ -307,12 +344,12 @@ struct AdvancedTabView: View {
             isPresented: $showResetConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Standardwerte wiederherstellen", role: .destructive) {
+            Button(L("Standardwerte wiederherstellen"), role: .destructive) {
                 viewModel.resetToDefaults()
             }
-            Button("Abbrechen", role: .cancel) {}
+            Button(L("Abbrechen"), role: .cancel) {}
         } message: {
-            Text("Zurückgesetzt werden nur technische Grenzwerte, Timeouts und Budgets (Tools, Recherche, Lernen, Dokumente). Unverändert bleiben Endpunkte, Profile und Modelle samt Sampling-Werten, API-Keys, eigene Prompts, Lernstil, Darstellung, Hotkeys, Ein/Aus-Schalter, Tool-Auswahl, Recherche-Quellen, Domainlisten und Kontakt-E-Mail.")
+            Text(L("Zurückgesetzt werden nur technische Grenzwerte, Timeouts und Budgets (Tools, Recherche, Lernen, Dokumente). Unverändert bleiben Endpunkte, Profile und Modelle samt Sampling-Werten, API-Keys, eigene Prompts, Lernstil, Darstellung, Hotkeys, Ein/Aus-Schalter, Tool-Auswahl, Recherche-Quellen, Domainlisten und Kontakt-E-Mail."))
         }
     }
 }

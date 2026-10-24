@@ -28,7 +28,7 @@ struct ScreenshotGalleryView: View {
             HStack {
                 Image(systemName: "photo.on.rectangle.angled")
                     .foregroundStyle(DS.Ink.accent)
-                Text("Screenshot-Pool")
+                Text(L("Screenshot-Pool"))
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
@@ -49,7 +49,7 @@ struct ScreenshotGalleryView: View {
                     Image(systemName: "photo")
                         .font(.system(size: 40))
                         .foregroundStyle(.secondary)
-                    Text("Noch keine Screenshots vorhanden.")
+                    Text(L("Noch keine Screenshots vorhanden."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 8)
@@ -66,7 +66,7 @@ struct ScreenshotGalleryView: View {
                                         .cornerRadius(6)
                                         .clipped()
                                 }
-                                Text(item.session.title)
+                                Text(item.session.displayTitle)
                                     .font(.caption2)
                                     .lineLimit(1)
                                     .foregroundStyle(.secondary)

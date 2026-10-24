@@ -10,7 +10,7 @@ import AppKit
 enum ArchiveBrowserMode: String {
     case archive, trash
 
-    var title: String { self == .archive ? "Archiv" : "Papierkorb" }
+    var title: String { self == .archive ? L("Archiv") : L("Papierkorb") }
 }
 
 @MainActor
@@ -104,20 +104,20 @@ struct ArchiveBrowserView: View {
         }
         .frame(minWidth: 560, minHeight: 380)
         .background(DS.Surface.canvas)
-        .alert("Chat endgültig löschen?", isPresented: Binding(get: { confirmDeleteID != nil }, set: { if !$0 { confirmDeleteID = nil } })) {
-            Button("Abbrechen", role: .cancel) {}
-            Button("Endgültig löschen", role: .destructive) {
+        .alert(L("Chat endgültig löschen?"), isPresented: Binding(get: { confirmDeleteID != nil }, set: { if !$0 { confirmDeleteID = nil } })) {
+            Button(L("Abbrechen"), role: .cancel) {}
+            Button(L("Endgültig löschen"), role: .destructive) {
                 if let id = confirmDeleteID { viewModel.deleteTrashedSessionPermanently(id: id) }
                 if selection == confirmDeleteID { selection = nil }
             }
         } message: {
-            Text("Das kann nicht rückgängig gemacht werden.")
+            Text(L("Das kann nicht rückgängig gemacht werden."))
         }
-        .alert("Papierkorb leeren?", isPresented: $confirmEmptyTrash) {
-            Button("Abbrechen", role: .cancel) {}
-            Button("Leeren", role: .destructive) { viewModel.emptyTrash(); selection = nil }
+        .alert(L("Papierkorb leeren?"), isPresented: $confirmEmptyTrash) {
+            Button(L("Abbrechen"), role: .cancel) {}
+            Button(L("Leeren"), role: .destructive) { viewModel.emptyTrash(); selection = nil }
         } message: {
-            Text("Alle \(viewModel.trashedSessions.count) Chats werden unwiderruflich gelöscht.")
+            Text(L("Alle \(viewModel.trashedSessions.count) Chats werden unwiderruflich gelöscht."))
         }
     }
 
@@ -127,7 +127,7 @@ struct ArchiveBrowserView: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.caption).foregroundStyle(.secondary)
-                TextField("\(mode.title) durchsuchen …", text: $search)
+                TextField(L("\(mode.title) durchsuchen …"), text: $search)
                     .textFieldStyle(.plain)
                     .font(.caption)
             }
@@ -143,7 +143,7 @@ struct ArchiveBrowserView: View {
                     Image(systemName: mode == .archive ? "archivebox" : "trash")
                         .font(.system(size: 26, weight: .light))
                         .foregroundStyle(.tertiary)
-                    Text(search.isEmpty ? (mode == .archive ? "Keine archivierten Chats" : "Der Papierkorb ist leer") : "Keine Treffer")
+                    Text(search.isEmpty ? (mode == .archive ? L("Keine archivierten Chats") : L("Der Papierkorb ist leer")) : L("Keine Treffer"))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -162,7 +162,7 @@ struct ArchiveBrowserView: View {
                                     .foregroundStyle(.tertiary)
                                     .contextMenu {
                                         if viewModel.customArchiveFolders.contains(group.title) {
-                                            Button("Ordner auflösen") { viewModel.deleteFolder(group.title) }
+                                            Button(L("Ordner auflösen")) { viewModel.deleteFolder(group.title) }
                                         }
                                     }
                             }
@@ -176,19 +176,19 @@ struct ArchiveBrowserView: View {
             HStack {
                 if mode == .archive {
                     Button {
-                        if let name = FolderPrompt.ask(title: "Neuer Archiv-Ordner") { viewModel.addCustomArchiveFolder(name) }
+                        if let name = FolderPrompt.ask(title: L("Neuer Archiv-Ordner")) { viewModel.addCustomArchiveFolder(name) }
                     } label: {
-                        Label("Neuer Ordner", systemImage: "folder.badge.plus").font(.caption)
+                        Label(L("Neuer Ordner"), systemImage: "folder.badge.plus").font(.caption)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     Spacer()
-                    Text("Automatisch nach 7 Tagen ohne Aktivität")
+                    Text(L("Automatisch nach 7 Tagen ohne Aktivität"))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 } else {
                     Spacer()
-                    Button("Papierkorb leeren") { confirmEmptyTrash = true }
+                    Button(L("Papierkorb leeren")) { confirmEmptyTrash = true }
                         .buttonStyle(.plain)
                         .font(.caption)
                         .foregroundStyle(viewModel.trashedSessions.isEmpty ? Color.secondary : Color.red)
@@ -202,27 +202,27 @@ struct ArchiveBrowserView: View {
 
     private func row(_ session: ChatSession) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(session.title)
+            Text(session.displayTitle)
                 .font(.system(size: 12.5, design: .rounded))
                 .lineLimit(1)
-            Text(session.lastActivityDate.formatted(.dateTime.day().month(.abbreviated).year().hour().minute().locale(Locale(identifier: "de_DE"))))
+            Text(session.lastActivityDate.formatted(.dateTime.day().month(.abbreviated).year().hour().minute().locale(Locale(identifier: Loc.current == .english ? "en_US" : "de_DE"))))
                 .font(.system(size: 10.5, design: .rounded))
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
         .contextMenu {
-            Button("Wiederherstellen") { restore(session.id) }
+            Button(L("Wiederherstellen")) { restore(session.id) }
             if mode == .archive {
-                Button("In Ordner verschieben …") {
-                    if let folder = FolderPrompt.ask(title: "In welchen Archiv-Ordner?") {
+                Button(L("In Ordner verschieben …")) {
+                    if let folder = FolderPrompt.ask(title: L("In welchen Archiv-Ordner?")) {
                         viewModel.moveSessionToFolder(id: session.id, folder: folder)
                     }
                 }
                 Divider()
-                Button("In den Papierkorb", role: .destructive) { viewModel.trashArchivedSession(id: session.id) }
+                Button(L("In den Papierkorb"), role: .destructive) { viewModel.trashArchivedSession(id: session.id) }
             } else {
                 Divider()
-                Button("Endgültig löschen", role: .destructive) { confirmDeleteID = session.id }
+                Button(L("Endgültig löschen"), role: .destructive) { confirmDeleteID = session.id }
             }
         }
     }
@@ -235,27 +235,27 @@ struct ArchiveBrowserView: View {
             VStack(spacing: 0) {
                 HStack(alignment: .center, spacing: DS.Space.s) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.title)
+                        Text(session.displayTitle)
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                             .lineLimit(1)
-                        Text("\(session.messages.filter { $0.role == "user" || $0.role == "assistant" }.count) Nachrichten · nur lesen")
+                        Text(L("\(session.messages.filter { $0.role == "user" || $0.role == "assistant" }.count) Nachrichten · nur lesen"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     if mode == .archive {
                         Button(role: .destructive) { viewModel.trashArchivedSession(id: session.id); selection = nil } label: {
-                            Label("Papierkorb", systemImage: "trash")
+                            Label(L("Papierkorb"), systemImage: "trash")
                         }
                         .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.primary))
                     } else {
                         Button(role: .destructive) { confirmDeleteID = session.id } label: {
-                            Label("Endgültig löschen", systemImage: "trash")
+                            Label(L("Endgültig löschen"), systemImage: "trash")
                         }
                         .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.rose))
                     }
                     Button { restore(session.id) } label: {
-                        Label("Wiederherstellen", systemImage: "arrow.uturn.backward")
+                        Label(L("Wiederherstellen"), systemImage: "arrow.uturn.backward")
                     }
                     .buttonStyle(SoftActionButtonStyle(tint: DS.Ink.accent, prominent: true))
                     .keyboardShortcut(.defaultAction)
@@ -282,7 +282,7 @@ struct ArchiveBrowserView: View {
                 Image(systemName: "text.bubble")
                     .font(.system(size: 28, weight: .light))
                     .foregroundStyle(.tertiary)
-                Text("Chat auswählen, um ihn zu lesen")
+                Text(L("Chat auswählen, um ihn zu lesen"))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

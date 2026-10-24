@@ -11,10 +11,10 @@ enum PythonEnvironmentStatus: Equatable {
 
     var label: String {
         switch self {
-        case .unknown:                 return "Nicht geprüft"
-        case .installing(let step):    return "Wird eingerichtet: \(step)"
-        case .ready(let version):      return "Bereit (Python \(version))"
-        case .failed(let message):     return "Fehler: \(message)"
+        case .unknown:                 return L("Nicht geprüft")
+        case .installing(let step):    return L("Wird eingerichtet: \(step)")
+        case .ready(let version):      return L("Bereit (Python \(version))")
+        case .failed(let message):     return L("Fehler: \(message)")
         }
     }
 }

@@ -27,17 +27,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         let hosting = NSHostingController(rootView: root)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
             styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Einstellungen"
+        window.title = L("Einstellungen")
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 920, height: 640))
-        window.contentMinSize = NSSize(width: 760, height: 520)
+        window.setContentSize(NSSize(width: 1000, height: 700))
+        window.contentMinSize = NSSize(width: 820, height: 560)
         window.isReleasedWhenClosed = false
         // Das Hauptpanel schwebt (.floating) – die Einstellungen müssen darüber liegen.
         window.level = .floating + 1

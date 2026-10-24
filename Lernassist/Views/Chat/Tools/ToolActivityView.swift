@@ -10,8 +10,9 @@ struct ToolActivityView: View {
 
     init(call: ToolCallInfo) {
         self.call = call
-        // Code-Läufe sind beim Schreiben offen (man soll zusehen können), danach zu.
-        _isExpanded = State(initialValue: call.result == nil && call.name == "coding_sandbox")
+        // Eingeklappt, auch während der Code geschrieben wird (Version 4): Live-Code bei jedem
+        // Token zu zeichnen kostete viel Leistung. Aufklappen zeigt ihn weiterhin live.
+        _isExpanded = State(initialValue: false)
     }
 
     private var presentation: ToolCallPresentation { ToolCallPresentation(call: call) }
@@ -69,8 +70,8 @@ struct ToolActivityView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(p.title), \(p.isRunning ? "läuft" : (p.isError ? "fehlgeschlagen" : "fertig"))")
-        .accessibilityHint(isExpanded ? "Details einklappen" : "Details anzeigen")
+        .accessibilityLabel("\(p.title), \(p.isRunning ? L("läuft") : (p.isError ? "fehlgeschlagen" : "fertig"))")
+        .accessibilityHint(isExpanded ? L("Details einklappen") : L("Details anzeigen"))
     }
 
     @ViewBuilder
@@ -82,24 +83,49 @@ struct ToolActivityView: View {
         } else if p.isError {
             Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
                 .symbolEffect(.bounce, value: p.isError)
+        } else if p.hasScriptWarning {
+            Image(systemName: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
+                .help(L("Die Ausgabe wurde angezeigt; beim Probelauf meldete das Skript Fehler (an das Modell gemeldet)."))
         } else {
             Image(systemName: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
                 .transition(.symbolEffect(.drawOn))
         }
     }
 
-    private func collapsedSummary(_ p: ToolCallPresentation) -> String? {
+    /// Bitte an das Modell, einen fehlgeschlagenen Lauf zu korrigieren (HTML mit Skriptfehler,
+    /// Python mit Fehlercode). nil = nichts zu reparieren.
+    private func repairRequest(_ p: ToolCallPresentation) -> String? {
         guard !p.isRunning else { return nil }
-        if p.isLimitReached { return "Limit erreicht" }
+        if p.hasScriptWarning {
+            let errors = p.cleanedResult.replacingOccurrences(of: CodingTool.htmlScriptErrorPrefix, with: "")
+                .components(separatedBy: "\n").filter { $0.hasPrefix("- ") }.joined(separator: "\n")
+            return "Die interaktive Ausgabe meldet beim Laden Fehler:\n\(errors)\n\nBitte korrigiere sie und sende die vollständige HTML-Datei erneut."
+        }
+        if let run = p.codeRun, let code = run.exitCode, code != 0 {
+            let tail = run.output.components(separatedBy: "\n").suffix(12).joined(separator: "\n")
+            return "Der Python-Code ist mit diesem Fehler abgebrochen:\n```\n\(tail)\n```\nBitte korrigiere ihn und führe ihn erneut aus."
+        }
+        return nil
+    }
+
+    private func collapsedSummary(_ p: ToolCallPresentation) -> String? {
+        if p.isRunning {
+            // Laufender Code: nur die Länge zeigen – der Code selbst erscheint erst aufgeklappt.
+            guard call.name == "coding_sandbox", !p.argumentsComplete else { return nil }
+            let chars = p.code.count
+            guard chars > 0 else { return nil }
+            return chars >= 1000 ? L("\(String(format: "%.1f", Double(chars) / 1000))k Zeichen") : L("\(chars) Zeichen")
+        }
+        if p.isLimitReached { return L("Limit erreicht") }
         switch call.name {
         case "web_search":
             let count = p.sources.count
-            return count > 0 ? "\(count) Quelle\(count == 1 ? "" : "n")" : nil
+            return count > 0 ? (count == 1 ? L("1 Quelle") : L("\(count) Quellen")) : nil
         case "calculate":
             return p.cleanedResult.components(separatedBy: "\n").first.map { String($0.prefix(60)) }
         case "coding_sandbox":
             guard let run = p.codeRun else { return nil }
-            return run.exitCode == 0 ? "ausgeführt" : "Fehler"
+            return run.exitCode == 0 ? L("ausgeführt") : L("Fehler")
         default:
             return nil
         }
@@ -109,9 +135,33 @@ struct ToolActivityView: View {
     private func details(_ p: ToolCallPresentation) -> some View {
         switch call.name {
         case "coding_sandbox":
-            CodeRunCard(presentation: p)
+            VStack(alignment: .leading, spacing: 6) {
+                CodeRunCard(presentation: p)
+                if let request = repairRequest(p) {
+                    Button {
+                        NotificationCenter.default.post(name: .repairRequested, object: nil, userInfo: ["text": request])
+                    } label: {
+                        Label(L("Reparieren lassen"), systemImage: "wrench.adjustable")
+                    }
+                    .buttonStyle(SoftActionButtonStyle(tint: DS.Accent.amber))
+                    .controlSize(.small)
+                    .help(L("Das Modell bekommt die Fehlermeldung und schickt eine korrigierte Fassung"))
+                }
+            }
         case "web_search":
-            SourceList(presentation: p)
+            VStack(alignment: .leading, spacing: 6) {
+                SourceList(presentation: p)
+                if let statuses = call.researchStatus, !statuses.isEmpty {
+                    SourceStatusLine(statuses: statuses)
+                }
+                if let phases = call.researchPhases, !phases.isEmpty {
+                    Text(SourceStatusLine.describe(phases: phases))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                        .help(L("Dauer der einzelnen Schritte dieser Suche"))
+                }
+            }
         default:
             if !p.cleanedResult.isEmpty {
                 ScrollView {
@@ -157,7 +207,7 @@ struct CodeRunCard: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                Button(showCode ? "Code ausblenden" : "Code zeigen") { withAnimation(.snappy) { showCode.toggle() } }
+                Button(showCode ? L("Code ausblenden") : L("Code zeigen")) { withAnimation(.snappy) { showCode.toggle() } }
                     .buttonStyle(.plain)
                     .font(.system(size: 10))
                     .foregroundStyle(CodeHighlighter.Palette.gutter)
@@ -169,7 +219,7 @@ struct CodeRunCard: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(CodeHighlighter.Palette.gutter)
-                .help("Code kopieren")
+                .help(L("Code kopieren"))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -235,7 +285,7 @@ struct TerminalView: View {
         let p = presentation
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text("TERMINAL")
+                Text(L("TERMINAL"))
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(CodeHighlighter.Palette.gutter)
                 Spacer()
@@ -305,12 +355,12 @@ struct TerminalView: View {
     @ViewBuilder
     private func statusLabel(_ p: ToolCallPresentation) -> some View {
         if p.isRunning {
-            HStack(spacing: 4) { ProgressView().controlSize(.mini); Text("läuft").font(.system(size: 10)) }
+            HStack(spacing: 4) { ProgressView().controlSize(.mini); Text(L("läuft")).font(.system(size: 10)) }
                 .foregroundStyle(CodeHighlighter.Palette.gutter)
         } else if let run = p.codeRun, run.exitCode == 0 {
             Label("fertig", systemImage: "checkmark").font(.system(size: 10)).foregroundStyle(CodeHighlighter.Palette.success)
         } else {
-            Label("Fehler", systemImage: "xmark").font(.system(size: 10)).foregroundStyle(CodeHighlighter.Palette.error)
+            Label(L("Fehler"), systemImage: "xmark").font(.system(size: 10)).foregroundStyle(CodeHighlighter.Palette.error)
         }
     }
 }
@@ -324,7 +374,7 @@ struct SourceList: View {
         let sources = presentation.sources
         VStack(alignment: .leading, spacing: 4) {
             if presentation.isRunning {
-                Text("Durchsucht Web, Wikipedia und Fachdatenbanken …")
+                Text(L("Durchsucht Web, Wikipedia und Fachdatenbanken …"))
                     .font(.caption).foregroundStyle(.secondary)
             } else if sources.isEmpty {
                 Text(presentation.cleanedResult.prefix(400))
@@ -357,5 +407,52 @@ struct SourceList: View {
         .padding(DS.Space.s)
         .frame(maxWidth: 560, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: DS.Radius.medium).fill(DS.Surface.chip))
+    }
+}
+
+
+/// Zeiten und Zustand der Recherche-Quellen in einer Zeile („Wikipedia 3,1 s · Europe PMC pausiert“).
+struct SourceStatusLine: View {
+    let statuses: [ResearchSourceStatus]
+
+    var body: some View {
+        Text(statuses.sorted { ($0.seconds ?? 99) < ($1.seconds ?? 99) }.map(Self.describe).joined(separator: " · "))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .help(L("Antwortzeit und Zustand jeder Quelle bei dieser Suche"))
+    }
+
+    nonisolated static func describe(_ status: ResearchSourceStatus) -> String {
+        let name = status.source.shortName
+        let time = status.seconds.map { String(format: "%.1f s", $0) } ?? ""
+        // Ein eigener Such-Server, der schweigt, hat fast immer eine veraltete Adresse.
+        let checkAddress = status.source == .searxng ? L(" – Adresse in den Einstellungen prüfen") : ""
+        switch status.state {
+        case .ok: return L("\(name) \(status.hits) Treffer · \(time)")
+        case .empty: return L("\(name) \(time) (keine Treffer)")
+        case .failed:
+            return status.minutesLeft.map { L("\(name) Fehler – pausiert \($0) min") } ?? L("\(name) Fehler")
+        case .unreachable:
+            let base = status.minutesLeft.map { L("\(name) nicht erreichbar – pausiert \($0) min") } ?? L("\(name) nicht erreichbar")
+            return base + checkAddress
+        case .rateLimited: return L("\(name) Anfragegrenze – pausiert \(status.minutesLeft ?? 0) min")
+        case .paused: return L("\(name) pausiert (noch \(status.minutesLeft ?? 1) min)")
+        case .timeout: return L("\(name) antwortet nicht – übersprungen") + checkAddress
+        case .skipped: return L("\(name) nicht abgewartet (genug Treffer)")
+        }
+    }
+
+    nonisolated static func describe(phases: [ResearchPhaseTiming]) -> String {
+        phases.map { timing in
+            let time = String(format: "%.1f s", timing.seconds)
+            switch timing.phase {
+            case .sources: return L("Quellen \(time)")
+            case .fullText: return L("Volltext \(time)")
+            case .rerank: return L("Reranker \(time)")
+            case .images: return L("Bilder \(time)")
+            }
+        }.joined(separator: " · ")
     }
 }

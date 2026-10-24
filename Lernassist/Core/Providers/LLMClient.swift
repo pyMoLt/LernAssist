@@ -10,7 +10,9 @@ import Foundation
 ///   Statuscode (`{"detail": ...}` bei oMLX/FastAPI, `{"error": {...}}` bei OpenAI/LM Studio).
 nonisolated enum LLMClient {
 
-    static func stream(_ request: URLRequest, format: StreamWireFormat,
+    /// `buffered`: Der Request wurde ohne Streaming gestellt – die Antwort kommt als ein JSON und
+    /// wird in dieselben Events übersetzt.
+    static func stream(_ request: URLRequest, format: StreamWireFormat, buffered: Bool = false,
                        session: URLSession = .shared) -> AsyncThrowingStream<LLMEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
@@ -23,6 +25,14 @@ nonisolated enum LLMClient {
                     }
 
                     var parser = StreamEventParser(format: format)
+                    if buffered {
+                        var data = Data()
+                        for try await byte in bytes { data.append(byte) }
+                        try Task.checkCancellation()
+                        for event in try parser.consume(completion: data) { continuation.yield(event) }
+                        continuation.finish()
+                        return
+                    }
                     var sawDone = false
                     for try await line in bytes.lines {
                         try Task.checkCancellation()

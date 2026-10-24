@@ -27,8 +27,8 @@ struct AppPermission: Identifiable {
 enum AppPermissions {
     static let accessibility = AppPermission(
         id: "accessibility",
-        title: "Zugriffs-Hilfen",
-        featureDescription: "Für „Auswahl erklären“ (⌘⌥E): liest die markierte Textauswahl aus beliebigen anderen Apps. Greift sofort nach Erteilung.",
+        title: L("Zugriffs-Hilfen"),
+        featureDescription: L("Für „Auswahl erklären“ (⌘⌥E): liest die markierte Textauswahl aus beliebigen anderen Apps. Greift sofort nach Erteilung."),
         icon: "text.magnifyingglass",
         isGranted: { AXIsProcessTrusted() },
         request: {
@@ -40,8 +40,8 @@ enum AppPermissions {
 
     static let screenRecording = AppPermission(
         id: "screenRecording",
-        title: "Bildschirmaufnahme",
-        featureDescription: "Für Screenshots (Screenshot-Hotkey, „Was ist auf diesem Screenshot zu sehen?“). Greift ggf. erst nach einem App-Neustart.",
+        title: L("Bildschirmaufnahme"),
+        featureDescription: L("Für Screenshots (Screenshot-Hotkey, „Was ist auf diesem Screenshot zu sehen?“). Greift ggf. erst nach einem App-Neustart."),
         icon: "camera.viewfinder",
         isGranted: { CGPreflightScreenCaptureAccess() },
         request: {
@@ -69,9 +69,9 @@ struct PermissionOnboardingView: View {
             VStack(spacing: DS.Space.s) {
                 LernAssistBrandIcon(size: 52)
                     .shadow(color: DS.Accent.indigo.opacity(0.24), radius: 12, y: 4)
-                Text("Willkommen bei LernAssist")
+                Text(L("Willkommen bei LernAssist"))
                     .font(.system(.title2, design: .rounded).weight(.semibold))
-                Text("Zwei Berechtigungen schalten die komfortabelsten Funktionen frei. Du kannst sie jetzt oder später einrichten.")
+                Text(L("Zwei Berechtigungen schalten die komfortabelsten Funktionen frei. Du kannst sie jetzt oder später einrichten."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -95,12 +95,12 @@ struct PermissionOnboardingView: View {
             // Fuß
             VStack(spacing: DS.Space.s) {
                 HStack(spacing: DS.Space.s) {
-                    Button("Später nachholen") {
+                    Button(L("Später nachholen")) {
                         onClose(false)
                     }
                     .buttonStyle(SoftActionButtonStyle())
 
-                    Button("Fertig") {
+                    Button(L("Fertig")) {
                         completed = true
                         onClose(true)
                     }
@@ -108,7 +108,7 @@ struct PermissionOnboardingView: View {
                     .disabled(!AppPermissions.allGranted)
                 }
                 if !AppPermissions.allGranted {
-                    Text("„Fertig“ wird aktiv, sobald beide Berechtigungen erteilt sind – oder wähle „Später“, dann meldet sich dieses Fenster in zwei Wochen wieder (jederzeit über die Einstellungen erreichbar).")
+                    Text(L("„Fertig“ wird aktiv, sobald beide Berechtigungen erteilt sind – oder wähle „Später“, dann meldet sich dieses Fenster in zwei Wochen wieder (jederzeit über die Einstellungen erreichbar)."))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -150,12 +150,12 @@ struct PermissionRow: View {
             Spacer(minLength: DS.Space.s)
 
             if permission.isGranted() {
-                Label("Erteilt", systemImage: "checkmark.circle.fill")
+                Label(L("Erteilt"), systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.green)
                     .padding(.vertical, DS.Space.xs)
             } else {
-                Button("Berechtigen…") {
+                Button(L("Berechtigen…")) {
                     permission.request()
                 }
                 .controlSize(.large)
@@ -170,7 +170,7 @@ struct PermissionRow: View {
             if permission.isGranted() {
                 EmptyView()
             } else {
-                Text("Ausstehend")
+                Text(L("Ausstehend"))
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.orange)
                     .padding(.horizontal, DS.Space.xs)

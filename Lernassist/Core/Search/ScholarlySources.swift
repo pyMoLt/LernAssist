@@ -174,3 +174,67 @@ nonisolated struct OpenFDASource: SearchSource {
                          published: label["effective_time"] as? String, blocks: blocks, rank: rank)
     }
 }
+
+// MARK: - PubMed (NCBI E-Utilities)
+
+/// Fachartikel direkt aus PubMed: ESearch (Treffer-IDs nach Relevanz) und EFetch (Titel, Abstract,
+/// Journal, Datum, PMC-Kennung). Ohne Key bis 3 Anfragen pro Sekunde (HostPacing). Anonyme Kennung –
+/// die Kontakt-E-Mail geht bewusst nicht an NCBI.
+nonisolated struct PubMedSource: SearchSource {
+    var id: ResearchSource { .pubmed }
+    private static let base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+
+    func search(_ query: String, limit: Int) async throws -> [SearchHit] {
+        let term = ResearchImages.textQuery(query) + " AND hasabstract"
+        guard let searchURL = SourceHTTP.url(Self.base + "esearch.fcgi", [
+            "db": "pubmed", "term": term, "retmax": String(max(1, min(limit, 10))),
+            "sort": "relevance", "retmode": "json", "tool": "LernAssist",
+        ]), let json = try await SourceHTTP.json(searchURL) as? [String: Any],
+              let ids = (json["esearchresult"] as? [String: Any])?["idlist"] as? [String], !ids.isEmpty else { return [] }
+
+        guard let fetchURL = SourceHTTP.url(Self.base + "efetch.fcgi", [
+            "db": "pubmed", "id": ids.joined(separator: ","), "retmode": "xml", "rettype": "abstract", "tool": "LernAssist",
+        ]) else { return [] }
+        let page = try await WebFetcher(timeout: 12, maxBytes: 4 * 1_024 * 1_024, userAgent: SourceHTTP.apiUserAgent)
+            .fetch(fetchURL, accept: "application/xml")
+        return try Self.parse(page.data, order: ids)
+    }
+
+    /// EFetch-XML → Treffer in der Relevanz-Reihenfolge der Suche.
+    static func parse(_ data: Data, order: [String]) throws -> [SearchHit] {
+        let doc = try XMLDocument(data: data, options: [.nodeLoadExternalEntitiesNever])
+        func text(_ node: XMLNode, _ xpath: String) -> String? {
+            (try? node.nodes(forXPath: xpath))?.compactMap(\.stringValue)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        }
+        var byID: [String: SearchHit] = [:]
+        for article in try doc.nodes(forXPath: "//PubmedArticle") {
+            guard let pmid = text(article, "MedlineCitation/PMID"),
+                  let rawTitle = text(article, "MedlineCitation/Article/ArticleTitle") else { continue }
+            let parts = ((try? article.nodes(forXPath: "MedlineCitation/Article/Abstract/AbstractText")) ?? []).compactMap { node -> String? in
+                guard let value = node.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+                if let label = (node as? XMLElement)?.attribute(forName: "Label")?.stringValue, !label.isEmpty {
+                    return "\(label.capitalized): \(value)"
+                }
+                return value
+            }
+            guard !parts.isEmpty else { continue }
+            let title = ContentExtractor.clean(rawTitle)
+            let journal = text(article, "MedlineCitation/Article/Journal/Title")
+            let year = text(article, "MedlineCitation/Article/Journal/JournalIssue/PubDate/Year")
+                ?? text(article, "MedlineCitation/Article/Journal/JournalIssue/PubDate/MedlineDate").map { String($0.prefix(4)) }
+            let link = "https://pubmed.ncbi.nlm.nih.gov/\(pmid)/"
+            var blocks = ["# " + title]
+            if let journal { blocks.append("Journal: \(journal)") }
+            blocks += parts
+            var hit = SearchHit(source: .pubmed, title: title, url: link, snippet: String(parts.joined(separator: " ").prefix(300)),
+                                published: year, blocks: blocks, rank: order.firstIndex(of: pmid) ?? order.count)
+            // Freie Volltexte in PubMed Central: Abbildungen samt Legende von der PMC-Artikelseite.
+            if let pmc = text(article, "PubmedData/ArticleIdList/ArticleId[@IdType='pmc']") {
+                hit.figurePage = "https://pmc.ncbi.nlm.nih.gov/articles/\(pmc)/"
+            }
+            byID[pmid] = hit
+        }
+        return order.compactMap { byID[$0] }
+    }
+}

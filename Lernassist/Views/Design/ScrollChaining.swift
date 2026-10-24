@@ -1,3 +1,4 @@
+import SwiftUI
 import AppKit
 
 /// Scroll-Verkettung für verschachtelte Scrollbereiche (Code-Editor, Terminal, Tool-Ausgaben im
@@ -106,5 +107,96 @@ final class ScrollChaining {
             atBottom = visible.minY <= content.minY + 1
         }
         return towardsTop ? !atTop : !atBottom
+    }
+}
+
+// MARK: - Dezente Scrollleisten (nur eigene Scroll-Bereiche)
+
+extension NSScrollView {
+    /// Schmale, sich ausblendende Scrollleiste – außer der Nutzer hat in den Systemeinstellungen
+    /// „Scrollbalken immer anzeigen“ gewählt. Ersetzt das frühere app-weite Swizzling von
+    /// `tile()` (Build 14), das jede ScrollView der App inkl. WebKit und Textfeldern traf.
+    func applyDiscreetScrollers() {
+        guard UserDefaults.standard.string(forKey: "AppleShowScrollBars") != "Always" else { return }
+        DiscreetScrollerRegistry.shared.register(self)
+        if scrollerStyle != .overlay { scrollerStyle = .overlay }
+        if !autohidesScrollers { autohidesScrollers = true }
+        if verticalScroller?.controlSize != .small { verticalScroller?.controlSize = .small }
+        if horizontalScroller?.controlSize != .small { horizontalScroller?.controlSize = .small }
+    }
+}
+
+/// Merkt sich die dezent eingestellten Scrollbereiche. macOS stellt den Stil zurück, wenn sich die
+/// bevorzugte Darstellung ändert (z. B. Maus angeschlossen, Systemeinstellung geändert) – dann
+/// wird er für alle erneut angewendet.
+@MainActor
+final class DiscreetScrollerRegistry {
+    static let shared = DiscreetScrollerRegistry()
+    private let views = NSHashTable<NSScrollView>.weakObjects()
+    private var observer: NSObjectProtocol?
+
+    func register(_ scrollView: NSScrollView) {
+        views.add(scrollView)
+        guard observer == nil else { return }
+        observer = NotificationCenter.default.addObserver(
+            forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // Kurz warten: AppKit setzt den Stil der Scrollbereiche selbst erst nach der Meldung um.
+                DispatchQueue.main.async { self?.views.allObjects.forEach { $0.applyDiscreetScrollers() } }
+            }
+        }
+    }
+}
+
+/// Als `.background` in eine SwiftUI-ScrollView/List setzen: stellt deren Scrollleiste dezent ein
+/// (schmal, nur beim Scrollen sichtbar). SwiftUI legt den Hintergrund nicht immer IN den
+/// NSScrollView, daher wird er auch über die Vorfahren gesucht.
+struct DiscreetScrollers: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {
+        (view as? Probe)?.apply()
+    }
+
+    final class Probe: NSView {
+        private weak var scrollView: NSScrollView?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.apply() }
+        }
+
+        func apply() {
+            if scrollView == nil { scrollView = findScrollView() }
+            scrollView?.applyDiscreetScrollers()
+        }
+
+        /// Der eigene NSScrollView – sonst der kleinste in den Vorfahren, der diese Ansicht abdeckt.
+        private func findScrollView() -> NSScrollView? {
+            if let enclosing = enclosingScrollView { return enclosing }
+            guard let window else { return nil }
+            let mine = convert(bounds, to: nil)
+            let probe = NSPoint(x: mine.midX, y: mine.midY)
+            var ancestor = superview
+            while let current = ancestor {
+                var best: NSScrollView?
+                func search(_ view: NSView) {
+                    for sub in view.subviews where !sub.isHidden {
+                        if let sv = sub as? NSScrollView, sv.window == window,
+                           sv.convert(sv.bounds, to: nil).contains(probe) {
+                            if best == nil || sv.frame.width * sv.frame.height < best!.frame.width * best!.frame.height {
+                                best = sv
+                            }
+                        }
+                        search(sub)
+                    }
+                }
+                search(current)
+                if let best { return best }
+                ancestor = current.superview
+            }
+            return nil
+        }
     }
 }

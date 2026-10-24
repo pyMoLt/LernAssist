@@ -22,7 +22,8 @@ nonisolated struct WorkStep: Identifiable, Equatable {
     static func steps(from messages: [ChatMessage]) -> [WorkStep] {
         var result: [WorkStep] = []
         for message in messages {
-            if let thinking = message.thinking?.trimmingCharacters(in: .whitespacesAndNewlines), !thinking.isEmpty {
+            // Ohne Kopie prüfen (langer Denktext, 5× pro Sekunde beim Streamen).
+            if let thinking = message.thinking, thinking.contains(where: { !$0.isWhitespace }) {
                 result.append(WorkStep(id: "\(message.id)-t", kind: .thinking(thinking)))
             }
             guard let tools = message.toolCalls, !tools.isEmpty else { continue }
@@ -64,7 +65,9 @@ struct WorkStepsView: View, Equatable {
     init(messages: [ChatMessage], isRunning: Bool) {
         self.messages = messages
         self.isRunning = isRunning
-        _isExpanded = State(initialValue: isRunning && !messages.contains(where: WorkStep.hasAnswerText))
+        // Version 4: auch während der Arbeit eingeklappt – die Kopfzeile zeigt, was gerade passiert,
+        // darunter eine zweizeilige Gedanken-Vorschau. Aufklappen zeigt alle Schritte live.
+        _isExpanded = State(initialValue: false)
     }
 
     private var steps: [WorkStep] { WorkStep.steps(from: messages) }
@@ -95,8 +98,6 @@ struct WorkStepsView: View, Equatable {
             guard !userToggled else { return }
             if started {
                 withAnimation(.snappy(duration: 0.35)) { isExpanded = false }
-            } else if isRunning {
-                withAnimation(.snappy(duration: 0.35)) { isExpanded = true }
             }
         }
         .onChange(of: isRunning) { _, running in
@@ -165,7 +166,7 @@ struct WorkStepsView: View, Equatable {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(isRunning ? currentActivity : summary(steps))
-        .accessibilityHint(isExpanded ? "Arbeitsschritte einklappen" : "Arbeitsschritte anzeigen")
+        .accessibilityHint(isExpanded ? L("Arbeitsschritte einklappen") : L("Arbeitsschritte anzeigen"))
     }
 
     @ViewBuilder
@@ -214,27 +215,27 @@ struct WorkStepsView: View, Equatable {
     private func summary(_ steps: [WorkStep]) -> String {
         let tools = toolSteps
         if tools.contains(where: { $0.limitNote != nil }) {
-            return "Tool-Limit erreicht – Antwort aus den bisherigen Ergebnissen"
+            return L("Tool-Limit erreicht – Antwort aus den bisherigen Ergebnissen")
         }
-        var parts = ["\(steps.count) Schritt\(steps.count == 1 ? "" : "e")"]
+        var parts = [steps.count == 1 ? L("1 Schritt") : L("\(steps.count) Schritte")]
         let sources = tools.filter { $0.name == "web_search" }.reduce(0) { $0 + ToolCallPresentation(call: $1).sources.count }
             + tools.filter { $0.name == "browse_url" && $0.result != nil }.count
-        if sources > 0 { parts.append("\(sources) Quelle\(sources == 1 ? "" : "n")") }
-        if tools.contains(where: { $0.name == "coding_sandbox" }) { parts.append("Code ausgeführt") }
+        if sources > 0 { parts.append(sources == 1 ? L("1 Quelle") : L("\(sources) Quellen")) }
+        if tools.contains(where: { $0.name == "coding_sandbox" }) { parts.append(L("Code ausgeführt")) }
         return parts.joined(separator: " · ")
     }
 
     /// Was gerade passiert – für die Kopfzeile während der Generierung.
     private var currentActivity: String {
-        guard let last = messages.last else { return "Liest die Frage …" }
+        guard let last = messages.last else { return L("Liest die Frage …") }
         if let tools = last.toolCalls, !tools.isEmpty {
             if let running = tools.last(where: { $0.result == nil }) {
                 return ToolCallPresentation(call: running).title
             }
-            return "Wertet die Ergebnisse aus …"
+            return L("Wertet die Ergebnisse aus …")
         }
-        if last.thinking != nil { return "Denkt nach …" }
-        return messages.count > 1 ? "Wertet die Ergebnisse aus …" : "Liest die Frage …"
+        if last.thinking != nil { return L("Denkt nach …") }
+        return messages.count > 1 ? L("Wertet die Ergebnisse aus …") : L("Liest die Frage …")
     }
 
     private func liveLabel(_ text: String) -> some View {
@@ -267,7 +268,7 @@ struct ThinkingStepRow: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(DS.Ink.accent)
                         .symbolEffect(.pulse, isActive: isLive)
-                    Text(isLive ? "Denkt nach …" : "Gedankengang")
+                    Text(isLive ? L("Denkt nach …") : L("Gedankengang"))
                         .font(.callout)
                         .foregroundStyle(.primary)
                     Text(wordInfo)
@@ -285,7 +286,7 @@ struct ThinkingStepRow: View {
                 .contentShape(Capsule())
             }
             .buttonStyle(.plain)
-            .accessibilityHint(isExpanded ? "Gedankengang einklappen" : "Gedankengang anzeigen")
+            .accessibilityHint(isExpanded ? L("Gedankengang einklappen") : L("Gedankengang anzeigen"))
 
             if isExpanded {
                 // Bereinigt (ohne Markdown-Zeichen) – gespeichert/gesendet wird das Original.

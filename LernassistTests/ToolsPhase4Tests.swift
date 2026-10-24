@@ -15,7 +15,7 @@ final class ToolsPhase4Tests: XCTestCase {
         for tool in ToolRegistry.shared.enabledTools {
             XCTAssertFalse(addition.contains(tool.description), "Beschreibung von \(tool.name) doppelt im Prompt")
         }
-        XCTAssertLessThan(addition.count, 1_500)
+        XCTAssertLessThan(addition.count, 1_800)
     }
 
     func testCodingErrorContextPointsToModelLine() {

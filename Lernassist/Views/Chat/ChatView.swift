@@ -5,11 +5,15 @@ import AppKit
 
 struct ChatView: View {
     @StateObject var viewModel: ChatViewModel
+    @ObservedObject private var connectionWatch = ConnectionWatch.shared
     @State private var inputText = ""
     @State private var lastCapturedImage: NSImage? = nil
     @State private var isShowingQuizPanel = false
     @State private var isShowingChatScreenshots = false
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var isSidebarVisible = true
+    @State private var isFindVisible = false
+    @State private var findQuery = ""
+    @State private var findIndex = 0
     /// Karteikarten-/Quiz-Seed aus einem Dokument (Phase H): Wird gesetzt, wenn der Nutzer im
     /// Dokument-Badge „Karten“/„Quiz“ wählt – das Panel öffnet sich und generiert direkt daraus.
     @State private var quizPanelSeed: (text: String, mode: String)? = nil
@@ -19,11 +23,19 @@ struct ChatView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            // ── Sidebar ────────────────────────────────────────────
-            SidebarView(viewModel: viewModel)
-                .navigationSplitViewColumnWidth(min: 205, ideal: 235, max: 300)
-        } detail: {
+        // Version 4: eigenes Layout statt NavigationSplitView – die Seitenleiste schwebt als Karte
+        // über dem Farbfeld (Vorlage), ohne die graue System-Fläche der Split-Ansicht.
+        HStack(spacing: 0) {
+            if isSidebarVisible {
+                // Breite in eigener Ansicht (SidebarColumn): Beim Ziehen wird nur sie neu aufgebaut,
+                // nicht die ganze Chat-Ansicht.
+                SidebarColumn(viewModel: viewModel)
+                    .ignoresSafeArea(.container, edges: .top)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+
+                SidebarResizeHandle(isVisible: $isSidebarVisible)
+                    .ignoresSafeArea(.container, edges: .top)
+            }
             // ── Detail (Durchgehendes Flowing Canvas) ──────────────
             VStack(spacing: 0) {
                 headerBar
@@ -40,6 +52,22 @@ struct ChatView: View {
                         }
                     }
                     .animation(.snappy(duration: 0.25), value: viewModel.flashcardNotice)
+                    .overlay(alignment: .top) {
+                        if let issue = connectionWatch.issues.first {
+                            ConnectionIssueBanner(issue: issue,
+                                                  moreCount: connectionWatch.issues.count - 1,
+                                                  onOpenSettings: {
+                                                      SettingsWindowController.shared.show(viewModel: viewModel, tab: issue.settingsTab)
+                                                  },
+                                                  onDismiss: { connectionWatch.dismiss(issue) })
+                                .padding(.top, DS.Space.s)
+                                .padding(.horizontal, DS.Space.l)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                                .id(issue.id)
+                        }
+                    }
+                    .animation(.snappy(duration: 0.25), value: connectionWatch.issues)
+                    .task { connectionWatch.start(viewModel: viewModel) }
                 InputArea(
                     viewModel: viewModel,
                     inputText: $inputText,
@@ -53,13 +81,29 @@ struct ChatView: View {
                     }
                 )
             }
-            .background(DS.Surface.canvas)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .leading) {
+                if !isSidebarVisible {
+                    SidebarEdgePullZone(isVisible: $isSidebarVisible)
+                }
+            }
         }
+        .animation(.snappy(duration: 0.25), value: isSidebarVisible)
+        .background {
+            ColorFieldBackground(accent: viewModel.appearance.accent, background: viewModel.appearance.background)
+        }
+        .appAppearance(viewModel.appearance, language: viewModel.appLanguage)
         .frame(minWidth: 400, minHeight: 400)
         .onReceive(NotificationCenter.default.publisher(for: .externalScreenshotCaptured)) { note in
             if let image = note.object as? NSImage {
                 self.lastCapturedImage = image
             }
+        }
+        // „Reparieren lassen“ an einem Tool-Schritt: Fehler an das Modell schicken.
+        .onReceive(NotificationCenter.default.publisher(for: .repairRequested)) { note in
+            guard let text = note.userInfo?["text"] as? String, !viewModel.isStreaming else { return }
+            userScrolledUp = false
+            viewModel.sendMessage(text: text, displayText: L("Reparieren lassen"))
         }
         .onReceive(NotificationCenter.default.publisher(for: .openSettingsRequested)) { note in
             SettingsWindowController.shared.show(viewModel: viewModel, tab: note.userInfo?["tab"] as? String)
@@ -101,7 +145,7 @@ struct ChatView: View {
             // 1. Obere Zeile: Feinerer Chat-Titel über die gesamte Fensterbreite (kein frühes Abschneiden!)
             HStack(spacing: 7) {
                 LernAssistBrandIcon(size: 20)
-                Text(viewModel.activeSession?.title ?? "LernAssist")
+                Text(viewModel.activeSession?.displayTitle ?? L("LernAssist"))
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(DS.Ink.primary.opacity(0.9))
                     .lineLimit(1)
@@ -153,7 +197,7 @@ struct ChatView: View {
     }
 
     private func learningModeMenu(shortLabel: Bool = false) -> some View {
-        let fullText = viewModel.learningStyle.rawValue
+        let fullText = L(dynamic: viewModel.learningStyle.rawValue)
         let shortText = fullText.components(separatedBy: " ").first ?? fullText
         return Menu {
             ForEach(LearningStyle.allCases, id: \.self) { style in
@@ -162,9 +206,9 @@ struct ChatView: View {
                     viewModel.saveSettings()
                 } label: {
                     if style == viewModel.learningStyle {
-                        Label(style.rawValue, systemImage: "checkmark")
+                        Label(L(dynamic: style.rawValue), systemImage: "checkmark")
                     } else {
-                        Label(style.rawValue, systemImage: style.symbol)
+                        Label(L(dynamic: style.rawValue), systemImage: style.symbol)
                     }
                 }
             }
@@ -188,8 +232,8 @@ struct ChatView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
-        .help("Lernmodus wechseln (wirkt auf die nächste Anfrage)")
-        .accessibilityLabel("Lernmodus: \(viewModel.learningStyle.rawValue)")
+        .help(L("Lernmodus wechseln (wirkt auf die nächste Anfrage)"))
+        .accessibilityLabel(L("Lernmodus: \(viewModel.learningStyle.rawValue)"))
     }
 
     enum MetricsMode { case full, compact, hidden }
@@ -209,7 +253,7 @@ struct ChatView: View {
                 viewModel.compactChat()
             } label: {
                 GlassChip {
-                    Label("Zusammenfassen", systemImage: "sparkles")
+                    Label(L("Zusammenfassen"), systemImage: "sparkles")
                         .labelStyle(AdaptiveLabelStyle(compact: compact))
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(DS.Accent.amber)
@@ -218,7 +262,7 @@ struct ChatView: View {
                 }
             }
             .buttonStyle(.plain)
-            .help("Der Chat füllt das Kontextfenster – hier zusammenfassen und als neuen Chat weiterführen")
+            .help(L("Der Chat füllt das Kontextfenster – hier zusammenfassen und als neuen Chat weiterführen"))
         }
 
         if metrics != .hidden {
@@ -229,7 +273,7 @@ struct ChatView: View {
            session.messages.contains(where: { $0.imageID != nil }) {
             Button(action: { isShowingChatScreenshots = true }) {
                 GlassChip {
-                    Label("Bilder", systemImage: "photo.stack")
+                    Label(L("Bilder"), systemImage: "photo.stack")
                         .labelStyle(AdaptiveLabelStyle(compact: compact))
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(DS.Accent.cyan)
@@ -238,7 +282,7 @@ struct ChatView: View {
                 }
             }
             .buttonStyle(.plain)
-            .help("Zeigt alle Screenshots dieses Chats")
+            .help(L("Zeigt alle Screenshots dieses Chats"))
         }
 
         headerQuizChip(compact: compact)
@@ -255,7 +299,7 @@ struct ChatView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(DS.Ink.accent)
                         if !compact {
-                            Text("Karten")
+                            Text(L("Karten"))
                                 .font(.system(size: 11, weight: .medium, design: .rounded))
                                 .foregroundStyle(.primary)
                         }
@@ -276,7 +320,7 @@ struct ChatView: View {
             .help(viewModel.dueFlashcardsCount > 0
                   ? "Karteikarten – \(viewModel.dueFlashcardsCount) fällig"
                   : "Karteikarten ansehen, anlegen und wiederholen")
-            .accessibilityLabel(viewModel.dueFlashcardsCount > 0 ? "Karteikarten, \(viewModel.dueFlashcardsCount) fällig" : "Karteikarten")
+            .accessibilityLabel(viewModel.dueFlashcardsCount > 0 ? L("Karteikarten, \(viewModel.dueFlashcardsCount) fällig") : L("Karteikarten"))
         }
     }
 
@@ -290,15 +334,15 @@ struct ChatView: View {
                             guard let viewModel, let session = viewModel.activeSession else { return "" }
                             return viewModel.chatMarkdown(for: session)
                         },
-                        help: "Chat als Markdown teilen (Mail, Notizen, AirDrop …)"
+                        help: L("Chat als Markdown teilen (Mail, Notizen, AirDrop …)")
                     )
                 }
 
-                GlassIconButton(systemImage: "sidebar.left", help: "Sidebar ein-/ausblenden") {
+                GlassIconButton(systemImage: "sidebar.left", help: L("Sidebar ein-/ausblenden")) {
                     NotificationCenter.default.post(name: .toggleSidebar, object: nil)
                 }
 
-                GlassIconButton(systemImage: "slider.horizontal.3", help: "Einstellungen öffnen") {
+                GlassIconButton(systemImage: "slider.horizontal.3", help: L("Einstellungen öffnen")) {
                     SettingsWindowController.shared.show(viewModel: viewModel, tab: nil)
                 }
             }
@@ -314,7 +358,9 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
+                // Lazy (Version 4): Bei langen Chats entstehen nur die sichtbaren Zeilen – vorher
+                // hielt jeder Chat für jede Antwort eine eigene Web-Ansicht im Speicher.
+                LazyVStack(alignment: .leading, spacing: 26) {
                     Color.clear.frame(height: 0).id("top")
                     if let session = viewModel.activeSession {
                         let messagesToShow = session.messages.filter { $0.role != "tool" }
@@ -378,10 +424,49 @@ struct ChatView: View {
                     .frame(height: 14)
                 }
             )
-            .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
-                withAnimation {
-                    columnVisibility = (columnVisibility == .all) ? .detailOnly : .all
+            // „Zum Ende“: erscheint, sobald man im Verlauf nach oben gescrollt hat.
+            .overlay(alignment: .bottomTrailing) {
+                if userScrolledUp, !(viewModel.activeSession?.messages.isEmpty ?? true) {
+                    Button {
+                        userScrolledUp = false
+                        scrollToBottom(proxy: proxy, animated: true)
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(DS.Ink.accent)
+                            .frame(width: 32, height: 32)
+                            .glassSurface(Circle(), elevated: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help(L("Zum Ende des Chats"))
+                    .accessibilityLabel(L("Zum Ende des Chats"))
+                    .padding(.trailing, 26)
+                    .padding(.bottom, 14)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
+            }
+            .animation(.snappy(duration: 0.2), value: userScrolledUp)
+            // Suche im Chat (⌘F)
+            .overlay(alignment: .top) {
+                if isFindVisible {
+                    let items = ChatRowItem.items(from: (viewModel.activeSession?.messages ?? []).filter { $0.role != "tool" })
+                    ChatFindBar(query: $findQuery,
+                                matches: ChatFindBar.matches(for: findQuery, in: items),
+                                current: $findIndex,
+                                onJump: { id in
+                                    userScrolledUp = true
+                                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
+                                },
+                                onClose: { isFindVisible = false; findQuery = "" })
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .findInChat)) { _ in
+                withAnimation(.snappy(duration: 0.2)) { isFindVisible = true }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .toggleSidebar)) { _ in
+                withAnimation(.snappy(duration: 0.25)) { isSidebarVisible.toggle() }
             }
             .onChange(of: viewModel.activeSession?.messages.last?.content) { _, _ in
                 if !userScrolledUp { debouncedScrollToBottom(proxy: proxy) }
@@ -437,9 +522,9 @@ struct ChatView: View {
             }
 
             VStack(spacing: DS.Space.xs + 2) {
-                Text("Womit möchtest du lernen?")
+                Text(L("Womit möchtest du lernen?"))
                     .font(.system(size: 21, weight: .semibold, design: .rounded))
-                Text("Stelle eine Frage, füge einen Screenshot hinzu oder wähle einen Startpunkt.")
+                Text(L("Stelle eine Frage, füge einen Screenshot hinzu oder wähle einen Startpunkt."))
                     .font(.system(size: 13.5, design: .rounded))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -447,14 +532,14 @@ struct ChatView: View {
 
             Grid(horizontalSpacing: DS.Space.m, verticalSpacing: DS.Space.m) {
                 GridRow {
-                    welcomePrompt("Screenshot", subtitle: "Bereich erklären lassen", icon: "camera.viewfinder", tint: DS.Accent.brand, action: captureAndSend)
-                    welcomePrompt("Einfach erklären", subtitle: "Mit Alltagsbeispiel", icon: "text.book.closed.fill", tint: DS.Accent.emerald, text: "Erkläre mir dieses Thema einfach und mit einem Beispiel:")
-                    welcomePrompt("Lernplan erstellen", subtitle: "Strukturierte Schritte", icon: "calendar.badge.plus", tint: DS.Accent.blue, text: "Erstelle mir einen kurzen Lernplan für:")
+                    welcomePrompt(L("Screenshot"), subtitle: L("Bereich erklären lassen"), icon: "camera.viewfinder", tint: DS.Accent.brand, action: captureAndSend)
+                    welcomePrompt(L("Einfach erklären"), subtitle: L("Mit Alltagsbeispiel"), icon: "text.book.closed.fill", tint: DS.Accent.emerald, text: L("Erkläre mir dieses Thema einfach und mit einem Beispiel:"))
+                    welcomePrompt(L("Lernplan erstellen"), subtitle: L("Strukturierte Schritte"), icon: "calendar.badge.plus", tint: DS.Accent.blue, text: L("Erstelle mir einen kurzen Lernplan für:"))
                 }
                 GridRow {
-                    welcomePrompt("Mich abfragen", subtitle: "Interaktives Quiz", icon: "checkmark.seal.fill", tint: DS.Accent.rose, text: "/quiz ")
-                    welcomePrompt("Diagramm", subtitle: "Ablauf visualisieren", icon: "chart.xyaxis.line", tint: DS.Accent.cyan, text: "/diagram ")
-                    welcomePrompt("Zusammenfassen", subtitle: "Kernaussagen kompakt", icon: "list.bullet.rectangle.portrait.fill", tint: DS.Accent.amber, text: "/summary ")
+                    welcomePrompt(L("Mich abfragen"), subtitle: L("Interaktives Quiz"), icon: "checkmark.seal.fill", tint: DS.Accent.rose, text: L("/quiz "))
+                    welcomePrompt(L("Diagramm"), subtitle: L("Ablauf visualisieren"), icon: "chart.xyaxis.line", tint: DS.Accent.cyan, text: L("/diagram "))
+                    welcomePrompt(L("Zusammenfassen"), subtitle: L("Kernaussagen kompakt"), icon: "list.bullet.rectangle.portrait.fill", tint: DS.Accent.amber, text: L("/summary "))
                 }
             }
         }
@@ -644,6 +729,11 @@ private struct MessageRow: View {
                     isContinuation: isContinuation,
                     embedded: embedded,
                     fontScale: fontScale,
+                    canRegenerate: message.role == "assistant" && isLast && !isStreaming,
+                    onRegenerate: {
+                        userScrolledUp = false
+                        viewModel.regenerateLastAnswer()
+                    },
                     onExplainDifferently: message.role == "assistant" ? {
                         userScrolledUp = false
                         viewModel.sendMessage(
@@ -762,7 +852,7 @@ private struct WelcomeCardButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Setzt eine Vorlage ins Eingabefeld")
+        .help(L("Setzt eine Vorlage ins Eingabefeld"))
         .accessibilityLabel("\(title): \(subtitle)")
     }
 }
@@ -840,8 +930,8 @@ private struct FlashcardNoticeView: View {
                 .font(.system(size: 12, weight: .medium, design: .rounded))
             if !notice.isError {
                 Divider().frame(height: 12)
-                Button("Ansehen", action: onShow).buttonStyle(.plain).foregroundStyle(DS.Ink.accent)
-                Button("Rückgängig", action: onUndo).buttonStyle(.plain).foregroundStyle(.secondary)
+                Button(L("Ansehen"), action: onShow).buttonStyle(.plain).foregroundStyle(DS.Ink.accent)
+                Button(L("Rückgängig"), action: onUndo).buttonStyle(.plain).foregroundStyle(.secondary)
             }
         }
         .font(.system(size: 12, weight: .medium, design: .rounded))
@@ -853,5 +943,222 @@ private struct FlashcardNoticeView: View {
             try? await Task.sleep(nanoseconds: 6_000_000_000)
             onDismiss()
         }
+    }
+}
+
+// MARK: - Hinweis des Verbindungswächters
+
+private struct ConnectionIssueBanner: View {
+    let issue: ConnectionIssue
+    let moreCount: Int
+    let onOpenSettings: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.Space.s) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(Color.orange)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(issue.title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                Text(issue.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if moreCount > 0 {
+                    Text(L("und \(moreCount) weitere Verbindung(en)"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: DS.Space.s)
+            Button(L("Einstellungen"), action: onOpenSettings)
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(DS.Ink.accent)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(L("Ausblenden – erscheint erst wieder, wenn die Verbindung einmal funktioniert hat und erneut ausfällt"))
+            .accessibilityLabel(L("Hinweis ausblenden"))
+        }
+        .padding(.horizontal, DS.Space.m)
+        .padding(.vertical, 9)
+        .frame(maxWidth: 560)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(DS.Surface.pill)
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 3))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(DS.Ink.hairline, lineWidth: 0.75))
+    }
+}
+
+// MARK: - Sidebar Resize & Drag Support
+
+private struct FlowCursorModifier: ViewModifier {
+    let cursor: NSCursor
+    @State private var isPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovered in
+                if isHovered && !isPushed {
+                    cursor.push()
+                    isPushed = true
+                } else if !isHovered && isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
+            .onDisappear {
+                if isPushed {
+                    NSCursor.pop()
+                    isPushed = false
+                }
+            }
+    }
+}
+
+private extension View {
+    func flowCursor(_ cursor: NSCursor) -> some View {
+        modifier(FlowCursorModifier(cursor: cursor))
+    }
+}
+
+/// Seitenleiste mit gespeicherter Breite.
+private struct SidebarColumn: View {
+    @ObservedObject var viewModel: ChatViewModel
+    @AppStorage("sidebarWidth") private var width: Double = 240
+
+    var body: some View {
+        SidebarView(viewModel: viewModel)
+            .frame(width: CGFloat(max(195, min(width, 460))))
+    }
+}
+
+private struct SidebarResizeHandle: View {
+    @AppStorage("sidebarWidth") private var width: Double = 240
+    @Binding var isVisible: Bool
+    var minWidth: Double = 195
+    var maxWidth: Double = 460
+    var collapseThreshold: Double = 140
+    var defaultWidth: Double = 240
+
+    @State private var isHovered = false
+    @State private var isDragging = false
+    @State private var dragStartWidth: Double? = nil
+
+    private static let lineInset: CGFloat = 20
+
+    var body: some View {
+        ZStack {
+            Color.clear
+                .frame(width: 8)
+
+            Rectangle()
+                .fill(isHovered || isDragging ? DS.Ink.accent.opacity(0.40) : DS.Ink.hairline)
+                .frame(width: isHovered || isDragging ? 2 : 1)
+                // Oben und unten gleicher Abstand – die Linie endet wie die Karte vor dem Fensterrand.
+                .padding(.vertical, Self.lineInset)
+                .animation(.easeInOut(duration: 0.15), value: isHovered || isDragging)
+        }
+        .frame(width: 8)
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .flowCursor(.resizeLeftRight)
+        .onHover { isHovered = $0 }
+        .gesture(
+            DragGesture(coordinateSpace: .global)
+                .onChanged { value in
+                    if dragStartWidth == nil {
+                        dragStartWidth = width
+                        isDragging = true
+                    }
+                    guard let start = dragStartWidth else { return }
+                    let proposed = start + Double(value.translation.width)
+                    if proposed < collapseThreshold {
+                        withAnimation(.snappy(duration: 0.25)) {
+                            isVisible = false
+                        }
+                    } else {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            width = max(minWidth, min(maxWidth, proposed))
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    dragStartWidth = nil
+                    isDragging = false
+                }
+        )
+        .onTapGesture(count: 2) {
+            withAnimation(.snappy(duration: 0.2)) {
+                width = defaultWidth
+            }
+        }
+        .help(L("Seitenleiste anpassen (Ziehen zum Vergrößern/Verkleinern, Doppelklick zum Zurücksetzen)"))
+    }
+}
+
+private struct SidebarEdgePullZone: View {
+    @AppStorage("sidebarWidth") private var width: Double = 240
+    @Binding var isVisible: Bool
+    var minWidth: Double = 195
+    var maxWidth: Double = 460
+    var defaultWidth: Double = 240
+
+    @State private var isHovered = false
+    @State private var isDragging = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Color.clear
+                .frame(width: 12)
+
+            if isHovered || isDragging {
+                Capsule()
+                    .fill(DS.Ink.accent.opacity(0.45))
+                    .frame(width: 3, height: 48)
+                    .padding(.leading, 2)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: 12)
+        .frame(maxHeight: .infinity)
+        .padding(.top, 42) // Lässt die Fensterknöpfe (Traffic Lights) unberührt
+        .contentShape(Rectangle())
+        .flowCursor(.resizeRight)
+        .onHover { isHovered = $0 }
+        .gesture(
+            DragGesture(coordinateSpace: .global)
+                .onChanged { value in
+                    if !isDragging {
+                        isDragging = true
+                        withAnimation(.snappy(duration: 0.2)) {
+                            isVisible = true
+                        }
+                    }
+                    let proposed = minWidth + Double(value.translation.width)
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        width = max(minWidth, min(maxWidth, proposed))
+                    }
+                }
+                .onEnded { _ in
+                    isDragging = false
+                }
+        )
+        .onTapGesture {
+            withAnimation(.snappy(duration: 0.25)) {
+                isVisible = true
+            }
+        }
+        .help(L("Seitenleiste herausziehen (Ziehen oder Klicken)"))
     }
 }

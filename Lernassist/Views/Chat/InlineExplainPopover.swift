@@ -46,7 +46,7 @@ struct InlineExplainPopover: View {
                             } else if msg.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 HStack(spacing: DS.Space.s) {
                                     ProgressView().controlSize(.mini)
-                                    Text("Erklärt …").font(.caption).foregroundStyle(.secondary)
+                                    Text(L("Erklärt …")).font(.caption).foregroundStyle(.secondary)
                                 }
                                 .padding(.vertical, 4)
                             } else {
@@ -100,7 +100,7 @@ struct InlineExplainPopover: View {
             }
             .buttonStyle(.plain)
             .keyboardShortcut(.cancelAction)
-            .accessibilityLabel("Schließen")
+            .accessibilityLabel(L("Schließen"))
         }
     }
 
@@ -117,7 +117,7 @@ struct InlineExplainPopover: View {
 
     private var followUpField: some View {
         HStack(spacing: DS.Space.s) {
-            TextField("Nachfragen …", text: $userQuestion)
+            TextField(L("Nachfragen …"), text: $userQuestion)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12.5, design: .rounded))
                 .onSubmit(askQuestion)
@@ -130,7 +130,7 @@ struct InlineExplainPopover: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
-            .accessibilityLabel("Nachfrage senden")
+            .accessibilityLabel(L("Nachfrage senden"))
         }
         .padding(.leading, DS.Space.m)
         .padding(.trailing, 5)
